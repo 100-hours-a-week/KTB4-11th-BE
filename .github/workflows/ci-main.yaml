@@ -52,6 +52,7 @@ jobs:
 
     permissions:
       contents: read
+      id-token: write
 
     steps:
       # 1. CI Runner에 Repo의 코드를 가져온다
@@ -76,6 +77,27 @@ jobs:
       # 5. Compile, Test, Package를 수행한다
       - name: Build
         run: ./gradlew build --build-cache
+
+      - name: Configure AWS credentials # 추후 수정해야함(if)
+        if: github.ref == 'refs/heads/main' && vars.ENABLE_ECR_PUSH == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Login to Public ECR # 추후 수정해야함 (if)
+        if: github.ref == 'refs/heads/main' && vars.ENABLE_ECR_PUSH == 'true'
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Build and push Docker image # 추후 수정해야함 (if)
+        if: github.ref == 'refs/heads/main' && vars.ENABLE_ECR_PUSH == 'true'
+        env:
+          IMAGE_URI: public.ecr.aws/g8x9p1p0/stockspoon-v1-backend:${{ github.sha }}
+        run: |
+          docker build -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
 
       # SpotBugs 검사 실패 시 Report를 남긴다
       - name: Upload SpotBugs report

@@ -7,6 +7,12 @@ on:
     paths-ignore:
       - "**/*.md"
       - "docs/**"
+  pull_request:
+    branches:
+      - dev           # main 제거 (main 대상 PR에는 CD만 실행)
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
 
 permissions:
   contents: read

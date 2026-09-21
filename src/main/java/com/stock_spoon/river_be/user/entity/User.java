@@ -18,11 +18,19 @@ public class User {
     @Column(nullable = false)
     private String nickname;
 
+    @Column(name = "profile_image_url", length = 2048)
+    private String profileImageUrl;
+
     protected User() {
     }
 
     public User(String nickname) {
+        this(nickname, null);
+    }
+
+    public User(String nickname, String profileImageUrl) {
         this.nickname = nickname;
+        this.profileImageUrl = profileImageUrl;
     }
 
     public Long getId() {
@@ -33,7 +41,12 @@ public class User {
         return nickname;
     }
 
-    public void synchronizeNickname(String nickname) {
+    public String getProfileImageUrl() {
+        return profileImageUrl;
+    }
+
+    public void synchronizeProfile(String nickname, String profileImageUrl) {
         this.nickname = nickname;
+        this.profileImageUrl = profileImageUrl;
     }
 }

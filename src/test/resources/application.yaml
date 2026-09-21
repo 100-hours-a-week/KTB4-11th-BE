@@ -1,0 +1,13 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:stockspoon-test;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    open-in-view: false
+
+jwt:
+  secret: test-jwt-secret-that-is-longer-than-32-bytes
+  issuer: stockspoon-test
+  access-expiration: 15m
+  refresh-expiration: 14d

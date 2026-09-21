@@ -17,3 +17,9 @@ kakao:
   redirect-uri: ${KAKAO_REDIRECT_URI:}
   frontend-origin: ${FRONTEND_ORIGIN:}
   secure-cookie: ${AUTH_COOKIE_SECURE:true}
+
+jwt:
+  secret: ${JWT_SECRET:}
+  issuer: ${JWT_ISSUER:stockspoon}
+  access-expiration: ${JWT_ACCESS_EXPIRATION:15m}
+  refresh-expiration: ${JWT_REFRESH_EXPIRATION:14d}

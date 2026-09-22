@@ -78,26 +78,26 @@ jobs:
       - name: Build
         run: ./gradlew build --build-cache
 
-#      - name: Configure AWS credentials
-#        if: github.ref == 'refs/heads/main'
-#        uses: aws-actions/configure-aws-credentials@v4
-#        with:
-#          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-#          aws-region: us-east-1
-#
-#      - name: Login to Public ECR
-#        if: github.ref == 'refs/heads/main'
-#        uses: aws-actions/amazon-ecr-login@v2
-#        with:
-#          registry-type: public
-#
-#      - name: Build and push Docker image
-#        if: github.ref == 'refs/heads/main'
-#        env:
-#          IMAGE_URI: public.ecr.aws/g8x9p1p0/stockspoon-v1-backend:${{ github.sha }}
-#        run: |
-#          docker build -t "$IMAGE_URI" .
-#          docker push "$IMAGE_URI"
+      - name: Configure AWS credentials
+        if: github.ref == 'refs/heads/main'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Login to Public ECR
+        if: github.ref == 'refs/heads/main'
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Build and push Docker image
+        if: github.ref == 'refs/heads/main'
+        env:
+          IMAGE_URI: public.ecr.aws/g8x9p1p0/stockspoon-v1-backend:${{ github.sha }}
+        run: |
+          docker build -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
 
       # SpotBugs 검사 실패 시 Report를 남긴다
       - name: Upload SpotBugs report

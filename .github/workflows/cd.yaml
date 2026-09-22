@@ -1,113 +1,126 @@
 name: Backend CD
 
 on:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened]
-    paths-ignore: ["**/*.md", "docs/**"]
   workflow_run:
-    workflows: [ "Backend Main CI" ]
-    types: [ completed ]
-    branches: [ main ]
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "배포할 이미지 태그 (커밋 SHA)"
-        required: true
+    workflows: ["Backend Main CI"]
+    types: [completed]
+    branches: [main]
 
 concurrency:
   group: be-cd
   cancel-in-progress: false
 
 env:
-  AWS_REGION: ap-northeast-2
   ECR_REGION: us-east-1
+  ECR_REGISTRY: public.ecr.aws/g8x9p1p0
   ECR_REPOSITORY: stockspoon-v1-backend
+  CLOUD_REPOSITORY: KTB4-11th-Cloud
   SERVICE: backend
 
 jobs:
-  guard:
-    runs-on: ubuntu-latest
-    permissions: { contents: read, pull-requests: read }
-    outputs:
-      deploy: ${{ steps.check.outputs.deploy }}
-      tag:    ${{ steps.check.outputs.tag }}
-    steps:
-      - name: 배포 조건 판단
-        id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          EVENT="${{ github.event_name }}"
-
-          if [ "$EVENT" = "pull_request" ]; then
-            echo "PR 이벤트 → 배포 진행"
-            echo "tag=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
-            echo "deploy=true" >> $GITHUB_OUTPUT; exit 0
-          fi
-
-          if [ "$EVENT" = "workflow_dispatch" ]; then
-            echo "수동 실행 → 배포 진행"
-            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
-            echo "deploy=true" >> $GITHUB_OUTPUT; exit 0
-          fi
-
-          if [ "${{ github.event.workflow_run.conclusion }}" != "success" ]; then
-            echo "CI 실패 → 배포 중단"
-            echo "deploy=false" >> $GITHUB_OUTPUT; exit 0
-          fi
-
-          SHA="${{ github.event.workflow_run.head_sha }}"
-          PR_COUNT=$(gh api "repos/${{ github.repository }}/commits/${SHA}/pulls" --jq 'length')
-          if [ "$PR_COUNT" -gt 0 ]; then
-            echo "PR 경유 커밋 → PR 시점에 배포 완료, 스킵"
-            echo "deploy=false" >> $GITHUB_OUTPUT
-          else
-            echo "main 직접 push → 배포 진행"
-            echo "tag=${SHA}" >> $GITHUB_OUTPUT
-            echo "deploy=true" >> $GITHUB_OUTPUT
-          fi
-
   deploy:
-    needs: guard
-    if: needs.guard.outputs.deploy == 'true'
+    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     environment: production
-    permissions: { id-token: write, contents: read }
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
     steps:
+      - name: Download image metadata from Main CI
+        uses: actions/download-artifact@v5
+        with:
+          name: backend-image-${{ github.event.workflow_run.head_sha }}
+          path: deployment-metadata
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
       - name: AWS 인증 (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ env.ECR_REGION }}
 
-      - name: ECR 이미지 존재 확인
+      - name: Main CI 이미지 검증
+        id: image
+        env:
+          TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
-          aws ecr-public describe-images \
+          CI_TAG="$(jq -r '.tag' deployment-metadata/image.json)"
+          CI_DIGEST="$(jq -r '.digest' deployment-metadata/image.json)"
+          CI_REPOSITORY="$(jq -r '.repository' deployment-metadata/image.json)"
+          CI_SOURCE_SHA="$(jq -r '.source_sha' deployment-metadata/image.json)"
+
+          if [ "$CI_TAG" != "$TRIGGER_SHA" ] || [ "$CI_SOURCE_SHA" != "$TRIGGER_SHA" ]; then
+            echo "CI 메타데이터와 workflow_run 커밋이 일치하지 않습니다." >&2
+            exit 1
+          fi
+
+          if [ "$CI_REPOSITORY" != "${ECR_REGISTRY}/${ECR_REPOSITORY}" ]; then
+            echo "CI 메타데이터의 ECR 저장소가 배포 대상과 일치하지 않습니다." >&2
+            exit 1
+          fi
+
+          ECR_DIGEST="$(aws ecr-public describe-images \
             --region "${{ env.ECR_REGION }}" \
             --repository-name "${{ env.ECR_REPOSITORY }}" \
-            --image-ids imageTag="${{ needs.guard.outputs.tag }}" > /dev/null
+            --image-ids imageTag="$CI_TAG" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)"
 
-          echo "배포 대상 이미지 확인: ${{ needs.guard.outputs.tag }}"
+          if [ -z "$ECR_DIGEST" ] || [ "$ECR_DIGEST" = "None" ]; then
+            echo "ECR에 배포 대상 이미지가 없습니다: $CI_TAG" >&2
+            exit 1
+          fi
 
-      - name: EC2 배포 실행
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          command_timeout: 10m
-          script: |
-            cd /opt/cloud
-            git pull --ff-only
-            ./scripts/deploy.sh ${{ env.SERVICE }} ${{ needs.guard.outputs.tag }}
+          if [ "$ECR_DIGEST" != "$CI_DIGEST" ]; then
+            echo "CI가 기록한 이미지와 현재 ECR 이미지가 일치하지 않습니다." >&2
+            exit 1
+          fi
 
-      - name: 배포 결과 요약
+          echo "tag=$CI_TAG" >> "$GITHUB_OUTPUT"
+          echo "digest=$ECR_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "배포 이미지 검증 완료: ${CI_TAG}@${ECR_DIGEST}"
+
+      - name: Cloud 배포 요청
+        env:
+          GH_TOKEN: ${{ secrets.CLOUD_DISPATCH_TOKEN }}
+          IMAGE_TAG: ${{ steps.image.outputs.tag }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          jq -n \
+            --arg service "$SERVICE" \
+            --arg tag "$IMAGE_TAG" \
+            --arg digest "$IMAGE_DIGEST" \
+            --arg source_repository "$GITHUB_REPOSITORY" \
+            --arg source_sha "$SOURCE_SHA" \
+            '{
+              event_type: "deploy-image",
+              client_payload: {
+                service: $service,
+                tag: $tag,
+                digest: $digest,
+                source_repository: $source_repository,
+                source_sha: $source_sha
+              }
+            }' > repository-dispatch.json
+
+          gh api \
+            --method POST \
+            "repos/${GITHUB_REPOSITORY_OWNER}/${CLOUD_REPOSITORY}/dispatches" \
+            --input repository-dispatch.json
+
+          echo "Cloud 배포 요청 완료: ${SERVICE}:${IMAGE_TAG}"
+
+      - name: Cloud 배포 요청 결과 요약
         if: always()
         run: |
           {
-            echo "### 배포 결과"
+            echo "### Cloud 배포 요청"
             echo "- 서비스: ${{ env.SERVICE }}"
-            echo "- 태그: \`${{ needs.guard.outputs.tag }}\`"
-            echo "- 결과: ${{ job.status }}"
+            echo "- 태그: \`${{ steps.image.outputs.tag }}\`"
+            echo "- Digest: \`${{ steps.image.outputs.digest }}\`"
+            echo "- 요청 결과: ${{ job.status }}"
+            echo "- 실제 배포 결과는 Cloud CD Workflow에서 확인"
           } >> $GITHUB_STEP_SUMMARY

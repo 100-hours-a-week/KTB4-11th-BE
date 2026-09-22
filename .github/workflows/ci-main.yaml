@@ -13,41 +13,13 @@ concurrency:
   group: be-main-ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  ECR_REGION: us-east-1
+  ECR_REGISTRY: public.ecr.aws/g8x9p1p0
+  ECR_REPOSITORY: stockspoon-v1-backend
+
 jobs:
-  # 현재 main commit이 GitHub PR을 통해 merge된 결과인지 확인한다
-  check_trigger:
-    runs-on: ubuntu-26.04
-
-    permissions:
-      contents: read
-      pull-requests: read
-
-    outputs:
-      run_ci: ${{ steps.check.outputs.run_ci }}
-
-    steps:
-      - name: Check Main Push Type
-        id: check
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const { data: pulls } =
-              await github.rest.repos.listPullRequestsAssociatedWithCommit({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                commit_sha: context.sha
-              });
-
-            const mergedToMain = pulls.some(
-              pr => pr.merged_at && pr.base.ref === 'main'
-            );
-
-            core.setOutput('run_ci', mergedToMain ? 'false' : 'true');
-
   build:
-    needs: check_trigger
-    if: needs.check_trigger.outputs.run_ci == 'true'
-
     runs-on: ubuntu-26.04
 
     permissions:
@@ -79,25 +51,56 @@ jobs:
         run: ./gradlew build --build-cache
 
       - name: Configure AWS credentials
-        if: github.ref == 'refs/heads/main'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: us-east-1
+          aws-region: ${{ env.ECR_REGION }}
 
       - name: Login to Public ECR
-        if: github.ref == 'refs/heads/main'
         uses: aws-actions/amazon-ecr-login@v2
         with:
           registry-type: public
 
       - name: Build and push Docker image
-        if: github.ref == 'refs/heads/main'
         env:
-          IMAGE_URI: public.ecr.aws/g8x9p1p0/stockspoon-v1-backend:${{ github.sha }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
+          IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
           docker build -t "$IMAGE_URI" .
           docker push "$IMAGE_URI"
+
+      - name: Create deployment metadata
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          IMAGE_DIGEST="$(aws ecr-public describe-images \
+            --region "${ECR_REGION}" \
+            --repository-name "${ECR_REPOSITORY}" \
+            --image-ids imageTag="${IMAGE_TAG}" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)"
+
+          if [ -z "$IMAGE_DIGEST" ] || [ "$IMAGE_DIGEST" = "None" ]; then
+            echo "ECR에서 이미지 digest를 확인할 수 없습니다: ${IMAGE_TAG}" >&2
+            exit 1
+          fi
+
+          mkdir -p deployment-metadata
+          jq -n \
+            --arg repository "${ECR_REGISTRY}/${ECR_REPOSITORY}" \
+            --arg tag "$IMAGE_TAG" \
+            --arg digest "$IMAGE_DIGEST" \
+            --arg source_sha "${GITHUB_SHA}" \
+            '{repository: $repository, tag: $tag, digest: $digest, source_sha: $source_sha}' \
+            > deployment-metadata/image.json
+
+      - name: Upload deployment metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-image-${{ github.sha }}
+          path: deployment-metadata/image.json
+          if-no-files-found: error
+          retention-days: 7
 
       # SpotBugs 검사 실패 시 Report를 남긴다
       - name: Upload SpotBugs report

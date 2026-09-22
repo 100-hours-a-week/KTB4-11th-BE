@@ -1,0 +1,113 @@
+name: Backend CD
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths-ignore: ["**/*.md", "docs/**"]
+  workflow_run:
+    workflows: [ "Backend Main CI" ]
+    types: [ completed ]
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "배포할 이미지 태그 (커밋 SHA)"
+        required: true
+
+concurrency:
+  group: be-cd
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REGION: us-east-1
+  ECR_REPOSITORY: stockspoon-v1-backend
+  SERVICE: backend
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, pull-requests: read }
+    outputs:
+      deploy: ${{ steps.check.outputs.deploy }}
+      tag:    ${{ steps.check.outputs.tag }}
+    steps:
+      - name: 배포 조건 판단
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          EVENT="${{ github.event_name }}"
+
+          if [ "$EVENT" = "pull_request" ]; then
+            echo "PR 이벤트 → 배포 진행"
+            echo "tag=${{ github.event.pull_request.head.sha }}" >> $GITHUB_OUTPUT
+            echo "deploy=true" >> $GITHUB_OUTPUT; exit 0
+          fi
+
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "수동 실행 → 배포 진행"
+            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "deploy=true" >> $GITHUB_OUTPUT; exit 0
+          fi
+
+          if [ "${{ github.event.workflow_run.conclusion }}" != "success" ]; then
+            echo "CI 실패 → 배포 중단"
+            echo "deploy=false" >> $GITHUB_OUTPUT; exit 0
+          fi
+
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          PR_COUNT=$(gh api "repos/${{ github.repository }}/commits/${SHA}/pulls" --jq 'length')
+          if [ "$PR_COUNT" -gt 0 ]; then
+            echo "PR 경유 커밋 → PR 시점에 배포 완료, 스킵"
+            echo "deploy=false" >> $GITHUB_OUTPUT
+          else
+            echo "main 직접 push → 배포 진행"
+            echo "tag=${SHA}" >> $GITHUB_OUTPUT
+            echo "deploy=true" >> $GITHUB_OUTPUT
+          fi
+
+  deploy:
+    needs: guard
+    if: needs.guard.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions: { id-token: write, contents: read }
+    steps:
+      - name: AWS 인증 (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: ECR 이미지 존재 확인
+        run: |
+          aws ecr-public describe-images \
+            --region "${{ env.ECR_REGION }}" \
+            --repository-name "${{ env.ECR_REPOSITORY }}" \
+            --image-ids imageTag="${{ needs.guard.outputs.tag }}" > /dev/null
+
+          echo "배포 대상 이미지 확인: ${{ needs.guard.outputs.tag }}"
+
+      - name: EC2 배포 실행
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            cd /opt/cloud
+            git pull --ff-only
+            ./scripts/deploy.sh ${{ env.SERVICE }} ${{ needs.guard.outputs.tag }}
+
+      - name: 배포 결과 요약
+        if: always()
+        run: |
+          {
+            echo "### 배포 결과"
+            echo "- 서비스: ${{ env.SERVICE }}"
+            echo "- 태그: \`${{ needs.guard.outputs.tag }}\`"
+            echo "- 결과: ${{ job.status }}"
+          } >> $GITHUB_STEP_SUMMARY

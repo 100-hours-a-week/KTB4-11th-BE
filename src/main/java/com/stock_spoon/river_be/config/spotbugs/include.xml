@@ -1,0 +1,15 @@
+<FindBugsFilter>
+    <Match><Bug category="CORRECTNESS"/></Match>
+    <Match><Bug category="MT_CORRECTNESS"/></Match>
+    <Match><Bug category="SECURITY"/></Match>
+    <Match><Bug category="STYLE"/></Match>   <!-- = Dodgy code -->
+
+    <!-- Bad practice 중 장애 직결 패턴만 -->
+    <Match>
+        <Bug pattern="OS_OPEN_STREAM,
+                  OS_OPEN_STREAM_EXCEPTION_PATH,
+                  ODR_OPEN_DATABASE_RESOURCE,
+                  ODR_OPEN_DATABASE_RESOURCE_EXCEPTION_PATH,
+                  DE_MIGHT_IGNORE"/>
+    </Match>
+</FindBugsFilter>

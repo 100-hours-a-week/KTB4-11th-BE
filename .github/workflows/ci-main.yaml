@@ -52,6 +52,7 @@ jobs:
 
     permissions:
       contents: read
+      id-token: write
 
     steps:
       # 1. CI Runner에 Repo의 코드를 가져온다

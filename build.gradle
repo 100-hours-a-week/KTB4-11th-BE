@@ -19,7 +19,7 @@ repositories {
 }
 
 spotbugs {
-    includeFilter = file("config/spotbugs/include.xml")
+    includeFilter = file("src/main/java/com/stock_spoon/river_be/config/spotbugs/include.xml")
     reportLevel   = com.github.spotbugs.snom.Confidence.valueOf('HIGH')
     effort        = com.github.spotbugs.snom.Effort.valueOf('DEFAULT')
 }

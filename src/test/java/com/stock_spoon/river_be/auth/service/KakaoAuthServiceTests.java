@@ -37,7 +37,8 @@ class KakaoAuthServiceTests {
         var service = new KakaoAuthService(client,
                 new KakaoProperties("app", "", "http://localhost:3000/callback", "", false),
                 users, oauthUsers);
-        when(client.verifyUser("code")).thenReturn(new KakaoUserInfo(123L, "첫닉네임"));
+        when(client.verifyUser("code")).thenReturn(new KakaoUserInfo(
+                123L, "첫닉네임", "https://example.com/first.jpg"));
         when(oauthUsers.findByProviderAndProviderUserId(OAuthProvider.KAKAO, 123L))
                 .thenReturn(Optional.empty());
         when(users.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
@@ -45,6 +46,7 @@ class KakaoAuthServiceTests {
         User user = service.verify("code");
 
         assertThat(user.getNickname()).isEqualTo("첫닉네임");
+        assertThat(user.getProfileImageUrl()).isEqualTo("https://example.com/first.jpg");
         verify(client).verifyUser("code");
         verify(users).save(any(User.class));
         verify(oauthUsers).save(any(UserOAuth.class));
@@ -59,7 +61,8 @@ class KakaoAuthServiceTests {
                 new KakaoProperties("app", "", "http://localhost:3000/callback", "", false),
                 users, oauthUsers);
         User existingUser = new User("이전닉네임");
-        when(client.verifyUser("code")).thenReturn(new KakaoUserInfo(123L, "새닉네임"));
+        when(client.verifyUser("code")).thenReturn(new KakaoUserInfo(
+                123L, "새닉네임", "https://example.com/new.jpg"));
         when(oauthUsers.findByProviderAndProviderUserId(OAuthProvider.KAKAO, 123L))
                 .thenReturn(Optional.of(new UserOAuth(existingUser, OAuthProvider.KAKAO, 123L)));
 
@@ -67,6 +70,7 @@ class KakaoAuthServiceTests {
 
         assertThat(user).isSameAs(existingUser);
         assertThat(user.getNickname()).isEqualTo("새닉네임");
+        assertThat(user.getProfileImageUrl()).isEqualTo("https://example.com/new.jpg");
         verify(users, never()).save(any());
         verify(oauthUsers, never()).save(any());
     }
@@ -79,7 +83,7 @@ class KakaoAuthServiceTests {
         var service = new KakaoAuthService(client,
                 new KakaoProperties("app", "", "http://localhost:3000/callback", "", false),
                 users, oauthUsers);
-        when(client.verifyUser("code")).thenReturn(new KakaoUserInfo(123L, null));
+        when(client.verifyUser("code")).thenReturn(new KakaoUserInfo(123L, null, null));
 
         assertThatThrownBy(() -> service.verify("code"))
                 .isInstanceOfSatisfying(AuthException.class,

@@ -42,11 +42,12 @@ public class KakaoAuthService {
                 OAuthProvider.KAKAO, kakaoUser.id());
         if (oauth.isPresent()) {
             User user = oauth.get().getUser();
-            user.synchronizeNickname(kakaoUser.nickname());
+            user.synchronizeProfile(kakaoUser.nickname(), kakaoUser.profileImageUrl());
             return user;
         }
 
-        User user = userRepository.save(new User(kakaoUser.nickname()));
+        User user = userRepository.save(
+                new User(kakaoUser.nickname(), kakaoUser.profileImageUrl()));
         userOAuthRepository.save(new UserOAuth(user, OAuthProvider.KAKAO, kakaoUser.id()));
         return user;
     }

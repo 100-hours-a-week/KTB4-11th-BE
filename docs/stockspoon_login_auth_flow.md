@@ -10,19 +10,16 @@
 FE가 전달한 카카오 인가코드 수신
 → 카카오 Access Token 발급 요청
 → 카카오 사용자 정보 조회
-→ provider_user_id와 nickname 확인
+→ provider_user_id, nickname과 선택적 profile_image_url 확인
 → nickname 필수 검증
 → H2 DB에서 기존 회원 조회
-→ 신규 회원 생성 또는 기존 회원 nickname 동기화
+→ 신규 회원 생성 또는 기존 회원 프로필 동기화
+→ StockSpoon Access/Refresh JWT 발급
+→ Refresh Token 해시 저장
+→ HttpOnly Cookie 저장
 ```
 
-아직 구현되지 않은 범위:
-
-- StockSpoon Access JWT / Refresh JWT 발급
-- JWT의 HttpOnly Cookie 저장
-- 토큰 재발급과 로그아웃
-
-현재 `KAKAO_AUTH_VERIFIED` 응답은 **카카오 인증 확인과 회원 조회·가입 완료**를 뜻한다. 아직 스톡스푼 JWT를 발급하지 않으므로 스톡스푼 로그인 전체가 완료된 상태는 아니다.
+Access Token 재발급과 로그아웃도 구현되어 있다. 로그인 성공 응답은 `LOGIN_SUCCESS`이며, JWT 원문은 응답 JSON이 아닌 HttpOnly Cookie로만 전달한다.
 
 ## 1. 현재 확정된 인증 정책
 
@@ -34,12 +31,19 @@ FE가 전달한 카카오 인가코드 수신
 - 회원가입 화면에서 닉네임을 따로 입력받지 않고 **카카오 닉네임을 그대로 사용**
 - 카카오 사용자 정보에 닉네임이 없거나 빈 값이면 **회원가입과 로그인을 실패 처리**
 - 기존 사용자가 다시 로그인할 때마다 최신 카카오 닉네임을 `users.nickname`에 저장
+- 프로필 이미지 URL은 `users.profile_image_url`에 nullable로 저장
+- 프로필 이미지 미동의·미제공 시에도 로그인하며 기존 이미지 URL은 `null`로 동기화
 - 인증 방식: **토큰 인증**
 - 서비스 자체 토큰:
   - **Access Token**
   - **Refresh Token**
 - 두 토큰 모두 **JWT**
 - 두 토큰 모두 브라우저의 **HttpOnly Cookie**에 저장
+- Access Token 만료 시간: **15분**
+- Refresh Token 만료 시간: **14일**
+- Refresh Token 원문은 DB에 저장하지 않고 **SHA-256 해시**만 저장
+- 재발급할 때 기존 Refresh Token을 폐기하고 새 토큰으로 교체하는 **Rotation** 적용
+- 여러 기기의 Refresh Token을 각각 보관하며 로그아웃은 현재 브라우저 세션만 종료
 - 이후 요청에서는 브라우저가 Cookie 헤더를 통해 토큰을 자동 전송
 - 서버는 Access Token의:
   - 서명 검증
@@ -111,11 +115,11 @@ BE는 **FE로부터 인가코드를 받은 이후부터** 담당한다.
 2. BE가 인가코드를 사용하여 **Kakao Token API** 호출
 3. Kakao Access Token 발급
 4. Kakao Access Token을 사용하여 **카카오 사용자 정보 API** 호출
-5. 카카오 사용자 식별값(`provider_user_id`)과 닉네임 확인
+5. 카카오 사용자 식별값(`provider_user_id`), 닉네임과 선택적 프로필 이미지 URL 확인
 6. 기존 가입 사용자 여부 조회
 7. 닉네임이 없거나 빈 값이면 로그인 실패 처리
-8. 기존 사용자라면 `users.nickname`을 최신 카카오 닉네임으로 갱신
-9. 최초 사용자라면 카카오 닉네임으로 사용자 정보 생성
+8. 기존 사용자라면 `users.nickname`, `users.profile_image_url`을 최신 카카오 정보로 갱신
+9. 최초 사용자라면 카카오 닉네임과 선택적 프로필 이미지 URL로 사용자 정보 생성
 10. BE가 **스톡스푼 자체 Access JWT / Refresh JWT 발급**
 11. 두 JWT를 **HttpOnly Cookie**로 응답
 12. 이후 스톡스푼 API는 스톡스푼 Access JWT로 인증
@@ -135,11 +139,11 @@ Kakao Access Token 획득
   ↓
 Kakao 사용자 정보 API
   ↓
-provider_user_id와 nickname 확인
+provider_user_id, nickname과 profile_image_url 확인
   ↓
 닉네임 필수 검증
   ↓
-기존 회원 닉네임 동기화 / 신규 회원 생성
+기존 회원 프로필 동기화 / 신규 회원 생성
   ↓
 StockSpoon Access JWT 생성
 StockSpoon Refresh JWT 생성
@@ -204,6 +208,8 @@ BE는 스톡스푼 Access JWT를 검증한 뒤 사용자 ID를 추출한다.
 
 Refresh Token 역시 HttpOnly Cookie로 전달한다.
 
+Refresh Token은 `refresh_token` 테이블에 SHA-256 해시로 저장한다. 재발급에 성공하면 사용한 행을 삭제하고 새 Refresh Token 해시를 저장한다. 이미 사용했거나 로그아웃으로 폐기된 Refresh Token은 다시 사용할 수 없다.
+
 ---
 
 ## 4. 회원 조회·가입과 닉네임 처리
@@ -211,22 +217,22 @@ Refresh Token 역시 HttpOnly Cookie로 전달한다.
 카카오 사용자 식별값을 기준으로 기존 회원인지 확인하고, 카카오 닉네임을 사용자 닉네임으로 사용한다.
 
 ```text
-Kakao provider_user_id와 nickname 조회
+Kakao provider_user_id, nickname과 선택적 profile_image_url 조회
 
 nickname 없음 또는 빈 값
 → 회원가입/로그인 실패
 
 기존 OAuth 사용자 존재
-→ users.nickname을 현재 Kakao nickname으로 갱신
+→ users.nickname과 users.profile_image_url을 현재 Kakao 정보로 갱신
 → 기존 user로 로그인
 
 기존 OAuth 사용자 없음
-→ Kakao nickname으로 users 생성
+→ Kakao nickname과 선택적 profile_image_url로 users 생성
 → user_oauth 생성
 → 로그인 처리
 ```
 
-회원가입 화면에서 닉네임을 추가로 입력받지 않는다. 카카오에서 받은 닉네임을 별도로 변경하지 않고 저장한다. 카카오 닉네임이 변경되면 다음 로그인에서 `users.nickname`도 변경된다. 닉네임 중복 허용 여부는 별도 정책과 DB 제약조건으로 확정해야 한다.
+회원가입 화면에서 닉네임을 추가로 입력받지 않는다. 카카오에서 받은 닉네임을 별도로 변경하지 않고 저장한다. 카카오 닉네임은 중복될 수 있으므로 유일 제약조건을 두지 않는다. 프로필 이미지 URL은 선택값이며, 사용자가 동의하지 않았거나 카카오 응답에 값이 없으면 `null`로 저장한다. 재로그인할 때 두 값을 모두 최신 카카오 응답과 동기화한다.
 
 최초 회원 생성 시 `users`와 `user_oauth` 생성은 하나의 DB 트랜잭션에서 수행한다. 기존 사용자의 닉네임 갱신도 로그인 처리 트랜잭션에 포함한다. 중간에 실패하면 일부 데이터만 저장되지 않도록 전체 작업을 되돌린다.
 
@@ -253,6 +259,7 @@ users
 
 - user_id
 - nickname
+- profile_image_url (nullable)
 
 user_oauth
 
@@ -345,17 +352,9 @@ POST /api/v1/auth/login
 
 아래 항목은 후속 결정이 필요하다.
 
-- StockSpoon Access Token 만료 시간
-- StockSpoon Refresh Token 만료 시간
-- Refresh Token 재발급/회전(Rotation) 정책
-- 로그아웃 시 Refresh Token 폐기 방식
-- Refresh Token 서버 저장 여부
-- Cookie의 `Secure`, `SameSite`, `Path`, `Domain` 값
-- CSRF 방어 방식
-- Kakao Access/Refresh Token을 로그인 이후 저장할지 여부
 - 카카오 연결 해제와 스톡스푼 회원 탈퇴의 관계
-- 중복 로그인 / 다중 기기 로그인 정책
-- Access Token 만료 시 FE의 재발급 호출 방식
+- 운영 환경의 Cookie `Domain` 값과 FE/BE 배포 도메인
+- 운영 환경이 서로 다른 사이트일 때 `SameSite=None` 적용 여부
 - 로그인 실패 및 OAuth 오류 응답 규격
 
 ---
@@ -434,12 +433,55 @@ FE는 OAuth `state`를 BE에 전달하지 않는다. BE는 FE가 `state`를 검�
 
 ```json
 {
-  "code": "KAKAO_AUTH_VERIFIED",
-  "message": "카카오 인증이 확인되었습니다."
+  "code": "LOGIN_SUCCESS",
+  "message": "로그인되었습니다."
 }
 ```
 
+응답 헤더에는 다음 쿠키가 포함된다.
+
+```http
+Set-Cookie: access_token={JWT}; HttpOnly; SameSite=Lax; Path=/; Max-Age=900
+Set-Cookie: refresh_token={JWT}; HttpOnly; SameSite=Lax; Path=/api/v1/auth; Max-Age=1209600
+```
+
+운영 환경에서는 두 쿠키에 `Secure`도 적용한다. JWT는 응답 JSON에 포함하지 않는다.
+
 인가코드는 일회용이므로 교환 실패 후 같은 코드를 자동 재시도하지 않고 카카오 로그인을 처음부터 다시 시작한다.
+
+### 3) Access/Refresh Token 재발급
+
+```http
+POST /api/v1/auth/reissue
+X-XSRF-TOKEN: {csrf-token}
+Cookie: refresh_token={Refresh JWT}
+```
+
+성공하면 기존 Refresh Token을 폐기하고 새로운 Access/Refresh Token 쿠키를 모두 설정한다.
+
+```json
+{
+  "code": "TOKEN_REISSUED",
+  "message": "토큰이 재발급되었습니다."
+}
+```
+
+### 4) 로그아웃
+
+```http
+POST /api/v1/auth/logout
+X-XSRF-TOKEN: {csrf-token}
+Cookie: refresh_token={Refresh JWT}
+```
+
+현재 Refresh Token의 DB 해시를 삭제하고 두 인증 쿠키의 `Max-Age`를 `0`으로 설정한다.
+
+```json
+{
+  "code": "LOGOUT_SUCCESS",
+  "message": "로그아웃되었습니다."
+}
+```
 
 ---
 
@@ -448,10 +490,14 @@ FE는 OAuth `state`를 BE에 전달하지 않는다. BE는 FE가 `state`를 검�
 관련 코드의 역할:
 
 1. `KakaoLoginRequest`: `authorization_code` 입력 형식과 필수값 검증
-2. `AuthController`: CSRF 확인값 발급, 로그인 요청 수신
-3. `KakaoAuthService`: 서버 설정 확인 후 `KakaoClient` 호출
-4. `KakaoClient`: 카카오 토큰 API와 사용자 정보 API 호출
-5. `SecurityConfig`: CSRF, CORS, API 접근 규칙과 외부 요청 제한 시간 설정
+2. `AuthController`: CSRF, 로그인, 재발급, 로그아웃 요청 수신과 쿠키 응답
+3. `AuthService`: 카카오 로그인과 Refresh Token 처리를 조립
+4. `KakaoAuthService`: 카카오 인증, 회원 조회·가입과 닉네임 동기화
+5. `KakaoClient`: 카카오 토큰 API와 사용자 정보 API 호출
+6. `JwtTokenProvider`: StockSpoon Access/Refresh JWT 생성과 Refresh JWT 검증
+7. `RefreshTokenService`: Refresh Token 해시 저장, Rotation과 로그아웃 폐기
+8. `AuthCookieService`: 인증 쿠키 생성과 삭제
+9. `SecurityConfig`: Access Token 쿠키 인증, CSRF, CORS와 API 접근 규칙
 
 실제 처리 순서:
 
@@ -462,13 +508,16 @@ POST /api/v1/auth/login
 → KakaoAuthService.verify()
 → POST https://kauth.kakao.com/oauth/token
 → GET https://kapi.kakao.com/v2/user/me
-→ provider_user_id와 nickname 반환
+→ provider_user_id, nickname과 선택적 profile_image_url 반환
 → nickname 필수 검증
 → H2 DB에서 기존 OAuth 회원 조회
-→ 기존 회원 nickname 갱신 또는 신규 users/user_oauth 생성
+→ 기존 회원 프로필 갱신 또는 신규 users/user_oauth 생성
+→ Access/Refresh JWT 발급
+→ refresh_token 테이블에 Refresh JWT 해시 저장
+→ access_token/refresh_token HttpOnly Cookie 응답
 ```
 
-현재 코드는 `KakaoClient`가 `id`와 `kakao_account.profile.nickname`을 반환하고, 서비스가 회원 조회·가입과 닉네임 동기화를 수행하는 단계까지 구현되어 있다.
+일반 API 요청에서는 `SecurityConfig`가 `access_token` 쿠키를 읽고 JWT의 서명, 만료 시간, 발급자와 `type=access`를 검증한 뒤 `sub`의 `user_id`를 인증 사용자 식별값으로 사용한다.
 
 ### H2 기반 DB 구현 내용
 
@@ -478,12 +527,12 @@ POST /api/v1/auth/login
 2. Spring Data JPA와 H2 의존성을 사용한다.
 3. `User`, `UserOAuth`, `OAuthProvider`로 회원과 카카오 계정을 표현한다.
 4. `(provider, provider_user_id)`에 유일 제약조건을 적용한다.
-5. `KakaoClient`가 사용자 정보 응답의 `id`와 `kakao_account.profile.nickname`을 읽는다.
+5. `KakaoClient`가 사용자 정보 응답의 `id`, `kakao_account.profile.nickname`, `kakao_account.profile.profile_image_url`을 읽는다.
 6. 닉네임이 없거나 빈 값이면 DB를 변경하지 않고 `KAKAO_NICKNAME_NOT_PROVIDED` 오류를 반환한다.
 7. `UserOAuthRepository`로 카카오 사용자의 가입 여부를 조회한다.
-8. 가입되지 않았다면 카카오 닉네임으로 `users`를 만들고 `user_oauth`를 연결한다.
-9. 가입되어 있다면 카카오 닉네임을 기존 `users.nickname`에 저장한다.
-10. H2를 사용하는 테스트로 신규 가입, 기존 회원 닉네임 동기화와 닉네임 누락을 검증한다.
+8. 가입되지 않았다면 카카오 닉네임과 선택적 프로필 이미지 URL로 `users`를 만들고 `user_oauth`를 연결한다.
+9. 가입되어 있다면 닉네임과 프로필 이미지 URL을 기존 `users`에 동기화한다.
+10. H2를 사용하는 테스트로 신규 가입, 기존 회원 프로필 동기화, 이미지 미제공과 닉네임 누락을 검증한다.
 
 나중에 MySQL로 바꿀 때는 DataSource와 JPA 방언 등 환경 설정과 DB 스키마 생성 방식을 변경한다. 서비스, 엔티티, 저장소 인터페이스는 최대한 그대로 유지한다.
 
@@ -512,6 +561,10 @@ IntelliJ 실행 구성의 환경변수로 설정하며 비밀값은 Git에 커�
 | `KAKAO_REDIRECT_URI` | 카카오에 등록한 FE 콜백 주소. FE 인가 요청의 값과 정확히 같아야 함 |
 | `FRONTEND_ORIGIN` | 허용할 FE 출처. 예: `http://localhost:3000` |
 | `AUTH_COOKIE_SECURE` | 운영 HTTPS에서는 `true`, 로컬 HTTP 개발에서만 `false` |
+| `JWT_SECRET` | HS256 서명키. 32바이트 이상의 예측 불가능한 값이며 BE에만 보관 |
+| `JWT_ISSUER` | JWT 발급자. 기본값 `stockspoon` |
+| `JWT_ACCESS_EXPIRATION` | Access Token 유효기간. 기본값 `15m` |
+| `JWT_REFRESH_EXPIRATION` | Refresh Token 유효기간. 기본값 `14d` |
 
 BE는 FE가 전달한 임의의 Redirect URI를 사용하지 않고 서버 환경변수의 값을 사용한다. 카카오 설정이 없거나 Redirect URI가 잘못되면 로그인 요청에 `OAUTH_NOT_CONFIGURED`를 반환한다.
 
@@ -525,6 +578,8 @@ BE는 FE가 전달한 임의의 Redirect URI를 사용하지 않고 서버 환�
 |---|---|---|
 | 400 | `INVALID_REQUEST` | 인가코드 누락, 빈 값 또는 요청 형식 오류 |
 | 400 | `INVALID_AUTHORIZATION_CODE` | 만료되거나 이미 사용한 인가코드 |
+| 401 | `INVALID_REFRESH_TOKEN` | Refresh Token 누락, 만료, 변조, 폐기 또는 재사용 |
+| 401 | `UNAUTHORIZED` | Access Token 누락, 만료, 변조 또는 잘못된 토큰 종류 |
 | 403 | `INVALID_CSRF_TOKEN` | CSRF 쿠키·헤더 누락 또는 불일치 |
 | 500 | `OAUTH_CONFIGURATION_ERROR` | 카카오가 클라이언트 설정을 거절함 |
 | 502 | `KAKAO_NICKNAME_NOT_PROVIDED` | 카카오 사용자 정보에 닉네임이 없거나 빈 값임 |
@@ -556,5 +611,9 @@ BE 테스트에서는 실제 카카오 서버 대신 모의 응답을 사용해 
 - CORS 허용·거부
 - 제거된 `/kakao/prepare` API가 열려 있지 않음
 - 카카오 오류와 시간 초과 처리
+- 로그인 성공 시 JWT가 JSON에 노출되지 않고 HttpOnly Cookie로 설정되는지 확인
+- Access JWT로 보호 API 인증, Refresh JWT 오용과 변조 토큰 차단
+- Refresh Token Rotation과 이전 토큰 재사용 차단
+- 로그아웃 시 Refresh Token 폐기와 두 쿠키 삭제
 
 FE에서는 `state` 일치·불일치·누락·만료·재사용, 로그인 동의 취소와 콜백 중복 처리를 별도로 테스트한다. 실제 카카오 연동은 앱 키와 FE 주소가 정해진 후 브라우저에서 확인한다.

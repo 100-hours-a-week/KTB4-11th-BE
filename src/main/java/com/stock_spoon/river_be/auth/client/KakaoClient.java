@@ -55,12 +55,17 @@ public class KakaoClient {
             throw providerError();
         }
         String nickname = null;
+        String profileImageUrl = null;
         if (user.get("kakao_account") instanceof Map<?, ?> account
-                && account.get("profile") instanceof Map<?, ?> profile
-                && profile.get("nickname") instanceof String value) {
-            nickname = value;
+                && account.get("profile") instanceof Map<?, ?> profile) {
+            if (profile.get("nickname") instanceof String value) {
+                nickname = value;
+            }
+            if (profile.get("profile_image_url") instanceof String value && !value.isBlank()) {
+                profileImageUrl = value;
+            }
         }
-        return new KakaoUserInfo(id.longValue(), nickname);
+        return new KakaoUserInfo(id.longValue(), nickname, profileImageUrl);
     }
 
     private <T> T call(Supplier<T> request, boolean tokenExchange) {

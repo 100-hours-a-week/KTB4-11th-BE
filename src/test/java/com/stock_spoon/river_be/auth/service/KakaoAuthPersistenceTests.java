@@ -29,9 +29,10 @@ class KakaoAuthPersistenceTests {
     @MockitoBean KakaoClient kakao;
 
     @Test
-    void firstLoginCreatesOneUserAndLaterLoginSynchronizesNickname() {
+    void firstLoginCreatesOneUserAndLaterLoginSynchronizesProfile() {
         when(kakao.verifyUser("first"))
-                .thenReturn(new KakaoUserInfo(123L, "첫닉네임"));
+                .thenReturn(new KakaoUserInfo(
+                        123L, "첫닉네임", "https://example.com/first.jpg"));
         service.verify("first");
 
         assertThat(users.count()).isEqualTo(1);
@@ -39,9 +40,12 @@ class KakaoAuthPersistenceTests {
         var oauth = oauthUsers.findByProviderAndProviderUserId(OAuthProvider.KAKAO, 123L)
                 .orElseThrow();
         assertThat(oauth.getUser().getNickname()).isEqualTo("첫닉네임");
+        assertThat(oauth.getUser().getProfileImageUrl())
+                .isEqualTo("https://example.com/first.jpg");
 
         when(kakao.verifyUser("again"))
-                .thenReturn(new KakaoUserInfo(123L, "변경된닉네임"));
+                .thenReturn(new KakaoUserInfo(
+                        123L, "변경된닉네임", "https://example.com/changed.jpg"));
         service.verify("again");
 
         users.flush();
@@ -51,12 +55,25 @@ class KakaoAuthPersistenceTests {
         var updated = oauthUsers.findByProviderAndProviderUserId(OAuthProvider.KAKAO, 123L)
                 .orElseThrow();
         assertThat(updated.getUser().getNickname()).isEqualTo("변경된닉네임");
+        assertThat(updated.getUser().getProfileImageUrl())
+                .isEqualTo("https://example.com/changed.jpg");
+
+        when(kakao.verifyUser("without-image"))
+                .thenReturn(new KakaoUserInfo(123L, "이미지없는닉네임", null));
+        service.verify("without-image");
+        users.flush();
+        entityManager.clear();
+
+        var withoutImage = oauthUsers.findByProviderAndProviderUserId(OAuthProvider.KAKAO, 123L)
+                .orElseThrow();
+        assertThat(withoutImage.getUser().getNickname()).isEqualTo("이미지없는닉네임");
+        assertThat(withoutImage.getUser().getProfileImageUrl()).isNull();
     }
 
     @Test
     void missingNicknameDoesNotCreateDatabaseRows() {
         when(kakao.verifyUser("without-nickname"))
-                .thenReturn(new KakaoUserInfo(456L, null));
+                .thenReturn(new KakaoUserInfo(456L, null, "https://example.com/profile.jpg"));
 
         assertThatThrownBy(() -> service.verify("without-nickname"))
                 .isInstanceOf(AuthException.class);
@@ -67,9 +84,9 @@ class KakaoAuthPersistenceTests {
     @Test
     void differentKakaoUsersMayUseTheSameNickname() {
         when(kakao.verifyUser("first"))
-                .thenReturn(new KakaoUserInfo(100L, "같은닉네임"));
+                .thenReturn(new KakaoUserInfo(100L, "같은닉네임", null));
         when(kakao.verifyUser("second"))
-                .thenReturn(new KakaoUserInfo(200L, "같은닉네임"));
+                .thenReturn(new KakaoUserInfo(200L, "같은닉네임", null));
 
         service.verify("first");
         service.verify("second");

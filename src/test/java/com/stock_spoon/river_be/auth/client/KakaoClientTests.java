@@ -40,10 +40,11 @@ class KakaoClientTests {
         server.expect(requestTo("https://kapi.kakao.com/v2/user/me"))
                 .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer kakao-secret"))
                 .andRespond(withSuccess("""
-                        {"id":123456789,"kakao_account":{"profile":{"nickname":"카카오닉네임"}}}
+                        {"id":123456789,"kakao_account":{"profile":{"nickname":"카카오닉네임","profile_image_url":"https://example.com/profile.jpg"}}}
                         """, MediaType.APPLICATION_JSON));
         assertThat(client.verifyUser("test-code"))
-                .isEqualTo(new KakaoUserInfo(123456789L, "카카오닉네임"));
+                .isEqualTo(new KakaoUserInfo(
+                        123456789L, "카카오닉네임", "https://example.com/profile.jpg"));
         server.verify();
     }
 
@@ -54,7 +55,7 @@ class KakaoClientTests {
         server.expect(requestTo("https://kapi.kakao.com/v2/user/me"))
                 .andRespond(withSuccess("{\"id\":123}", MediaType.APPLICATION_JSON));
 
-        assertThat(client.verifyUser("code")).isEqualTo(new KakaoUserInfo(123L, null));
+        assertThat(client.verifyUser("code")).isEqualTo(new KakaoUserInfo(123L, null, null));
     }
 
     @Test

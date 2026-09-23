@@ -31,6 +31,7 @@ public class KakaoClient {
         var form = new LinkedMultiValueMap<String, String>();
         form.add("grant_type", "authorization_code");
         form.add("client_id", properties.clientId());
+        // 리다이렉트 URI를 한경변수로 application.yaml에 넣으면 됨
         form.add("redirect_uri", properties.redirectUri());
         form.add("code", code);
         if (properties.clientSecret() != null && !properties.clientSecret().isBlank()) {

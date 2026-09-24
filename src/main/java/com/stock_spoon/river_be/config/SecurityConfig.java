@@ -59,7 +59,7 @@ public class SecurityConfig {
         if (properties.frontendOrigin() != null && !properties.frontendOrigin().isBlank()) {
             cors.setAllowedOrigins(List.of(properties.frontendOrigin()));
         }
-        cors.setAllowedMethods(List.of("GET", "POST"));
+        cors.setAllowedMethods(List.of("GET", "POST", "PATCH"));
         cors.setAllowedHeaders(List.of("Content-Type", "X-XSRF-TOKEN"));
         cors.setAllowCredentials(true);
         var source = new UrlBasedCorsConfigurationSource();

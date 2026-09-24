@@ -1,0 +1,97 @@
+name: Backend CD
+
+on:
+  workflow_run:
+    workflows: ["Backend Main CI"]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: be-cd
+  cancel-in-progress: false
+
+env:
+  ECR_REGION: us-east-1
+  ECR_REGISTRY: public.ecr.aws/g8x9p1p0
+  ECR_REPOSITORY: stockspoon-v1-backend
+
+jobs:
+  verify-image:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
+    outputs:
+      image_tag: ${{ steps.verify.outputs.image_tag }}
+    steps:
+      - name: AWS 인증 (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.ECR_REGION }}
+
+      - name: ECR 이미지 존재 및 태그 검증
+        id: verify
+        run: |
+          IMAGE_DIGEST="$(aws ecr-public describe-images \
+            --region "$ECR_REGION" \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)"
+
+          if [ -z "$IMAGE_DIGEST" ] || [ "$IMAGE_DIGEST" = "None" ]; then
+            echo "ECR에서 배포 이미지를 찾을 수 없습니다: $IMAGE_TAG" >&2
+            exit 1
+          fi
+
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "배포 이미지 확인: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}@${IMAGE_DIGEST}"
+
+  deploy:
+    needs: verify-image
+    runs-on: ubuntu-26.04
+    environment: production
+    permissions:
+      contents: read
+    env:
+      IMAGE_TAG: ${{ needs.verify-image.outputs.image_tag }}
+      SERVICE: backend
+    steps:
+      - name: EC2에서 Compose 기준 전체 스택 배포
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: 15m
+          envs: SERVICE,IMAGE_TAG
+          script: |
+            set -Eeuo pipefail
+            cd /opt/cloud
+
+            if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+              echo "/opt/cloud에 tracked 파일 변경이 있어 배포를 중단합니다." >&2
+              exit 1
+            fi
+
+            if [ "$(git branch --show-current)" != "main" ]; then
+              echo "/opt/cloud에서 main 브랜치를 사용해야 합니다." >&2
+              exit 1
+            fi
+
+            git pull --ff-only origin main
+            ./scripts/deploy.sh image "$SERVICE" "$IMAGE_TAG"
+
+      - name: 배포 결과 요약
+        if: always()
+        run: |
+          {
+            echo "### Backend deployment"
+            echo "- image: \`${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}\`"
+            echo "- host: \`${{ secrets.EC2_HOST }}\`"
+            echo "- result: \`${{ job.status }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

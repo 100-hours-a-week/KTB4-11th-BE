@@ -69,39 +69,6 @@ jobs:
           docker build -t "$IMAGE_URI" .
           docker push "$IMAGE_URI"
 
-      - name: Create deployment metadata
-        env:
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          IMAGE_DIGEST="$(aws ecr-public describe-images \
-            --region "${ECR_REGION}" \
-            --repository-name "${ECR_REPOSITORY}" \
-            --image-ids imageTag="${IMAGE_TAG}" \
-            --query 'imageDetails[0].imageDigest' \
-            --output text)"
-
-          if [ -z "$IMAGE_DIGEST" ] || [ "$IMAGE_DIGEST" = "None" ]; then
-            echo "ECR에서 이미지 digest를 확인할 수 없습니다: ${IMAGE_TAG}" >&2
-            exit 1
-          fi
-
-          mkdir -p deployment-metadata
-          jq -n \
-            --arg repository "${ECR_REGISTRY}/${ECR_REPOSITORY}" \
-            --arg tag "$IMAGE_TAG" \
-            --arg digest "$IMAGE_DIGEST" \
-            --arg source_sha "${GITHUB_SHA}" \
-            '{repository: $repository, tag: $tag, digest: $digest, source_sha: $source_sha}' \
-            > deployment-metadata/image.json
-
-      - name: Upload deployment metadata
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-image-${{ github.sha }}
-          path: deployment-metadata/image.json
-          if-no-files-found: error
-          retention-days: 7
-
       # SpotBugs 검사 실패 시 Report를 남긴다
       - name: Upload SpotBugs report
         if: failure()

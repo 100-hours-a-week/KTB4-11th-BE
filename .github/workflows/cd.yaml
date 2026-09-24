@@ -14,113 +14,84 @@ env:
   ECR_REGION: us-east-1
   ECR_REGISTRY: public.ecr.aws/g8x9p1p0
   ECR_REPOSITORY: stockspoon-v1-backend
-  CLOUD_REPOSITORY: KTB4-11th-Cloud
-  SERVICE: backend
 
 jobs:
-  deploy:
+  verify-image:
     if: github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
-    environment: production
+    runs-on: ubuntu-26.04
     permissions:
-      actions: read
       contents: read
       id-token: write
+    env:
+      IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
+    outputs:
+      image_tag: ${{ steps.verify.outputs.image_tag }}
     steps:
-      - name: Download image metadata from Main CI
-        uses: actions/download-artifact@v5
-        with:
-          name: backend-image-${{ github.event.workflow_run.head_sha }}
-          path: deployment-metadata
-          github-token: ${{ github.token }}
-          run-id: ${{ github.event.workflow_run.id }}
-
       - name: AWS 인증 (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.ECR_REGION }}
 
-      - name: Main CI 이미지 검증
-        id: image
-        env:
-          TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
+      - name: ECR 이미지 존재 및 태그 검증
+        id: verify
         run: |
-          CI_TAG="$(jq -r '.tag' deployment-metadata/image.json)"
-          CI_DIGEST="$(jq -r '.digest' deployment-metadata/image.json)"
-          CI_REPOSITORY="$(jq -r '.repository' deployment-metadata/image.json)"
-          CI_SOURCE_SHA="$(jq -r '.source_sha' deployment-metadata/image.json)"
-
-          if [ "$CI_TAG" != "$TRIGGER_SHA" ] || [ "$CI_SOURCE_SHA" != "$TRIGGER_SHA" ]; then
-            echo "CI 메타데이터와 workflow_run 커밋이 일치하지 않습니다." >&2
-            exit 1
-          fi
-
-          if [ "$CI_REPOSITORY" != "${ECR_REGISTRY}/${ECR_REPOSITORY}" ]; then
-            echo "CI 메타데이터의 ECR 저장소가 배포 대상과 일치하지 않습니다." >&2
-            exit 1
-          fi
-
-          ECR_DIGEST="$(aws ecr-public describe-images \
-            --region "${{ env.ECR_REGION }}" \
-            --repository-name "${{ env.ECR_REPOSITORY }}" \
-            --image-ids imageTag="$CI_TAG" \
+          IMAGE_DIGEST="$(aws ecr-public describe-images \
+            --region "$ECR_REGION" \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="$IMAGE_TAG" \
             --query 'imageDetails[0].imageDigest' \
             --output text)"
 
-          if [ -z "$ECR_DIGEST" ] || [ "$ECR_DIGEST" = "None" ]; then
-            echo "ECR에 배포 대상 이미지가 없습니다: $CI_TAG" >&2
+          if [ -z "$IMAGE_DIGEST" ] || [ "$IMAGE_DIGEST" = "None" ]; then
+            echo "ECR에서 배포 이미지를 찾을 수 없습니다: $IMAGE_TAG" >&2
             exit 1
           fi
 
-          if [ "$ECR_DIGEST" != "$CI_DIGEST" ]; then
-            echo "CI가 기록한 이미지와 현재 ECR 이미지가 일치하지 않습니다." >&2
-            exit 1
-          fi
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "배포 이미지 확인: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}@${IMAGE_DIGEST}"
 
-          echo "tag=$CI_TAG" >> "$GITHUB_OUTPUT"
-          echo "digest=$ECR_DIGEST" >> "$GITHUB_OUTPUT"
-          echo "배포 이미지 검증 완료: ${CI_TAG}@${ECR_DIGEST}"
+  deploy:
+    needs: verify-image
+    runs-on: ubuntu-26.04
+    environment: production
+    permissions:
+      contents: read
+    env:
+      IMAGE_TAG: ${{ needs.verify-image.outputs.image_tag }}
+      SERVICE: backend
+    steps:
+      - name: EC2에서 Compose 기준 전체 스택 배포
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: 15m
+          envs: SERVICE,IMAGE_TAG
+          script: |
+            set -Eeuo pipefail
+            cd /opt/cloud
 
-      - name: Cloud 배포 요청
-        env:
-          GH_TOKEN: ${{ secrets.CLOUD_DISPATCH_TOKEN }}
-          IMAGE_TAG: ${{ steps.image.outputs.tag }}
-          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
-          SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          jq -n \
-            --arg service "$SERVICE" \
-            --arg tag "$IMAGE_TAG" \
-            --arg digest "$IMAGE_DIGEST" \
-            --arg source_repository "$GITHUB_REPOSITORY" \
-            --arg source_sha "$SOURCE_SHA" \
-            '{
-              event_type: "deploy-image",
-              client_payload: {
-                service: $service,
-                tag: $tag,
-                digest: $digest,
-                source_repository: $source_repository,
-                source_sha: $source_sha
-              }
-            }' > repository-dispatch.json
+            if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+              echo "/opt/cloud에 tracked 파일 변경이 있어 배포를 중단합니다." >&2
+              exit 1
+            fi
 
-          gh api \
-            --method POST \
-            "repos/${GITHUB_REPOSITORY_OWNER}/${CLOUD_REPOSITORY}/dispatches" \
-            --input repository-dispatch.json
+            if [ "$(git branch --show-current)" != "main" ]; then
+              echo "/opt/cloud에서 main 브랜치를 사용해야 합니다." >&2
+              exit 1
+            fi
 
-          echo "Cloud 배포 요청 완료: ${SERVICE}:${IMAGE_TAG}"
+            git pull --ff-only origin main
+            ./scripts/deploy.sh image "$SERVICE" "$IMAGE_TAG"
 
-      - name: Cloud 배포 요청 결과 요약
+      - name: 배포 결과 요약
         if: always()
         run: |
           {
-            echo "### Cloud 배포 요청"
-            echo "- 서비스: ${{ env.SERVICE }}"
-            echo "- 태그: \`${{ steps.image.outputs.tag }}\`"
-            echo "- Digest: \`${{ steps.image.outputs.digest }}\`"
-            echo "- 요청 결과: ${{ job.status }}"
-            echo "- 실제 배포 결과는 Cloud CD Workflow에서 확인"
-          } >> $GITHUB_STEP_SUMMARY
+            echo "### Backend deployment"
+            echo "- image: \`${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}\`"
+            echo "- host: \`${{ secrets.EC2_HOST }}\`"
+            echo "- result: \`${{ job.status }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

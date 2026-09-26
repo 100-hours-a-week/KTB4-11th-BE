@@ -2,13 +2,12 @@ spring:
   application:
     name: river_be
   datasource:
-    url: jdbc:h2:mem:stockspoon;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://localhost:3306/stockspoon}
+    username: ${MYSQL_USER:stockspoon_app}
+    password: ${MYSQL_PASSWORD}
   jpa:
     hibernate:
-      ddl-auto: create-drop
+      ddl-auto: ${JPA_DDL_AUTO:validate}
     open-in-view: false
 
 kakao:

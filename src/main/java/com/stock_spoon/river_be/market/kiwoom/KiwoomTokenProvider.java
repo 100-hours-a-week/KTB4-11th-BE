@@ -51,7 +51,13 @@ public class KiwoomTokenProvider {
                     .retrieve().body(JSON);
         } catch (RestClientException error) {
             // 공급자 예외에는 응답 본문이 포함될 수 있으므로 원문을 전달하지 않는다.
-            throw new IllegalStateException("키움 토큰 발급 통신에 실패했습니다 (" + error.getClass().getSimpleName() + "). 네트워크와 인증 설정을 확인하세요.");
+            Throwable root = error;
+            while (root.getCause() != null) {
+                root = root.getCause();
+            }
+            throw new IllegalStateException("키움 토큰 발급 통신에 실패했습니다 ("
+                    + error.getClass().getSimpleName() + "/" + root.getClass().getSimpleName()
+                    + "). 네트워크와 인증 설정을 확인하세요.");
         }
         if (response != null && !"0".equals(String.valueOf(response.get("return_code")))) {
             var detail = java.util.regex.Pattern.compile("\\[(\\d{3,5}):")

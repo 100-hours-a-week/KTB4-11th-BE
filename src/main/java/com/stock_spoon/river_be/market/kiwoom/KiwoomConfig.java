@@ -19,6 +19,7 @@ public class KiwoomConfig {
         factory.setReadTimeout(Duration.ofSeconds(5));
         var client = RestClient.builder()
                 .baseUrl("https://api.kiwoom.com")
+                .bufferContent((uri, method) -> true)
                 .requestFactory(factory).build();
         return new KiwoomTokenProvider(client, appKey, appSecret, Clock.systemUTC());
     }

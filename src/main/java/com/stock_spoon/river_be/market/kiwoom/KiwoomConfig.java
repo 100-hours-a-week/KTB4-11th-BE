@@ -14,6 +14,15 @@ public class KiwoomConfig {
     KiwoomTokenProvider kiwoomTokenProvider(
             @Value("${kiwoom.app-key:}") String appKey,
             @Value("${kiwoom.app-secret:}") String appSecret) {
+        return new KiwoomTokenProvider(createClient(), appKey, appSecret, Clock.systemUTC());
+    }
+
+    @Bean
+    KiwoomMarketClient kiwoomMarketClient(KiwoomTokenProvider tokenProvider) {
+        return new KiwoomMarketClient(createClient(), tokenProvider);
+    }
+
+    private RestClient createClient() {
         var factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(Duration.ofSeconds(3));
         factory.setReadTimeout(Duration.ofSeconds(5));
@@ -21,6 +30,6 @@ public class KiwoomConfig {
                 .baseUrl("https://api.kiwoom.com")
                 .bufferContent((uri, method) -> true)
                 .requestFactory(factory).build();
-        return new KiwoomTokenProvider(client, appKey, appSecret, Clock.systemUTC());
+        return client;
     }
 }

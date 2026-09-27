@@ -28,3 +28,6 @@ jwt:
 kiwoom:
   app-key: ${KIWOOM_APP_KEY:}
   app-secret: ${KIWOOM_APP_SECRET:}
+  stream:
+    enabled: ${KIWOOM_STREAM_ENABLED:false}
+    symbols: ${KIWOOM_STREAM_SYMBOLS:005930}

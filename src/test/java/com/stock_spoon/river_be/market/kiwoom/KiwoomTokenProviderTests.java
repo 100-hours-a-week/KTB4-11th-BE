@@ -31,6 +31,18 @@ class KiwoomTokenProviderTests {
         provider = new KiwoomTokenProvider(client, "test-key", "test-secret", clock);
     }
 
+    @Test
+    void rejectedTokenIsRefreshedButOldRejectionDoesNotDiscardNewToken() {
+        expectToken("first", "20260927090000");
+        expectToken("second", "20260927090000");
+        assertThat(provider.accessToken()).isEqualTo("first");
+        provider.invalidate("first");
+        assertThat(provider.accessToken()).isEqualTo("second");
+        provider.invalidate("first");
+        assertThat(provider.accessToken()).isEqualTo("second");
+        server.verify();
+    }
+
     private void expectToken(String token, String expiry) {
         server.expect(requestTo("https://api.kiwoom.com/oauth2/token"))
                 .andExpect(method(HttpMethod.POST))

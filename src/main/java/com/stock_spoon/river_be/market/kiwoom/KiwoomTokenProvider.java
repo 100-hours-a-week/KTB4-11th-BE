@@ -88,6 +88,14 @@ public class KiwoomTokenProvider {
         return token;
     }
 
+    // WebSocket LOGIN에서 거부된 토큰만 폐기한다. 이미 갱신된 토큰은 유지한다.
+    synchronized void invalidate(String rejectedToken) {
+        if (token != null && token.equals(rejectedToken)) {
+            token = null;
+            expiresAt = Instant.EPOCH;
+        }
+    }
+
     private IllegalStateException invalidResponse() {
         return new IllegalStateException(
                 "키움 토큰 발급 응답이 유효하지 않습니다. 앱 키, 시크릿, 허용 IP 및 서버 시간을 확인하세요.");

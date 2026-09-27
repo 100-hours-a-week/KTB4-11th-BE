@@ -22,6 +22,13 @@ public class KiwoomConfig {
         return new KiwoomMarketClient(createClient(), tokenProvider);
     }
 
+    @Bean
+    KiwoomStockStream kiwoomStockStream(KiwoomTokenProvider tokenProvider,
+            @Value("${kiwoom.stream.enabled:false}") boolean enabled,
+            @Value("${kiwoom.stream.symbols:005930}") String symbols) {
+        return new KiwoomStockStream(tokenProvider, enabled, java.util.Arrays.asList(symbols.split(",")));
+    }
+
     private RestClient createClient() {
         var factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(Duration.ofSeconds(3));

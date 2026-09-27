@@ -67,6 +67,7 @@ class KiwoomStockStreamTests {
         var registration = JsonMapper.builder().build().readTree(sent.get(1));
         assertThat(registration.path("data").get(0).path("item").get(0).asText()).isEqualTo("005930");
         assertThat(registration.path("data").get(0).path("type").get(0).asText()).isEqualTo("0B");
+        assertThat(registration.path("data").get(0).path("type").get(1).asText()).isEqualTo("0D");
         assertThat(stream.state()).isEqualTo(KiwoomStockStream.State.SUBSCRIBING);
         receive("{\"trnm\":\"REG\",\"return_code\":0}");
         String trade = trade("005930", "0B", "-70000", "-100", "-0.14", "100000");
@@ -124,7 +125,7 @@ class KiwoomStockStreamTests {
     void filtersOtherSymbolsAndTypesAndRejectsInvalidPriceOrTime() {
         subscribe();
         receive(trade("000660", "0B", "70000", "0", "0", "100000"));
-        receive(trade("005930", "0D", "70000", "0", "0", "100000"));
+        receive(trade("005930", "0J", "70000", "0", "0", "100000"));
         assertThat(stream.latest("005930")).isEmpty();
         receive(trade("005930", "0B", "70000", "0", "0", "250000"));
         assertThat(stream.state()).isEqualTo(KiwoomStockStream.State.DISCONNECTED);
@@ -202,6 +203,69 @@ class KiwoomStockStreamTests {
         var kiwoom = (java.util.Map<?, ?>) root.get("kiwoom");
         var settings = (java.util.Map<?, ?>) kiwoom.get("stream");
         assertThat(settings.get("enabled")).isEqualTo("$" + "{KIWOOM_STREAM_ENABLED:false}");
+    }
+
+    @Test
+    void storesTenLevelsForMultipleSymbolsAndInvalidatesOnDisconnect() {
+        stream.close();
+        stream = new KiwoomStockStream(tokens, true, List.of("005930", "000660"), http, clock);
+        subscribe();
+        var registration = JsonMapper.builder().build().readTree(sent.get(1));
+        assertThat(registration.path("data").get(0).path("item").size()).isEqualTo(2);
+        receive(book("005930", "-70100", "12"));
+        receive(book("000660", "+180000", "34"));
+        receive(book("035420", "200000", "56"));
+        var book = stream.latestOrderBook("005930").orElseThrow();
+        assertThat(book.asks()).hasSize(10);
+        assertThat(book.bids()).hasSize(10);
+        assertThat(book.asks().getFirst().price()).isEqualByComparingTo("70100");
+        assertThat(book.asks().getFirst().quantity()).isEqualTo(12);
+        assertThat(book.bids().getFirst().price()).isEqualByComparingTo("70000");
+        assertThat(book.bids().getFirst().quantity()).isEqualTo(23);
+        assertThat(book.asks().getLast().quantity()).isZero();
+        assertThat(book.quoteTime()).isEqualTo(LocalTime.of(10, 0, 1));
+        assertThat(book.receivedAt()).isEqualTo(NOW);
+        assertThat(stream.latestOrderBook("000660").orElseThrow().asks().getFirst().quantity()).isEqualTo(34);
+        assertThat(stream.latestOrderBook("035420")).isEmpty();
+        receive(trade("005930", "0B", "70000", "0", "0", "100000"));
+        assertThat(stream.latest("005930")).isPresent();
+        assertThat(stream.latestOrderBook("005930")).contains(book);
+        var old = listeners.getLast();
+        old.onClose(sockets.getLast(), 1006, "test");
+        assertThat(stream.latestOrderBook("005930")).isEmpty();
+        subscribe();
+        old.onText(sockets.getFirst(), book("005930", "99999", "99"), true);
+        assertThat(stream.latestOrderBook("005930")).isEmpty();
+        receive(book("005930", "70100", "12"));
+        when(clock.instant()).thenReturn(NOW.plusSeconds(91));
+        assertThat(stream.latestOrderBook("005930")).isEmpty();
+    }
+
+    @Test
+    void malformedBookClearsCachedMarketData() {
+        for (String malformed : List.of(book("005930", "70100", "-1"),
+                book("005930", "0", "1"), book("005930", "", "1"),
+                book("005930", "70100", "1").replace("100001", "250000"))) {
+            subscribe();
+            receive(book("005930", "70100", "12"));
+            receive(malformed);
+            assertThat(stream.state()).isEqualTo(KiwoomStockStream.State.DISCONNECTED);
+            assertThat(stream.latestOrderBook("005930")).isEmpty();
+        }
+    }
+
+    private String book(String code, String ask, String quantity) {
+        var values = new java.util.HashMap<String, String>();
+        for (int field = 41; field <= 80; field++) {
+            values.put(Integer.toString(field), "0");
+        }
+        values.put("21", "100001");
+        values.put("41", ask);
+        values.put("61", quantity);
+        values.put("51", "+70000");
+        values.put("71", "23");
+        return JsonMapper.builder().build().writeValueAsString(java.util.Map.of("trnm", "REAL",
+                "data", List.of(java.util.Map.of("item", code, "type", "0D", "values", values))));
     }
 
     private void subscribe() {

@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.ResolverStyle;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,6 +38,7 @@ public class KiwoomStockStream {
     private final List<String> symbols;
     // ponytail: 한 서버의 설정된 종목만 구독. 다중 서버/동적 종목은 구독 소유권부터 설계한다.
     private final Map<String, StockPrice> prices = new HashMap<>();
+    private final Map<String, OrderBook> books = new HashMap<>();
     private Session session;
     private State state;
     private boolean stopped;
@@ -73,6 +75,15 @@ public class KiwoomStockStream {
             return Optional.empty();
         }
         return Optional.ofNullable(prices.get(symbol));
+    }
+
+    /** 호가 시각/수신 시각은 별도로 확인해야 한다. 연결 생존만으로 체결 가능성을 보장하지 않는다. */
+    public synchronized Optional<OrderBook> latestOrderBook(String symbol) {
+        if (state != State.SUBSCRIBED || session == null
+                || !clock.instant().isBefore(session.lastMessage.plusSeconds(90))) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(books.get(symbol));
     }
 
     @Scheduled(fixedDelay = 5000)
@@ -118,6 +129,7 @@ public class KiwoomStockStream {
         }
         session = null;
         prices.clear();
+        books.clear();
         state = stopped ? State.STOPPED : State.DISCONNECTED;
         failed.token = null;
         if (failed.socket != null) {
@@ -135,6 +147,7 @@ public class KiwoomStockStream {
             disconnect(session);
         }
         prices.clear();
+        books.clear();
         state = State.STOPPED;
         http.shutdownNow();
     }
@@ -143,6 +156,30 @@ public class KiwoomStockStream {
 
     public record StockPrice(String stockCode, BigDecimal currentPrice, BigDecimal change,
             BigDecimal changeRate, LocalTime tradeTime, Instant receivedAt) {}
+
+    public record QuoteLevel(BigDecimal price, long quantity) {}
+
+    public record OrderBook(String stockCode, List<QuoteLevel> asks, List<QuoteLevel> bids,
+            LocalTime quoteTime, Instant receivedAt) {
+        public OrderBook {
+            asks = List.copyOf(asks);
+            bids = List.copyOf(bids);
+        }
+    }
+
+    private static List<QuoteLevel> levels(JsonNode values, int priceStart, int quantityStart) {
+        var result = new ArrayList<QuoteLevel>(10);
+        for (int i = 0; i < 10; i++) {
+            BigDecimal price = new BigDecimal(values.path(Integer.toString(priceStart + i)).asText()).abs();
+            long quantity = Long.parseLong(values.path(Integer.toString(quantityStart + i)).asText());
+            // 0원/0주는 해당 단계에 주문이 없다는 뜻이다. 누락/비정상 값은 0으로 추정하지 않는다.
+            if (quantity < 0 || (price.signum() == 0 && quantity > 0)) {
+                throw new IllegalArgumentException();
+            }
+            result.add(new QuoteLevel(price, quantity));
+        }
+        return result;
+    }
 
     private final class Session implements WebSocket.Listener {
         private String token;
@@ -224,14 +261,14 @@ public class KiwoomStockStream {
                     token = null;
                     state = State.SUBSCRIBING;
                     send(JSON.writeValueAsString(Map.of("trnm", "REG", "grp_no", "1", "refresh", "1",
-                            "data", List.of(Map.of("item", symbols, "type", List.of("0B"))))));
+                            "data", List.of(Map.of("item", symbols, "type", List.of("0B", "0D"))))));
                 }
                 case "REG" -> {
                     if (state != State.SUBSCRIBING || !"0".equals(message.path("return_code").asText())) {
                         throw new IllegalStateException();
                     }
                     state = State.SUBSCRIBED;
-                    log.info("키움 현재가 구독에 성공했습니다. 종목 수: {}", symbols.size());
+                    log.info("키움 현재가·호가 구독에 성공했습니다. 종목 수: {}", symbols.size());
                 }
                 case "PING" -> send(text);
                 case "REAL" -> {
@@ -240,10 +277,19 @@ public class KiwoomStockStream {
                     }
                     for (JsonNode entry : message.path("data")) {
                         String code = entry.path("item").asText();
-                        if (!"0B".equals(entry.path("type").asText()) || !symbols.contains(code)) {
+                        if (!symbols.contains(code)) {
                             continue;
                         }
                         JsonNode values = entry.path("values");
+                        String type = entry.path("type").asText();
+                        if ("0D".equals(type)) {
+                            books.put(code, new OrderBook(code, levels(values, 41, 61), levels(values, 51, 71),
+                                    LocalTime.parse(values.path("21").asText(), TIME), clock.instant()));
+                            continue;
+                        }
+                        if (!"0B".equals(type)) {
+                            continue;
+                        }
                         // 가격의 +/-는 방향 표기다. 가격은 양수, 전일대비/등락률 부호는 유지한다.
                         BigDecimal price = new BigDecimal(values.path("10").asText()).abs();
                         if (price.signum() <= 0) {

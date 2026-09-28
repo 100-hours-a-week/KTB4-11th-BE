@@ -31,6 +31,7 @@ public class KakaoClient {
         var form = new LinkedMultiValueMap<String, String>();
         form.add("grant_type", "authorization_code");
         form.add("client_id", properties.clientId());
+        // 리다이렉트 URI를 한경변수로 application.yaml에 넣으면 됨
         form.add("redirect_uri", properties.redirectUri());
         form.add("code", code);
         if (properties.clientSecret() != null && !properties.clientSecret().isBlank()) {
@@ -55,12 +56,17 @@ public class KakaoClient {
             throw providerError();
         }
         String nickname = null;
+        String profileImageUrl = null;
         if (user.get("kakao_account") instanceof Map<?, ?> account
-                && account.get("profile") instanceof Map<?, ?> profile
-                && profile.get("nickname") instanceof String value) {
-            nickname = value;
+                && account.get("profile") instanceof Map<?, ?> profile) {
+            if (profile.get("nickname") instanceof String value) {
+                nickname = value;
+            }
+            if (profile.get("profile_image_url") instanceof String value && !value.isBlank()) {
+                profileImageUrl = value;
+            }
         }
-        return new KakaoUserInfo(id.longValue(), nickname);
+        return new KakaoUserInfo(id.longValue(), nickname, profileImageUrl);
     }
 
     private <T> T call(Supplier<T> request, boolean tokenExchange) {

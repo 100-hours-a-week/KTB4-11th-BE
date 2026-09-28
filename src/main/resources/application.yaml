@@ -1,4 +1,6 @@
 spring:
+  config:
+    import: optional:file:.env.local[.properties]
   application:
     name: river_be
   datasource:
@@ -22,3 +24,10 @@ jwt:
   issuer: ${JWT_ISSUER:stockspoon}
   access-expiration: ${JWT_ACCESS_EXPIRATION:15m}
   refresh-expiration: ${JWT_REFRESH_EXPIRATION:14d}
+
+kiwoom:
+  app-key: ${KIWOOM_APP_KEY:}
+  app-secret: ${KIWOOM_APP_SECRET:}
+  stream:
+    enabled: ${KIWOOM_STREAM_ENABLED:false}
+    symbols: ${KIWOOM_STREAM_SYMBOLS:005930}

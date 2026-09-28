@@ -14,3 +14,7 @@ jwt:
   issuer: stockspoon-test
   access-expiration: 15m
   refresh-expiration: 14d
+
+market:
+  kospi:
+    refresh-enabled: false

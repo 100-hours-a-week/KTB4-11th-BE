@@ -36,5 +36,5 @@ out/
 ### VS Code ###
 .vscode/
 
-# Local credentials
+# Local database credentials
 .env.local

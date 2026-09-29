@@ -67,6 +67,10 @@ public class Account {
         return id;
     }
 
+    public boolean belongsTo(long userId) {
+        return user.getId() == userId;
+    }
+
     public String getName() {
         return name;
     }

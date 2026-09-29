@@ -3,9 +3,16 @@ package com.stock_spoon.river_be.account.repository;
 import java.util.Optional;
 import java.util.List;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import jakarta.persistence.LockModeType;
 import com.stock_spoon.river_be.account.entity.Account;
 
 public interface AccountRepository extends JpaRepository<Account, Long> {
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select a from Account a where a.id = :accountId")
+    Optional<Account> findLockedById(@org.springframework.data.repository.query.Param("accountId") Long accountId);
+
     boolean existsByUserId(Long userId);
 
     boolean existsByUserIdAndNameIgnoreCaseAndActiveTrue(Long userId, String name);

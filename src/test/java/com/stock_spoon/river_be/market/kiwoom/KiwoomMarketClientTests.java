@@ -36,7 +36,7 @@ class KiwoomMarketClientTests {
                         {"mrkt_tp":"0","inds_cd":"001"}
                         """))
                 .andRespond(withSuccess("""
-                        {"return_code":0,"cur_prc":"+2,817.42","pred_pre":"-12.50","flu_rt":"-0.44"}
+                        {"return_code":0,"cur_prc":"-2,817.42","pred_pre":"-12.50","flu_rt":"-0.44"}
                         """, MediaType.APPLICATION_JSON));
         var index = client.kospi();
         assertThat(index.value()).isEqualByComparingTo(new BigDecimal("2817.42"));
@@ -60,6 +60,23 @@ class KiwoomMarketClientTests {
             assertThatThrownBy(client::kospi).isInstanceOf(IllegalStateException.class)
                     .hasMessageNotContaining("test-secret");
         }
+        server.verify();
+    }
+
+    @Test
+    void requestsStockInfoForOrderValidation() {
+        server.expect(requestTo("https://api.kiwoom.com/api/dostk/stkinfo"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("api-id", "ka10100"))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer test-token"))
+                .andExpect(content().json("{\"stk_cd\":\"005930\"}"))
+                .andRespond(withSuccess("""
+                        {"return_code":0,"code":"005930","marketCode":"0",
+                         "state":"증거금20%|담보대출|신용가능","orderWarning":"0"}
+                        """, MediaType.APPLICATION_JSON));
+        var info = client.stockInfo("005930");
+        assertThat(info.marketCode()).isEqualTo("0");
+        assertThat(info.state()).contains("신용가능");
         server.verify();
     }
 }

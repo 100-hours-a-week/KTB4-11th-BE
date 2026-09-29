@@ -57,7 +57,10 @@ public class SecurityConfig {
                 .secure(properties.secureCookie()).sameSite("Lax").path("/"));
         var cors = new CorsConfiguration();
         if (properties.frontendOrigin() != null && !properties.frontendOrigin().isBlank()) {
-            cors.setAllowedOrigins(List.of(properties.frontendOrigin()));
+            cors.setAllowedOrigins(Arrays.stream(properties.frontendOrigin().split(","))
+                    .map(String::trim)
+                    .filter(origin -> !origin.isEmpty())
+                    .toList());
         }
         cors.setAllowedMethods(List.of("GET", "POST", "PATCH"));
         cors.setAllowedHeaders(List.of("Content-Type", "X-XSRF-TOKEN"));

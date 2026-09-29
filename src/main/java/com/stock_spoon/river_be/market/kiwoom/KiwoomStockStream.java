@@ -68,7 +68,7 @@ public class KiwoomStockStream {
         return state;
     }
 
-    /** 연결 유효성과 가격의 시장 시각은 별개다. 장 상태/주문 허용 판단은 체결 엔진에서 한다. */
+    /** 연결 유효성과 가격의 시장 시각은 별개다. */
     public synchronized Optional<StockPrice> latest(String symbol) {
         if (state != State.SUBSCRIBED || session == null
                 || !clock.instant().isBefore(session.lastMessage.plusSeconds(90))) {
@@ -276,12 +276,12 @@ public class KiwoomStockStream {
                         return;
                     }
                     for (JsonNode entry : message.path("data")) {
+                        String type = entry.path("type").asText();
                         String code = entry.path("item").asText();
                         if (!symbols.contains(code)) {
                             continue;
                         }
                         JsonNode values = entry.path("values");
-                        String type = entry.path("type").asText();
                         if ("0D".equals(type)) {
                             books.put(code, new OrderBook(code, levels(values, 41, 61), levels(values, 51, 71),
                                     LocalTime.parse(values.path("21").asText(), TIME), clock.instant()));

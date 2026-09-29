@@ -3,10 +3,11 @@ package com.stock_spoon.river_be.order;
 import com.stock_spoon.river_be.account.entity.Account;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import java.time.Clock;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-/** 내부 주문 규칙. 시장 상태 검증과 AI 인증이 연결되기 전에는 HTTP 주문 접수를 열지 않는다. */
+/** 내부 주문 예약·취소 규칙. HTTP 인증과 주문 생성 조건 검증은 컨트롤러에서 선행한다. */
 @Service
 public class OrderService {
     private final AccountRepository accounts;
@@ -26,8 +27,31 @@ public class OrderService {
         this.clock = clock;
     }
 
+    @Transactional(readOnly = true)
+    public void assertOrderableAccount(long userId, long accountId) {
+        Account account = accounts.findByIdAndUserIdAndActiveTrue(accountId, userId)
+                .orElseThrow(() -> new OrderException(HttpStatus.FORBIDDEN,
+                        "FORBIDDEN_ACCOUNT", "이 계좌에 주문할 권한이 없습니다."));
+        if (!account.isAiDelegated()) {
+            throw new OrderException("운용 가능한 자동매매 계좌가 아닙니다.");
+        }
+    }
+
     @Transactional
     public Order reserveLimit(long accountId, String stockCode, Order.Side side,
+            long quantity, long limitPrice, String decisionId, String decisionSummary) {
+        return reserveLimit(null, accountId, stockCode, side, quantity, limitPrice,
+                decisionId, decisionSummary);
+    }
+
+    @Transactional
+    public Order reserveLimit(long userId, long accountId, String stockCode, Order.Side side,
+            long quantity, long limitPrice, String decisionId, String decisionSummary) {
+        return reserveLimit(Long.valueOf(userId), accountId, stockCode, side, quantity,
+                limitPrice, decisionId, decisionSummary);
+    }
+
+    private Order reserveLimit(Long userId, long accountId, String stockCode, Order.Side side,
             long quantity, long limitPrice, String decisionId, String decisionSummary) {
         if (side == null || quantity <= 0 || limitPrice <= 0 || stockCode == null
                 || !stockCode.matches("[0-9]{6}")) {
@@ -38,7 +62,16 @@ public class OrderService {
             throw new OrderException("AI 판단 정보의 길이를 확인하세요.");
         }
         Account account = lockedAccount(accountId);
-        long reserved = side == Order.Side.BUY ? Math.multiplyExact(quantity, limitPrice) : 0;
+        if (userId != null && !account.belongsTo(userId)) {
+            throw new OrderException(HttpStatus.FORBIDDEN, "FORBIDDEN_ACCOUNT",
+                    "이 계좌에 주문할 권한이 없습니다.");
+        }
+        long reserved;
+        try {
+            reserved = side == Order.Side.BUY ? Math.multiplyExact(quantity, limitPrice) : 0;
+        } catch (ArithmeticException error) {
+            throw new OrderException("주문금액이 허용 범위를 초과합니다.");
+        }
         if (side == Order.Side.BUY && availableCash(account) < reserved) {
             throw new OrderException("주문 가능 현금이 부족합니다.");
         }

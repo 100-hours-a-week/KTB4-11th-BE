@@ -68,6 +68,7 @@ class KiwoomStockStreamTests {
         assertThat(registration.path("data").get(0).path("item").get(0).asText()).isEqualTo("005930");
         assertThat(registration.path("data").get(0).path("type").get(0).asText()).isEqualTo("0B");
         assertThat(registration.path("data").get(0).path("type").get(1).asText()).isEqualTo("0D");
+        assertThat(registration.path("data").size()).isEqualTo(1);
         assertThat(stream.state()).isEqualTo(KiwoomStockStream.State.SUBSCRIBING);
         receive("{\"trnm\":\"REG\",\"return_code\":0}");
         String trade = trade("005930", "0B", "-70000", "-100", "-0.14", "100000");

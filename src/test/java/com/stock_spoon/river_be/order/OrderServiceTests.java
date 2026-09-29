@@ -77,7 +77,7 @@ class OrderServiceTests {
         assertThatThrownBy(() -> service.reserveLimit(account.getId(), "005930", Order.Side.BUY,
                 0, 70_000, null, null)).isInstanceOf(OrderException.class);
         assertThatThrownBy(() -> service.reserveLimit(account.getId(), "005930", Order.Side.BUY,
-                Long.MAX_VALUE, 70_000, null, null)).isInstanceOf(ArithmeticException.class);
+                Long.MAX_VALUE, 70_000, null, null)).isInstanceOf(OrderException.class);
         assertThatThrownBy(() -> service.reserveLimit(account.getId(), "A", Order.Side.BUY,
                 1, 70_000, null, null)).isInstanceOf(OrderException.class);
         assertThat(orders.count()).isZero();

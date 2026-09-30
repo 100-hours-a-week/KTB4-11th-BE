@@ -36,7 +36,7 @@ Cookie: access_token={StockSpoon Access JWT}; XSRF-TOKEN={csrf-token}
 1. `OnboardingController`가 JWT `sub`에서 사용자 ID를 읽는다.
 2. `OnboardingRequest`가 시작 자금 1,000,000~100,000,000원을 검증한다.
 3. `AccountService.onboard()`가 사용자를 조회하고 온보딩 완료 여부 및 기존 계좌 존재 여부를 확인한다.
-4. 이름이 정확히 `기본 계좌`인 활성 계좌를 만든다. 초기 현금은 시작 자금과 같고 `ai_delegated=true`다.
+4. 이름이 정확히 `기본 계좌`인 활성 계좌를 만든다. 초기 현금은 시작 자금과 같고 `is_ai_managed=true`다.
 5. 같은 트랜잭션에서 `User.completeOnboarding()`을 호출한다. 중간에 실패하면 계좌 생성과 완료 상태 변경이 함께 되돌아간다.
 6. `201 Created`와 계좌 정보를 반환한다.
 
@@ -85,7 +85,7 @@ Cookie: access_token={StockSpoon Access JWT}
   "account_name": "장기 투자",
   "initial_capital": 5000000,
   "cash_balance": 5000000,
-  "ai_delegated": true
+  "is_ai_managed": true
 }
 ```
 

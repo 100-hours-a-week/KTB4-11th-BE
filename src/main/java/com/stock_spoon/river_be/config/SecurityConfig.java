@@ -14,7 +14,9 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.authorization.AuthorizationDecision;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.security.oauth2.server.resource.web.BearerTokenResolver;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
@@ -75,6 +77,14 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/v1/auth/csrf").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/login",
                                 "/api/v1/auth/reissue", "/api/v1/auth/logout").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/users/ai-server")
+                        .access((authentication, context) -> {
+                            var current = authentication.get();
+                            boolean allowed = current instanceof JwtAuthenticationToken token
+                                    && "AI".equals(token.getToken().getClaimAsString("actor"))
+                                    && "ai-server".equals(token.getToken().getSubject());
+                            return new AuthorizationDecision(allowed);
+                        })
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth -> oauth
                         .bearerTokenResolver(accessTokenResolver)

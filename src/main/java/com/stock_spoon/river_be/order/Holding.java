@@ -33,4 +33,6 @@ public class Holding {
 
     public long getQuantity() { return quantity; }
     public BigDecimal getTotalCost() { return totalCost; }
+    public Long getAccountId() { return account.getId(); }
+    public String getStockCode() { return stockCode; }
 }

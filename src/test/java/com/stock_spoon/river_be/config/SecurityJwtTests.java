@@ -101,6 +101,34 @@ class SecurityJwtTests {
                 .andExpect(status().isUnauthorized());
     }
 
+    @Test
+    void onlyAiServerCookieCanReachTheFutureUserSnapshotEndpoint() throws Exception {
+        String path = "/api/v1/users/ai-server";
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        mvc.perform(get(path).header("Authorization", "Bearer " + aiToken("ai-server", "access", "AI")))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(get(path).cookie(new Cookie("access_token", aiToken("1", "access", null))))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(path).cookie(new Cookie("access_token", aiToken("1", "access", "AI"))))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(path).cookie(new Cookie("access_token", aiToken("ai-server", "refresh", "AI"))))
+                .andExpect(status().isUnauthorized());
+        // 아직 GET 컨트롤러가 없으므로 인증·인가를 통과한 요청은 404에 도달한다.
+        mvc.perform(get(path).cookie(new Cookie("access_token", aiToken("ai-server", "access", "AI"))))
+                .andExpect(status().isNotFound());
+    }
+
+    private String aiToken(String subject, String type, String actor) {
+        Instant now = Instant.now();
+        var claims = JwtClaimsSet.builder().issuer(jwtProperties.issuer()).subject(subject)
+                .issuedAt(now).expiresAt(now.plusSeconds(900)).claim("type", type);
+        if (actor != null) {
+            claims.claim("actor", actor);
+        }
+        return jwtEncoder.encode(JwtEncoderParameters.from(
+                JwsHeader.with(MacAlgorithm.HS256).type("JWT").build(), claims.build())).getTokenValue();
+    }
+
     @RestController
     static class ProtectedController {
         @GetMapping("/test/protected")

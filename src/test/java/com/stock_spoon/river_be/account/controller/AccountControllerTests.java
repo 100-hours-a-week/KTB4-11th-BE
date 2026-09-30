@@ -47,7 +47,7 @@ class AccountControllerTests {
                 .andExpect(jsonPath("$.account_name").value("기본 계좌"))
                 .andExpect(jsonPath("$.initial_capital").value(10_000_000))
                 .andExpect(jsonPath("$.cash_balance").value(10_000_000))
-                .andExpect(jsonPath("$.ai_delegated").value(true));
+                .andExpect(jsonPath("$.is_ai_managed").value(true));
 
         assertThat(users.findById(user.getId()).orElseThrow().isOnboardingCompleted()).isTrue();
         assertThat(accounts.findAll()).singleElement().satisfies(account -> {
@@ -207,7 +207,7 @@ class AccountControllerTests {
                 .andExpect(jsonPath("$.account_name").value("변경된 계좌"))
                 .andExpect(jsonPath("$.initial_capital").value(10_000_000))
                 .andExpect(jsonPath("$.cash_balance").value(10_000_000))
-                .andExpect(jsonPath("$.ai_delegated").value(true));
+                .andExpect(jsonPath("$.is_ai_managed").value(true));
     }
 
     @Test

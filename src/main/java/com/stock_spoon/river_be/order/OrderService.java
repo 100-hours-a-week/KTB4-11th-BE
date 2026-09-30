@@ -32,7 +32,7 @@ public class OrderService {
         Account account = accounts.findByIdAndUserIdAndActiveTrue(accountId, userId)
                 .orElseThrow(() -> new OrderException(HttpStatus.FORBIDDEN,
                         "FORBIDDEN_ACCOUNT", "이 계좌에 주문할 권한이 없습니다."));
-        if (!account.isAiDelegated()) {
+        if (!account.isAiManaged()) {
             throw new OrderException("운용 가능한 자동매매 계좌가 아닙니다.");
         }
     }
@@ -113,7 +113,7 @@ public class OrderService {
     private Account lockedAccount(long accountId) {
         Account account = accounts.findLockedById(accountId)
                 .orElseThrow(() -> new OrderException("계좌를 찾을 수 없습니다."));
-        if (!account.isActive() || !account.isAiDelegated()) {
+        if (!account.isActive() || !account.isAiManaged()) {
             throw new OrderException("운용 가능한 자동매매 계좌가 아닙니다.");
         }
         return account;

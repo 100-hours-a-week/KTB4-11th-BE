@@ -37,7 +37,7 @@ public class Account {
     @Column(name = "cash_balance", nullable = false)
     private long cashBalance;
 
-    @Column(name = "ai_delegated", nullable = false)
+    @Column(name = "is_ai_managed", nullable = false)
     private boolean aiDelegated;
 
     @Column(name = "is_active", nullable = false)

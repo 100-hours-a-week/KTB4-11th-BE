@@ -6,6 +6,7 @@ import java.util.List;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -51,10 +52,12 @@ public class SecurityConfig {
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http, KakaoProperties properties,
             BearerTokenResolver accessTokenResolver,
-            @Qualifier("accessJwtDecoder") JwtDecoder accessJwtDecoder) throws Exception {
+            @Qualifier("accessJwtDecoder") JwtDecoder accessJwtDecoder,
+            @Value("${AUTH_CSRF_DISABLED:false}") boolean csrfDisabled,
+            @Value("${AUTH_COOKIE_SAME_SITE:Lax}") String cookieSameSite) throws Exception {
         var csrf = new CookieCsrfTokenRepository();
         csrf.setCookieCustomizer(cookie -> cookie.httpOnly(true)
-                .secure(properties.secureCookie()).sameSite("Lax").path("/"));
+                .secure(properties.secureCookie()).sameSite(cookieSameSite).path("/"));
         var cors = new CorsConfiguration();
         if (properties.frontendOrigin() != null && !properties.frontendOrigin().isBlank()) {
             cors.setAllowedOrigins(Arrays.stream(properties.frontendOrigin().split(","))
@@ -62,13 +65,16 @@ public class SecurityConfig {
                     .filter(origin -> !origin.isEmpty())
                     .toList());
         }
-        cors.setAllowedMethods(List.of("GET", "POST", "PATCH"));
+        cors.setAllowedMethods(List.of("GET", "POST", "PATCH", "OPTIONS"));
         cors.setAllowedHeaders(List.of("Content-Type", "X-XSRF-TOKEN"));
         cors.setAllowCredentials(true);
         var source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/api/**", cors);
         http.cors(config -> config.configurationSource(source))
-                .csrf(config -> config.csrfTokenRepository(csrf))
+                .csrf(config -> {
+                    config.csrfTokenRepository(csrf);
+                    if (csrfDisabled) config.ignoringRequestMatchers("/api/**");
+                })
                 .sessionManagement(config -> config.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .requestCache(AbstractHttpConfigurer::disable)
                 .formLogin(AbstractHttpConfigurer::disable)

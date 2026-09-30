@@ -5,6 +5,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.stock_spoon.river_be.account.dto.AccountCreateRequest;
+import com.stock_spoon.river_be.account.dto.AccountCreateResponse;
+import com.stock_spoon.river_be.account.dto.AccountListResponse;
 import com.stock_spoon.river_be.account.dto.AccountNameUpdateRequest;
 import com.stock_spoon.river_be.account.dto.AccountResponse;
 import com.stock_spoon.river_be.account.dto.OnboardingRequest;
@@ -44,7 +46,7 @@ public class AccountService {
     }
 
     @Transactional
-    public AccountResponse create(long userId, AccountCreateRequest request) {
+    public AccountCreateResponse create(long userId, AccountCreateRequest request) {
         var user = userRepository.findById(userId)
                 .orElseThrow(() -> new AccountException(HttpStatus.NOT_FOUND,
                         "USER_NOT_FOUND", "사용자를 찾을 수 없습니다."));
@@ -62,7 +64,7 @@ public class AccountService {
                     "DUPLICATE_ACCOUNT_NAME", "이미 사용 중인 계좌 이름입니다.");
         }
 
-        return AccountResponse.from(accountRepository.save(
+        return AccountCreateResponse.from(accountRepository.save(
                 new Account(user, name, request.initialCapital())));
     }
 
@@ -87,10 +89,10 @@ public class AccountService {
     }
 
     @Transactional(readOnly = true)
-    public List<AccountResponse> list(long userId) {
+    public List<AccountListResponse> list(long userId) {
         return accountRepository.findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(userId)
                 .stream()
-                .map(AccountResponse::from)
+                .map(AccountListResponse::from)
                 .toList();
     }
 

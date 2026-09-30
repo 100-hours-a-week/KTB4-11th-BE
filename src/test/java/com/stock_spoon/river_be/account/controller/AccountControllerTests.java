@@ -82,6 +82,12 @@ class AccountControllerTests {
 
         createAccount(user, "{\"initial_capital\":5000000}")
                 .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.length()").value(5))
+                .andExpect(jsonPath("$.account_id").isNumber())
+                .andExpect(jsonPath("$.initial_capital").value(5_000_000))
+                .andExpect(jsonPath("$.cash_balance").value(5_000_000))
+                .andExpect(jsonPath("$.is_ai_managed").value(true))
+                .andExpect(jsonPath("$.ai_delegated").doesNotExist())
                 .andExpect(jsonPath("$.account_name").value("기본 계좌 1"));
         createAccount(user,
                 "{\"account_name\":\"기본 계좌 3\",\"initial_capital\":5000000}")
@@ -172,8 +178,17 @@ class AccountControllerTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].account_id").value(firstAccountId))
                 .andExpect(jsonPath("$[0].account_name").value("기본 계좌"))
+                .andExpect(jsonPath("$[0].length()").value(6))
+                .andExpect(jsonPath("$[0].is_duel_account").value(false))
+                .andExpect(jsonPath("$[0].cash_balance").value(10_000_000))
+                .andExpect(jsonPath("$[0].total_assets").value(10_000_000))
+                .andExpect(jsonPath("$[0].return_percent").value(0.0))
                 .andExpect(jsonPath("$[1].account_id").value(secondAccountId))
                 .andExpect(jsonPath("$[1].account_name").value("두 번째 계좌"))
+                .andExpect(jsonPath("$[1].is_duel_account").value(false))
+                .andExpect(jsonPath("$[1].cash_balance").value(5_000_000))
+                .andExpect(jsonPath("$[1].total_assets").value(5_000_000))
+                .andExpect(jsonPath("$[1].return_percent").value(0.0))
                 .andExpect(jsonPath("$[2]").doesNotExist());
     }
 

@@ -348,6 +348,23 @@ class KiwoomStockStreamTests {
         assertThat(stream.latest("000660")).isEmpty();
     }
 
+    @Test
+    void deliversTradeOutsideStreamLockAndListenerFailureDoesNotDisconnect() {
+        var delivered = new ArrayList<KiwoomStockStream.StockPrice>();
+        stream.setPriceListener(price -> {
+            assertThat(Thread.holdsLock(stream)).isFalse();
+            delivered.add(price);
+            if (delivered.size() == 1) throw new IllegalStateException("test database failure");
+        });
+        subscribe();
+        receive(trade("005930", "0B", "70000", "0", "0", "100000"));
+        receive(trade("005930", "0B", "69000", "0", "0", "100001"));
+        assertThat(delivered).hasSize(2);
+        assertThat(delivered.getLast().currentPrice()).isEqualByComparingTo("69000");
+        assertThat(stream.state()).isEqualTo(KiwoomStockStream.State.SUBSCRIBED);
+        verify(sockets.getLast(), never()).abort();
+    }
+
     private String book(String code, String ask, String quantity) {
         var values = new java.util.HashMap<String, String>();
         for (int field = 41; field <= 80; field++) {

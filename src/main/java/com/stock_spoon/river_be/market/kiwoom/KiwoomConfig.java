@@ -24,8 +24,11 @@ public class KiwoomConfig {
 
     @Bean
     KiwoomStockStream kiwoomStockStream(KiwoomTokenProvider tokenProvider,
-            @Value("${kiwoom.stream.enabled:false}") boolean enabled) {
-        return new KiwoomStockStream(tokenProvider, enabled, java.util.List.of());
+            @Value("${kiwoom.stream.enabled:false}") boolean enabled,
+            org.springframework.context.ApplicationEventPublisher events) {
+        var stream = new KiwoomStockStream(tokenProvider, enabled, java.util.List.of());
+        stream.setPriceListener(events::publishEvent);
+        return stream;
     }
 
     private RestClient createClient() {

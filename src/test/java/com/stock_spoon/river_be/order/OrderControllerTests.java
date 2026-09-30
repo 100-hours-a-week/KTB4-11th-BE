@@ -46,6 +46,7 @@ class OrderControllerTests {
     @Autowired JwtProperties jwtProperties;
     @MockitoBean OrderMarketValidator market;
     @MockitoBean KiwoomStockStream stream;
+    @MockitoBean com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient marketClient;
     private MockMvc mvc;
     private User user;
     private Account account;
@@ -56,6 +57,7 @@ class OrderControllerTests {
         user = users.save(new User("AI 주문 사용자"));
         account = accounts.save(new Account(user, "자동매매 계좌", 1_000_000));
         when(stream.whenSubscribed(anyString())).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(null));
+        when(marketClient.currentPrice(anyString())).thenThrow(new IllegalStateException("test price unavailable"));
     }
 
     @Test

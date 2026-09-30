@@ -72,6 +72,35 @@ public class KiwoomMarketClient {
                 String.valueOf(response.getOrDefault("orderWarning", "")));
     }
 
+    /** ka10001 주식기본정보요청의 현재가. 가격의 +/- 방향 표기는 제거한다. */
+    public long currentPrice(String stockCode) {
+        if (stockCode == null || !stockCode.matches("[0-9A-Z]{6}")) {
+            throw new IllegalArgumentException("종목코드를 확인하세요.");
+        }
+        Map<String, Object> response;
+        try {
+            response = client.post().uri("/api/dostk/stkinfo")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .header("api-id", "ka10001")
+                    .headers(headers -> headers.setBearerAuth(tokens.accessToken()))
+                    .body(Map.of("stk_cd", stockCode))
+                    .retrieve().body(JSON);
+        } catch (RestClientException error) {
+            throw new IllegalStateException("키움 현재가 조회에 실패했습니다.");
+        }
+        if (response == null || !"0".equals(String.valueOf(response.get("return_code")))) {
+            throw new IllegalStateException("키움 현재가 조회가 거부되었습니다.");
+        }
+        try {
+            if (!stockCode.equals(response.get("stk_cd"))) throw new IllegalArgumentException();
+            long price = number(response.get("cur_prc")).abs().longValueExact();
+            if (price <= 0) throw new IllegalArgumentException();
+            return price;
+        } catch (RuntimeException error) {
+            throw new IllegalStateException("키움 현재가 응답 형식이 올바르지 않습니다.");
+        }
+    }
+
     private BigDecimal number(Object value) {
         if (!(value instanceof String) && !(value instanceof Number)) {
             throw new IllegalArgumentException();

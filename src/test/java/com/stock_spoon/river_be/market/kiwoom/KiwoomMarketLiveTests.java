@@ -49,6 +49,22 @@ class KiwoomMarketLiveTests {
         assertThat(etf.state()).isNotBlank();
     }
 
+    @Test
+    void retrievesSamsungCurrentPrice() throws Exception {
+        var local = new Properties();
+        if (Files.exists(Path.of(".env.local"))) {
+            try (var reader = Files.newBufferedReader(Path.of(".env.local"))) {
+                local.load(reader);
+            }
+        }
+        var config = new KiwoomConfig();
+        var provider = config.kiwoomTokenProvider(
+                setting("KIWOOM_APP_KEY", local), setting("KIWOOM_APP_SECRET", local));
+        long price = config.kiwoomMarketClient(provider).currentPrice("005930");
+        assertThat(price).isPositive();
+        System.out.println("삼성전자 005930 REST 현재가 조회 성공: " + price + "원 (장중 실시간 여부는 검증하지 않음)");
+    }
+
     private String setting(String name, Properties local) {
         String value = System.getenv(name);
         return value != null ? value : local.getProperty(name, "");

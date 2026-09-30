@@ -283,8 +283,10 @@ class KiwoomStockStreamTests {
     @Test
     void removalThenNewDemandRegistersAgainWithoutAcceptingOldRegistration() {
         subscribe();
-        stream.updateSymbols(java.util.Set.of());
-        stream.updateSymbols(java.util.Set.of("005930"));
+        stream.updateSymbols(java.util.Set.of("005930", "000660"));
+        receive("{\"trnm\":\"REG\",\"return_code\":0}");
+        stream.updateSymbols(java.util.Set.of("000660"));
+        stream.updateSymbols(java.util.Set.of("005930", "000660"));
         var result = stream.whenSubscribed("005930");
         assertThat(result).isNotDone();
         receive("{\"trnm\":\"REMOVE\",\"return_code\":0}");
@@ -293,6 +295,32 @@ class KiwoomStockStreamTests {
         assertThat(result).isCompleted();
     }
 
+    @Test
+    void lastRemovalClosesConnectionAndNewDemandAuthenticatesAgain() {
+        subscribe();
+        var oldListener = listeners.getLast();
+        var oldSocket = sockets.getLast();
+        stream.updateSymbols(java.util.Set.of());
+        verify(oldSocket).sendClose(WebSocket.NORMAL_CLOSURE, "no active subscriptions");
+        assertThat(stream.state()).isEqualTo(KiwoomStockStream.State.DISCONNECTED);
+
+        // Keep the scheduled async connection attempt behind this deterministic handshake.
+        synchronized (stream) {
+            stream.updateSymbols(java.util.Set.of("005930"));
+            var result = stream.whenSubscribed("005930");
+            stream.maintainConnection();
+            assertThat(listeners).hasSize(2);
+            assertThat(stream.state()).isEqualTo(KiwoomStockStream.State.AUTHENTICATING);
+            oldListener.onText(oldSocket, "{\"trnm\":\"REG\",\"return_code\":0}", true);
+            oldListener.onClose(oldSocket, WebSocket.NORMAL_CLOSURE, "late close");
+            assertThat(result).isNotDone();
+            assertThat(stream.state()).isEqualTo(KiwoomStockStream.State.AUTHENTICATING);
+            receive("{\"trnm\":\"LOGIN\",\"return_code\":0}");
+            assertThat(result).isNotDone();
+            receive("{\"trnm\":\"REG\",\"return_code\":0}");
+            assertThat(result).isCompleted();
+        }
+    }
     @Test
     void rejectedDynamicRegistrationFailsWaitersAndReconnectRestoresDesiredSymbols() {
         subscribe();

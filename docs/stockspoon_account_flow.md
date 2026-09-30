@@ -77,7 +77,7 @@ Cookie: access_token={StockSpoon Access JWT}
 
 상세 조회는 `account_id + JWT 사용자 ID + is_active=true`를 모두 만족하는 계좌만 반환한다. 없는 계좌, 다른 사용자의 계좌, 비활성 계좌는 똑같이 `404 ACCOUNT_NOT_FOUND`다. 계좌 ID만으로 소유권을 판단하지 않는다.
 
-목록·상세·생성·이름 수정은 현재 모두 다음 `AccountResponse` 형식을 사용한다. 목록은 이 객체의 배열이다.
+온보딩·이름 수정은 다음 `AccountResponse` 형식을 사용한다.
 
 ```json
 {
@@ -89,7 +89,44 @@ Cookie: access_token={StockSpoon Access JWT}
 }
 ```
 
-보유종목과 시세가 없으므로 총자산과 수익률은 현재 응답에 포함하지 않는다. `cash_balance`는 계좌 생성 시 시작 자금으로 초기화되며, 매매에 따른 잔액 갱신은 아직 없다.
+상세 조회는 API 문서에 맞춘 `AccountDetailResponse`를 반환한다.
+
+```json
+{
+  "message": "success",
+  "account_id": 2,
+  "account_name": "장기 투자",
+  "is_duel_account": false,
+  "initial_capital": 5000000,
+  "cash_balance": 5000000,
+  "available_cash": 5000000,
+  "holdings_market_value": 0,
+  "total_assets": 5000000,
+  "return_percent": 0.0,
+  "executed_trade_count": 0
+}
+```
+
+`available_cash`는 기존 주문 로직을 재사용해 현금에서 대기 매수 주문의 예약금을 뺀 실제 값이다. `is_duel_account=false`, `holdings_market_value=0`, `total_assets=cash_balance`, `return_percent=0.0`, `executed_trade_count=0`은 임시 표시값이며 보유종목 평가·체결 기능 연동 시 교체한다.
+
+추가 계좌 생성은 API 문서에 맞춘 `AccountCreateResponse`를 반환한다. 위 온보딩 응답의 `ai_delegated` 대신 `is_ai_managed`를 제공하며, 실제 AI 위임 상태인 `true`를 반환한다.
+
+계좌 목록은 API 문서에 맞춘 `AccountListResponse`의 배열을 반환한다.
+
+```json
+[
+  {
+    "account_id": 2,
+    "account_name": "장기 투자",
+    "is_duel_account": false,
+    "cash_balance": 5000000,
+    "total_assets": 5000000,
+    "return_percent": 0.0
+  }
+]
+```
+
+목록의 `is_duel_account=false`, `total_assets=cash_balance`, `return_percent=0.0`은 FE 응답 형식을 맞추기 위한 임시 표시값이다. 보유종목이 있어도 평가액·실제 수익률을 반영하지 않는다. 대결 계좌 및 보유종목 평가 연동 시 실제 값으로 교체해야 한다. `cash_balance`는 계좌 생성 시 시작 자금으로 초기화되며, 매매에 따른 잔액 갱신은 아직 없다.
 
 ## 5. 계좌명 수정
 
@@ -113,7 +150,10 @@ Cookie: access_token={StockSpoon Access JWT}; XSRF-TOKEN={csrf-token}
 | `account/dto/OnboardingRequest.java` | 첫 계좌의 `initial_capital` 입력·범위 검증 |
 | `account/dto/AccountCreateRequest.java` | 추가 계좌의 이름·시작 자금 입력 |
 | `account/dto/AccountNameUpdateRequest.java` | 수정할 `account_name` 입력 |
-| `account/dto/AccountResponse.java` | 계좌 API의 공통 응답 |
+| `account/dto/AccountResponse.java` | 온보딩·이름 수정 응답 |
+| `account/dto/AccountDetailResponse.java` | 상세 응답과 임시 표시값, 실제 주문 가능 현금 |
+| `account/dto/AccountCreateResponse.java` | API 문서에 맞춘 추가 계좌 생성 응답 |
+| `account/dto/AccountListResponse.java` | API 문서에 맞춘 목록 응답과 임시 표시값 |
 | `account/service/AccountService.java` | 온보딩 조건, 기본 이름, 중복·소유권·활성 상태 확인, 트랜잭션 처리 |
 | `account/repository/AccountRepository.java` | 사용자별 활성 계좌 조회 및 이름 중복 검사 |
 | `account/entity/Account.java` | 계좌 소유자, 이름, 시작 자금, 현금, AI 위임, 활성 상태와 생성·수정 시각 저장 |

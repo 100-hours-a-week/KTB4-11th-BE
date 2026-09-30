@@ -31,6 +31,7 @@ class AccountControllerTests {
     @Autowired UserRepository users;
     @Autowired AccountRepository accounts;
     @Autowired JwtTokenProvider tokens;
+    @Autowired com.stock_spoon.river_be.order.OrderService orders;
     private MockMvc mvc;
 
     @BeforeEach
@@ -82,6 +83,12 @@ class AccountControllerTests {
 
         createAccount(user, "{\"initial_capital\":5000000}")
                 .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.length()").value(5))
+                .andExpect(jsonPath("$.account_id").isNumber())
+                .andExpect(jsonPath("$.initial_capital").value(5_000_000))
+                .andExpect(jsonPath("$.cash_balance").value(5_000_000))
+                .andExpect(jsonPath("$.is_ai_managed").value(true))
+                .andExpect(jsonPath("$.ai_delegated").doesNotExist())
                 .andExpect(jsonPath("$.account_name").value("기본 계좌 1"));
         createAccount(user,
                 "{\"account_name\":\"기본 계좌 3\",\"initial_capital\":5000000}")
@@ -172,8 +179,17 @@ class AccountControllerTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].account_id").value(firstAccountId))
                 .andExpect(jsonPath("$[0].account_name").value("기본 계좌"))
+                .andExpect(jsonPath("$[0].length()").value(6))
+                .andExpect(jsonPath("$[0].is_duel_account").value(false))
+                .andExpect(jsonPath("$[0].cash_balance").value(10_000_000))
+                .andExpect(jsonPath("$[0].total_assets").value(10_000_000))
+                .andExpect(jsonPath("$[0].return_percent").value(0.0))
                 .andExpect(jsonPath("$[1].account_id").value(secondAccountId))
                 .andExpect(jsonPath("$[1].account_name").value("두 번째 계좌"))
+                .andExpect(jsonPath("$[1].is_duel_account").value(false))
+                .andExpect(jsonPath("$[1].cash_balance").value(5_000_000))
+                .andExpect(jsonPath("$[1].total_assets").value(5_000_000))
+                .andExpect(jsonPath("$[1].return_percent").value(0.0))
                 .andExpect(jsonPath("$[2]").doesNotExist());
     }
 
@@ -199,15 +215,25 @@ class AccountControllerTests {
                 .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString());
         renameAccount(user, accountId, "변경된 계좌")
                 .andExpect(status().isOk());
+        orders.reserveLimit(accountId, "005930", com.stock_spoon.river_be.order.Order.Side.BUY,
+                10, 70_000, null, null);
 
         mvc.perform(get("/api/v1/users/me/accounts/{accountId}", accountId)
                         .cookie(authCookie(user)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.account_id").value(accountId))
                 .andExpect(jsonPath("$.account_name").value("변경된 계좌"))
+                .andExpect(jsonPath("$.length()").value(11))
+                .andExpect(jsonPath("$.message").value("success"))
+                .andExpect(jsonPath("$.is_duel_account").value(false))
                 .andExpect(jsonPath("$.initial_capital").value(10_000_000))
                 .andExpect(jsonPath("$.cash_balance").value(10_000_000))
-                .andExpect(jsonPath("$.ai_delegated").value(true));
+                .andExpect(jsonPath("$.available_cash").value(9_300_000))
+                .andExpect(jsonPath("$.holdings_market_value").value(0))
+                .andExpect(jsonPath("$.total_assets").value(10_000_000))
+                .andExpect(jsonPath("$.return_percent").value(0.0))
+                .andExpect(jsonPath("$.executed_trade_count").value(0))
+                .andExpect(jsonPath("$.ai_delegated").doesNotExist());
     }
 
     @Test

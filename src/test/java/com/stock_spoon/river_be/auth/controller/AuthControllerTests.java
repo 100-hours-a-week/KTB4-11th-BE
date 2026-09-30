@@ -30,6 +30,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class AuthControllerTests {
     @Autowired WebApplicationContext context;
     @MockitoBean KakaoClient kakao;
+    @Autowired com.stock_spoon.river_be.auth.token.JwtTokenProvider tokenProvider;
     private MockMvc mvc;
 
     @BeforeEach
@@ -77,7 +78,7 @@ class AuthControllerTests {
                 .andExpect(jsonPath("$.code").value("LOGIN_SUCCESS"))
                 .andExpect(jsonPath("$.access_token").doesNotExist())
                 .andExpect(jsonPath("$.refresh_token").doesNotExist())
-                .andExpect(jsonPath("$.user_id").doesNotExist())
+                .andExpect(jsonPath("$.user_id").isNumber())
                 .andReturn().getResponse();
         assertThat(response.getCookie("oauth_attempt")).isNull();
         Cookie accessCookie = response.getCookie("access_token");
@@ -87,6 +88,8 @@ class AuthControllerTests {
         assertThat(accessCookie.getSecure()).isFalse();
         assertThat(accessCookie.getPath()).isEqualTo("/");
         assertThat(refreshCookie).isNotNull();
+        assertThat(((Number) JsonPath.read(response.getContentAsString(), "$.user_id")).longValue())
+                .isEqualTo(tokenProvider.refreshUserId(refreshCookie.getValue()));
         assertThat(refreshCookie.isHttpOnly()).isTrue();
         assertThat(refreshCookie.getSecure()).isFalse();
         assertThat(refreshCookie.getPath()).isEqualTo("/api/v1/auth");
@@ -171,6 +174,7 @@ class AuthControllerTests {
                         .header("X-XSRF-TOKEN", reissueCsrf.token()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("TOKEN_REISSUED"))
+                .andExpect(jsonPath("$.user_id").doesNotExist())
                 .andReturn().getResponse();
         Cookie rotatedRefresh = reissueResponse.getCookie("refresh_token");
         Cookie rotatedAccess = reissueResponse.getCookie("access_token");
@@ -184,6 +188,7 @@ class AuthControllerTests {
                         .header("X-XSRF-TOKEN", logoutCsrf.token()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("LOGOUT_SUCCESS"))
+                .andExpect(jsonPath("$.user_id").doesNotExist())
                 .andReturn().getResponse();
         assertThat(logoutResponse.getCookie("access_token").getMaxAge()).isZero();
         assertThat(logoutResponse.getCookie("refresh_token").getMaxAge()).isZero();

@@ -85,7 +85,12 @@ public class SecurityConfig {
                                     && "ai-server".equals(token.getToken().getSubject());
                             return new AuthorizationDecision(allowed);
                         })
-                        .anyRequest().authenticated())
+                        .anyRequest().access((authentication, context) -> {
+                            var current = authentication.get();
+                            boolean allowed = current instanceof JwtAuthenticationToken token
+                                    && !"ai-server".equals(token.getToken().getSubject());
+                            return new AuthorizationDecision(allowed);
+                        }))
                 .oauth2ResourceServer(oauth -> oauth
                         .bearerTokenResolver(accessTokenResolver)
                         .jwt(jwt -> jwt.decoder(accessJwtDecoder))

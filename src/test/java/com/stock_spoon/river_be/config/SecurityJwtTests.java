@@ -118,6 +118,14 @@ class SecurityJwtTests {
                 .andExpect(status().isNotFound());
     }
 
+    @Test
+    void aiServerTokenCannotReachOtherProtectedEndpoints() throws Exception {
+        mvc.perform(get("/test/protected")
+                        .cookie(new Cookie("access_token", aiToken("ai-server", "access", "AI"))))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/test/protected")).andExpect(status().isUnauthorized());
+    }
+
     private String aiToken(String subject, String type, String actor) {
         Instant now = Instant.now();
         var claims = JwtClaimsSet.builder().issuer(jwtProperties.issuer()).subject(subject)

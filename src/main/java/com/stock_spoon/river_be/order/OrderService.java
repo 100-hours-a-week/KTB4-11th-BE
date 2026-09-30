@@ -3,6 +3,8 @@ package com.stock_spoon.river_be.order;
 import com.stock_spoon.river_be.account.entity.Account;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import java.time.Clock;
+import java.time.LocalTime;
+import java.time.ZoneId;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -13,6 +15,8 @@ public class OrderService {
     private final AccountRepository accounts;
     private final OrderRepository orders;
     private final HoldingRepository holdings;
+    private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
+    private static final LocalTime MARKET_CLOSE = LocalTime.of(15, 30);
     private final Clock clock;
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -80,6 +84,26 @@ public class OrderService {
         }
         return orders.save(Order.pendingLimit(account, stockCode, side, quantity,
                 limitPrice, Order.Source.AI, decisionId, decisionSummary, clock.instant()));
+    }
+
+    /**
+     * 한국 시간 15:30 이후에는 오늘의 대기 주문을, 날짜가 지난 대기 주문은 언제든 취소한다.
+     * 구독 유지 주기에서 호출하므로 서버가 마감 시각에 꺼져 있어도 재기동 시 만료분을 정리한다.
+     */
+    @Transactional
+    public void cancelExpiredPendingOrders() {
+        var now = clock.instant();
+        var today = now.atZone(SEOUL).toLocalDate();
+        boolean marketClosed = !now.atZone(SEOUL).toLocalTime().isBefore(MARKET_CLOSE);
+        for (Long accountId : orders.findAccountIdsByStatus(Order.Status.PENDING)) {
+            accounts.findLockedById(accountId).orElseThrow();
+            for (Order order : orders.findAllByAccountIdAndStatus(accountId, Order.Status.PENDING)) {
+            boolean fromPreviousDay = order.getCreatedAt().atZone(SEOUL).toLocalDate().isBefore(today);
+            if (marketClosed || fromPreviousDay) {
+                order.cancel(now);
+            }
+            }
+        }
     }
 
     @Transactional

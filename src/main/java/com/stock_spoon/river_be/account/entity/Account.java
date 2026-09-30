@@ -95,6 +95,12 @@ public class Account {
         return active;
     }
 
+    public void changeCash(long delta) {
+        long next = Math.addExact(cashBalance, delta);
+        if (next < 0) throw new IllegalStateException("현금 잔액이 부족합니다.");
+        cashBalance = next;
+    }
+
     public void rename(String name) {
         this.name = name;
     }

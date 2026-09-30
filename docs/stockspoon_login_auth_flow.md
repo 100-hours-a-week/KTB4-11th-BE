@@ -436,7 +436,8 @@ FE는 OAuth `state`를 BE에 전달하지 않는다. BE는 FE가 `state`를 검�
 ```json
 {
   "code": "LOGIN_SUCCESS",
-  "message": "로그인되었습니다."
+  "message": "로그인되었습니다.",
+  "user_id": 1
 }
 ```
 

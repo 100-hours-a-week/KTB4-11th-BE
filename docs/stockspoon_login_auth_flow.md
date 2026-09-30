@@ -637,3 +637,9 @@ FE는 `/csrf` 응답을 기다린 뒤 응답 본문의 토큰을 `X-XSRF-TOKEN` 
 주의: CORS 허용만으로 브라우저의 쿠키 정책이 바뀌지는 않는다. 현재 인증·CSRF 쿠키는 `SameSite=Lax`이므로 localhost에서 다른 사이트의 배포 BE로 직접 fetch하면 쿠키가 제한될 수 있다. 로컬 FE 개발 서버의 동일 출처 프록시 사용 또는 별도 테스트 환경의 `SameSite=None; Secure` 정책을 FE·인프라 담당자와 결정해야 한다. 후자는 제3자 쿠키 차단의 영향도 받는다. 이번 변경은 쿠키 정책을 변경하지 않는다. 카카오 인가코드 요청과 BE 토큰 교환의 Redirect URI도 일치해야 한다.
 
 `SecurityJwtTests`에서 배포·로컬 origin의 로그인 preflight 및 CSRF 조회 허용과 미등록 origin 거부를 확인한다. 실제 배포 환경에서의 쿠키 저장·전송과 카카오 로그인은 브라우저 연동 확인이 별도로 필요하다.
+
+### 로컬 BE를 ngrok으로 열어 로그인 확인하기
+
+로컬 `.env.local`에서 `AUTH_CSRF_DISABLED=true`, `AUTH_COOKIE_SAME_SITE=None`, `AUTH_COOKIE_SECURE=true`로 설정하고 BE를 재시작한다. 이때 API의 CSRF 검증은 건너뛰지만 `/api/v1/auth/csrf` 응답은 유지된다. FE는 테스트 중 `/csrf` 호출을 생략해도 된다. ngrok HTTPS 주소에서 발급되는 인증 쿠키는 `SameSite=None; Secure`를 사용한다. 기본 설정은 CSRF 검증 활성화, `SameSite=Lax`다. `.env.local`은 Git에 포함되지 않으므로 배포 서버 설정은 별도로 관리한다.
+
+브라우저가 제3자 쿠키를 차단하면 `SameSite=None`이어도 localhost FE에서 ngrok BE의 쿠키 인증이 실패할 수 있다. 그 경우 FE 개발 서버의 프록시를 사용한다. 테스트가 끝나면 로컬 우회 설정을 해제한다.

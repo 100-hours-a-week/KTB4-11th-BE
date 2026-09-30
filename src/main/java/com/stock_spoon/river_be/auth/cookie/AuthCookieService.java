@@ -2,6 +2,7 @@ package com.stock_spoon.river_be.auth.cookie;
 
 import java.time.Duration;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
 import org.springframework.stereotype.Component;
@@ -16,10 +17,13 @@ public class AuthCookieService {
 
     private final JwtProperties jwtProperties;
     private final KakaoProperties kakaoProperties;
+    private final String cookieSameSite;
 
-    public AuthCookieService(JwtProperties jwtProperties, KakaoProperties kakaoProperties) {
+    public AuthCookieService(JwtProperties jwtProperties, KakaoProperties kakaoProperties,
+            @Value("${AUTH_COOKIE_SAME_SITE:Lax}") String cookieSameSite) {
         this.jwtProperties = jwtProperties;
         this.kakaoProperties = kakaoProperties;
+        this.cookieSameSite = cookieSameSite;
     }
 
     public void write(HttpServletResponse response, LoginTokens tokens) {
@@ -38,7 +42,7 @@ public class AuthCookieService {
         ResponseCookie cookie = ResponseCookie.from(name, value)
                 .httpOnly(true)
                 .secure(kakaoProperties.secureCookie())
-                .sameSite("Lax")
+                .sameSite(cookieSameSite)
                 .path(path)
                 .maxAge(maxAge)
                 .build();

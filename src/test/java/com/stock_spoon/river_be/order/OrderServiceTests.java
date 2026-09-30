@@ -4,6 +4,7 @@ import com.stock_spoon.river_be.account.entity.Account;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import com.stock_spoon.river_be.user.entity.User;
 import com.stock_spoon.river_be.user.repository.UserRepository;
+import java.time.Instant;
 import java.math.BigDecimal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -70,6 +71,19 @@ class OrderServiceTests {
                 .isInstanceOf(OrderException.class);
         service.cancel(account.getId(), first.getId());
         assertThat(service.sellableQuantity(account.getId(), "005930")).isEqualTo(10);
+    }
+
+    @Test
+    void previousDayPendingOrdersAreCancelledAndReservedCashIsReleased() {
+        Order staleOrder = orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY,
+                2, 70_000, Order.Source.AI, null, null, Instant.parse("2000-01-01T00:00:00Z")));
+
+        service.cancelExpiredPendingOrders();
+
+        assertThat(staleOrder.getStatus()).isEqualTo(Order.Status.CANCELLED);
+        assertThat(staleOrder.getReservedCash()).isZero();
+        assertThat(staleOrder.getCancelledAt()).isNotNull();
+        assertThat(service.availableCash(account.getId())).isEqualTo(1_000_000);
     }
 
     @Test

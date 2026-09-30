@@ -16,10 +16,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class OrderController {
     private final OrderService orders;
     private final OrderMarketValidator market;
+    private final OrderSubscriptionService subscriptions;
 
-    public OrderController(OrderService orders, OrderMarketValidator market) {
+    public OrderController(OrderService orders, OrderMarketValidator market,
+            OrderSubscriptionService subscriptions) {
         this.orders = orders;
         this.market = market;
+        this.subscriptions = subscriptions;
     }
 
     @PostMapping
@@ -53,9 +56,9 @@ public class OrderController {
         }
         orders.assertOrderableAccount(userId, accountId);
         market.validateLimit(request.stockCode(), request.limitPrice());
-        Order order = orders.reserveLimit(userId, accountId, request.stockCode(), side,
+        Order order = subscriptions.create(request.stockCode(), () -> orders.reserveLimit(userId, accountId, request.stockCode(), side,
                 request.quantity(), request.limitPrice(), request.reason().decisionId(),
-                request.reason().summary());
+                request.reason().summary()));
         return OrderCreateResponse.from(order);
     }
 }

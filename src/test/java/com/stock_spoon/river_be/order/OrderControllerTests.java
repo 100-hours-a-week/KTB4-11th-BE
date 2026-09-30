@@ -4,6 +4,7 @@ import com.stock_spoon.river_be.account.entity.Account;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import com.stock_spoon.river_be.auth.token.JwtTokenProvider;
 import com.stock_spoon.river_be.config.JwtProperties;
+import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream;
 import com.stock_spoon.river_be.user.entity.User;
 import com.stock_spoon.river_be.user.repository.UserRepository;
 import jakarta.servlet.http.Cookie;
@@ -25,6 +26,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.context.WebApplicationContext;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -42,6 +45,7 @@ class OrderControllerTests {
     @Autowired JwtEncoder encoder;
     @Autowired JwtProperties jwtProperties;
     @MockitoBean OrderMarketValidator market;
+    @MockitoBean KiwoomStockStream stream;
     private MockMvc mvc;
     private User user;
     private Account account;
@@ -51,6 +55,7 @@ class OrderControllerTests {
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
         user = users.save(new User("AI 주문 사용자"));
         account = accounts.save(new Account(user, "자동매매 계좌", 1_000_000));
+        when(stream.whenSubscribed(anyString())).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(null));
     }
 
     @Test
@@ -115,6 +120,24 @@ class OrderControllerTests {
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("AI_ORDER_ONLY"));
         assertThat(orders.count()).isZero();
+    }
+
+    @Test
+    void subscriptionFailureReturns503WithoutAnOrderOrReservation() throws Exception {
+        when(stream.whenSubscribed("005930")).thenReturn(java.util.concurrent.CompletableFuture.failedFuture(
+                new IllegalStateException("registration rejected")));
+        mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                        .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"stock_code":"005930","order_side":"buy","order_type":"limit",
+                                 "limit_price":70000,"quantity":1,
+                                 "reason":{"decision_id":"d-4","summary":"매수 판단"}}
+                                """))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("MARKET_STREAM_UNAVAILABLE"));
+        assertThat(orders.count()).isZero();
+        assertThat(orders.reservedCash(account.getId(), Order.Status.PENDING)).isZero();
+        assertThat(accounts.findById(account.getId()).orElseThrow().getCashBalance()).isEqualTo(1_000_000);
     }
 
     private Cookie aiCookie(User owner) {

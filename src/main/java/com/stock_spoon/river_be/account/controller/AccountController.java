@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import com.stock_spoon.river_be.account.dto.AccountCreateRequest;
 import com.stock_spoon.river_be.account.dto.AccountCreateResponse;
+import com.stock_spoon.river_be.account.dto.AccountDetailResponse;
 import com.stock_spoon.river_be.account.dto.AccountListResponse;
 import com.stock_spoon.river_be.account.dto.AccountNameUpdateRequest;
 import com.stock_spoon.river_be.account.dto.AccountResponse;
@@ -49,7 +50,7 @@ public class AccountController {
     }
 
     @GetMapping("/{accountId}")
-    public AccountResponse get(@AuthenticationPrincipal Jwt jwt,
+    public AccountDetailResponse get(@AuthenticationPrincipal Jwt jwt,
             @PathVariable long accountId) {
         return service.get(Long.parseLong(jwt.getSubject()), accountId);
     }

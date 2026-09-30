@@ -6,6 +6,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.stock_spoon.river_be.account.dto.AccountCreateRequest;
 import com.stock_spoon.river_be.account.dto.AccountCreateResponse;
+import com.stock_spoon.river_be.account.dto.AccountDetailResponse;
 import com.stock_spoon.river_be.account.dto.AccountListResponse;
 import com.stock_spoon.river_be.account.dto.AccountNameUpdateRequest;
 import com.stock_spoon.river_be.account.dto.AccountResponse;
@@ -14,6 +15,7 @@ import com.stock_spoon.river_be.account.entity.Account;
 import com.stock_spoon.river_be.account.exception.AccountException;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import com.stock_spoon.river_be.user.repository.UserRepository;
+import com.stock_spoon.river_be.order.OrderService;
 
 @Service
 public class AccountService {
@@ -22,10 +24,13 @@ public class AccountService {
 
     private final AccountRepository accountRepository;
     private final UserRepository userRepository;
+    private final OrderService orderService;
 
-    public AccountService(AccountRepository accountRepository, UserRepository userRepository) {
+    public AccountService(AccountRepository accountRepository, UserRepository userRepository,
+            OrderService orderService) {
         this.accountRepository = accountRepository;
         this.userRepository = userRepository;
+        this.orderService = orderService;
     }
 
     @Transactional
@@ -97,11 +102,11 @@ public class AccountService {
     }
 
     @Transactional(readOnly = true)
-    public AccountResponse get(long userId, long accountId) {
-        return accountRepository.findByIdAndUserIdAndActiveTrue(accountId, userId)
-                .map(AccountResponse::from)
+    public AccountDetailResponse get(long userId, long accountId) {
+        var account = accountRepository.findByIdAndUserIdAndActiveTrue(accountId, userId)
                 .orElseThrow(() -> new AccountException(HttpStatus.NOT_FOUND,
                         "ACCOUNT_NOT_FOUND", "계좌를 찾을 수 없습니다."));
+        return AccountDetailResponse.from(account, orderService.availableCash(accountId));
     }
 
     private String nextDefaultName(long userId) {

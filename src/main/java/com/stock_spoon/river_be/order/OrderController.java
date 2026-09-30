@@ -17,12 +17,14 @@ public class OrderController {
     private final OrderService orders;
     private final OrderMarketValidator market;
     private final OrderSubscriptionService subscriptions;
+    private final OrderExecutionListener execution;
 
     public OrderController(OrderService orders, OrderMarketValidator market,
-            OrderSubscriptionService subscriptions) {
+            OrderSubscriptionService subscriptions, OrderExecutionListener execution) {
         this.orders = orders;
         this.market = market;
         this.subscriptions = subscriptions;
+        this.execution = execution;
     }
 
     @PostMapping
@@ -59,6 +61,7 @@ public class OrderController {
         Order order = subscriptions.create(request.stockCode(), () -> orders.reserveLimit(userId, accountId, request.stockCode(), side,
                 request.quantity(), request.limitPrice(), request.reason().decisionId(),
                 request.reason().summary()));
-        return OrderCreateResponse.from(order);
+        execution.orderCreated(order);
+        return execution.response(accountId, order.getId());
     }
 }

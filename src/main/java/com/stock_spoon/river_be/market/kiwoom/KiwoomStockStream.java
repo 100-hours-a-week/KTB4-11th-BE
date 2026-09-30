@@ -42,6 +42,7 @@ public class KiwoomStockStream {
     private final Map<String, CompletableFuture<Void>> registrations = new HashMap<>();
     private final Map<String, StockPrice> prices = new HashMap<>();
     private final Map<String, OrderBook> books = new HashMap<>();
+    private java.util.function.Consumer<StockPrice> priceListener = ignored -> {};
     private Session session;
     private State state;
     private boolean stopped;
@@ -64,6 +65,11 @@ public class KiwoomStockStream {
         this.http = http;
         this.clock = clock;
         state = enabled ? State.DISCONNECTED : State.DISABLED;
+    }
+
+    /** Bean 생성 시 연결한다. 체결 처리는 스트림 잠금 밖에서 호출한다. */
+    public synchronized void setPriceListener(java.util.function.Consumer<StockPrice> listener) {
+        priceListener = java.util.Objects.requireNonNull(listener);
     }
 
     public synchronized State state() {
@@ -323,6 +329,7 @@ public class KiwoomStockStream {
 
         @Override
         public CompletionStage<?> onText(WebSocket socket, CharSequence data, boolean last) {
+            var receivedPrices = new ArrayList<StockPrice>();
             synchronized (KiwoomStockStream.this) {
                 if (session != this || stopped) {
                     return null;
@@ -335,20 +342,30 @@ public class KiwoomStockStream {
                     if (last) {
                         String message = fragments.toString();
                         fragments.setLength(0);
-                        accept(message);
+                        accept(message, receivedPrices);
                         lastMessage = clock.instant();
                     }
                 } catch (RuntimeException error) {
+                    receivedPrices.clear();
                     disconnect(this);
                 }
-                if (session == this) {
-                    socket.request(1);
+            }
+            // ponytail: v1은 수신 순서대로 동기 처리한다. 처리량이 늘면 크기를 제한한 순차 큐로 분리한다.
+            for (StockPrice price : receivedPrices) {
+                try {
+                    priceListener.accept(price);
+                } catch (RuntimeException error) {
+                    // DB 체결 오류는 시세 프로토콜 오류가 아니므로 연결을 끊지 않는다.
+                    log.warn("현재가에 대한 주문 처리에 실패했습니다. 다음 시세에서 재시도합니다.");
                 }
+            }
+            synchronized (KiwoomStockStream.this) {
+                if (session == this) socket.request(1);
             }
             return null;
         }
 
-        private void accept(String text) {
+        private void accept(String text, List<StockPrice> receivedPrices) {
             JsonNode message = JSON.readTree(text);
             switch (message.path("trnm").asText()) {
                 case "LOGIN" -> {
@@ -405,10 +422,12 @@ public class KiwoomStockStream {
                         if (price.signum() <= 0) {
                             throw new IllegalArgumentException();
                         }
-                        prices.put(code, new StockPrice(code, price,
+                        var received = new StockPrice(code, price,
                                 new BigDecimal(values.path("11").asText()),
                                 new BigDecimal(values.path("12").asText()),
-                                LocalTime.parse(values.path("20").asText(), TIME), clock.instant()));
+                                LocalTime.parse(values.path("20").asText(), TIME), clock.instant());
+                        prices.put(code, received);
+                        receivedPrices.add(received);
                     }
                 }
                 default -> { }

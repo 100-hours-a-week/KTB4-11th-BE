@@ -8,7 +8,7 @@ CREATE TABLE holdings (
     CONSTRAINT uk_holdings_account_stock UNIQUE (account_id, stock_code),
     CONSTRAINT fk_holdings_account FOREIGN KEY (account_id) REFERENCES accounts(account_id),
     CONSTRAINT ck_holdings_quantity CHECK (quantity > 0),
-    CONSTRAINT ck_holdings_total_cost CHECK (total_cost >= 0)
+    CONSTRAINT ck_holdings_total_cost CHECK (total_cost > 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE trade_orders (

@@ -95,10 +95,13 @@ public class OrderService {
         var now = clock.instant();
         var today = now.atZone(SEOUL).toLocalDate();
         boolean marketClosed = !now.atZone(SEOUL).toLocalTime().isBefore(MARKET_CLOSE);
-        for (Order order : orders.findAllByStatus(Order.Status.PENDING)) {
+        for (Long accountId : orders.findAccountIdsByStatus(Order.Status.PENDING)) {
+            accounts.findLockedById(accountId).orElseThrow();
+            for (Order order : orders.findAllByAccountIdAndStatus(accountId, Order.Status.PENDING)) {
             boolean fromPreviousDay = order.getCreatedAt().atZone(SEOUL).toLocalDate().isBefore(today);
             if (marketClosed || fromPreviousDay) {
                 order.cancel(now);
+            }
             }
         }
     }

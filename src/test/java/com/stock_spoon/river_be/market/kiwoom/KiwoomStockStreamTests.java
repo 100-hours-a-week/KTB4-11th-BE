@@ -255,6 +255,99 @@ class KiwoomStockStreamTests {
         }
     }
 
+    @Test
+    void dynamicRegistrationWaitsForAckAndRemovalKeepsOtherSymbolAndSocket() {
+        subscribe();
+        receive(trade("005930", "0B", "70000", "0", "0", "100000"));
+        stream.updateSymbols(java.util.Set.of("005930", "000660"));
+        var first = stream.whenSubscribed("000660");
+        var second = stream.whenSubscribed("000660");
+        assertThat(first).isSameAs(second).isNotDone();
+        assertThat(stream.whenSubscribed("005930")).isCompleted();
+        assertThat(stream.latest("005930")).isPresent();
+        assertThat(JsonMapper.builder().build().readTree(sent.getLast()).path("trnm").asText()).isEqualTo("REG");
+        receive("{\"trnm\":\"REG\",\"return_code\":0}");
+        assertThat(first).isCompleted();
+        receive(trade("000660", "0B", "180000", "0", "0", "100000"));
+        stream.updateSymbols(java.util.Set.of("000660"));
+        var remove = JsonMapper.builder().build().readTree(sent.getLast());
+        assertThat(remove.path("trnm").asText()).isEqualTo("REMOVE");
+        assertThat(remove.path("data").get(0).path("item").get(0).asText()).isEqualTo("005930");
+        assertThat(stream.latest("005930")).isEmpty();
+        assertThat(stream.latest("000660")).isPresent();
+        receive("{\"trnm\":\"REMOVE\",\"return_code\":0}");
+        verify(sockets.getLast(), never()).abort();
+        assertThat(stream.state()).isEqualTo(KiwoomStockStream.State.SUBSCRIBED);
+    }
+
+    @Test
+    void removalThenNewDemandRegistersAgainWithoutAcceptingOldRegistration() {
+        subscribe();
+        stream.updateSymbols(java.util.Set.of("005930", "000660"));
+        receive("{\"trnm\":\"REG\",\"return_code\":0}");
+        stream.updateSymbols(java.util.Set.of("000660"));
+        stream.updateSymbols(java.util.Set.of("005930", "000660"));
+        var result = stream.whenSubscribed("005930");
+        assertThat(result).isNotDone();
+        receive("{\"trnm\":\"REMOVE\",\"return_code\":0}");
+        assertThat(result).isNotDone();
+        receive("{\"trnm\":\"REG\",\"return_code\":0}");
+        assertThat(result).isCompleted();
+    }
+
+    @Test
+    void lastRemovalClosesConnectionAndNewDemandAuthenticatesAgain() {
+        subscribe();
+        var oldListener = listeners.getLast();
+        var oldSocket = sockets.getLast();
+        stream.updateSymbols(java.util.Set.of());
+        verify(oldSocket).sendClose(WebSocket.NORMAL_CLOSURE, "no active subscriptions");
+        assertThat(stream.state()).isEqualTo(KiwoomStockStream.State.DISCONNECTED);
+
+        // Keep the scheduled async connection attempt behind this deterministic handshake.
+        synchronized (stream) {
+            stream.updateSymbols(java.util.Set.of("005930"));
+            var result = stream.whenSubscribed("005930");
+            stream.maintainConnection();
+            assertThat(listeners).hasSize(2);
+            assertThat(stream.state()).isEqualTo(KiwoomStockStream.State.AUTHENTICATING);
+            oldListener.onText(oldSocket, "{\"trnm\":\"REG\",\"return_code\":0}", true);
+            oldListener.onClose(oldSocket, WebSocket.NORMAL_CLOSURE, "late close");
+            assertThat(result).isNotDone();
+            assertThat(stream.state()).isEqualTo(KiwoomStockStream.State.AUTHENTICATING);
+            receive("{\"trnm\":\"LOGIN\",\"return_code\":0}");
+            assertThat(result).isNotDone();
+            receive("{\"trnm\":\"REG\",\"return_code\":0}");
+            assertThat(result).isCompleted();
+        }
+    }
+    @Test
+    void rejectedDynamicRegistrationFailsWaitersAndReconnectRestoresDesiredSymbols() {
+        subscribe();
+        stream.updateSymbols(java.util.Set.of("005930", "000660"));
+        var result = stream.whenSubscribed("000660");
+        receive("{\"trnm\":\"REG\",\"return_code\":1}");
+        assertThat(result).isCompletedExceptionally();
+        stream.updateSymbols(java.util.Set.of("005930"));
+        subscribe();
+        assertThat(stream.whenSubscribed("005930")).isCompleted();
+        var registration = JsonMapper.builder().build().readTree(sent.getLast());
+        assertThat(registration.path("data").get(0).path("item").size()).isEqualTo(1);
+    }
+
+    @Test
+    void lateAckForAbandonedRequestIsRemovedAndDoesNotRestorePrice() {
+        subscribe();
+        stream.updateSymbols(java.util.Set.of("005930", "000660"));
+        var result = stream.whenSubscribed("000660");
+        stream.updateSymbols(java.util.Set.of("005930"));
+        assertThat(result).isCompletedExceptionally();
+        receive("{\"trnm\":\"REG\",\"return_code\":0}");
+        assertThat(JsonMapper.builder().build().readTree(sent.getLast()).path("trnm").asText()).isEqualTo("REMOVE");
+        receive(trade("000660", "0B", "180000", "0", "0", "100000"));
+        assertThat(stream.latest("000660")).isEmpty();
+    }
+
     private String book(String code, String ask, String quantity) {
         var values = new java.util.HashMap<String, String>();
         for (int field = 41; field <= 80; field++) {

@@ -13,9 +13,11 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.ResolverStyle;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import org.slf4j.Logger;
@@ -35,8 +37,9 @@ public class KiwoomStockStream {
     private final HttpClient http;
     private final Clock clock;
     private final boolean enabled;
-    private final List<String> symbols;
-    // ponytail: 한 서버의 설정된 종목만 구독. 다중 서버/동적 종목은 구독 소유권부터 설계한다.
+    private final Set<String> symbols = new HashSet<>();
+    private final Set<String> registered = new HashSet<>();
+    private final Map<String, CompletableFuture<Void>> registrations = new HashMap<>();
     private final Map<String, StockPrice> prices = new HashMap<>();
     private final Map<String, OrderBook> books = new HashMap<>();
     private Session session;
@@ -53,10 +56,9 @@ public class KiwoomStockStream {
             HttpClient http, Clock clock) {
         this.tokens = tokens;
         this.enabled = enabled;
-        this.symbols = symbols.stream().map(String::trim).filter(s -> !s.isEmpty()).distinct().toList();
+        this.symbols.addAll(symbols.stream().map(String::trim).filter(s -> !s.isEmpty()).toList());
         // 첫 단계는 KRX 보통 종목코드만 허용한다. NXT/SOR는 별도 합의 후 확장한다.
-        if (this.symbols.stream().anyMatch(s -> !s.matches("[0-9A-Z]{6}"))
-                || (enabled && this.symbols.isEmpty())) {
+        if (this.symbols.stream().anyMatch(s -> !s.matches("[0-9A-Z]{6}"))) {
             throw new IllegalArgumentException("키움 구독 종목코드를 확인하세요.");
         }
         this.http = http;
@@ -68,10 +70,94 @@ public class KiwoomStockStream {
         return state;
     }
 
+    /** 단일 BE에서 DB 대기 주문과 접수 중인 주문을 합친 종목 목록으로 갱신한다. */
+    public synchronized void updateSymbols(Set<String> desired) {
+        if (desired.stream().anyMatch(s -> s == null || !s.matches("[0-9A-Z]{6}"))) {
+            throw new IllegalArgumentException("키움 구독 종목코드를 확인하세요.");
+        }
+        symbols.clear();
+        symbols.addAll(desired);
+        prices.keySet().retainAll(desired);
+        books.keySet().retainAll(desired);
+        registrations.entrySet().removeIf(entry -> {
+            if (desired.contains(entry.getKey())) return false;
+            entry.getValue().completeExceptionally(new IllegalStateException("구독 수요가 종료되었습니다."));
+            return true;
+        });
+        if (symbols.isEmpty()) {
+            closeWhenIdle();
+            return;
+        }
+        if (session == null && enabled && !stopped) {
+            CompletableFuture.runAsync(this::maintainConnection);
+        }
+        synchronizeSubscriptions();
+    }
+
+    private synchronized void closeWhenIdle() {
+        Session idle = session;
+        if (idle == null) return;
+        session = null;
+        registered.clear();
+        prices.clear();
+        books.clear();
+        state = stopped ? State.STOPPED : State.DISCONNECTED;
+        idle.token = null;
+        registrations.values().forEach(future -> future.completeExceptionally(
+                new IllegalStateException("활성 주문이 없어 시세 연결을 종료했습니다.")));
+        registrations.clear();
+        if (idle.socket != null) {
+            idle.sends.thenCompose(ignored -> idle.socket.sendClose(
+                    WebSocket.NORMAL_CLOSURE, "no active subscriptions"))
+                    .orTimeout(2, java.util.concurrent.TimeUnit.SECONDS)
+                    .whenComplete((ignored, error) -> {
+                        if (error != null) idle.socket.abort();
+                    });
+        }
+    }
+
+    public synchronized CompletableFuture<Void> whenSubscribed(String symbol) {
+        if (!enabled || stopped || !symbols.contains(symbol)) {
+            return CompletableFuture.failedFuture(new IllegalStateException("시세 구독을 사용할 수 없습니다."));
+        }
+        if (isRegistered(symbol)) return CompletableFuture.completedFuture(null);
+        return registrations.computeIfAbsent(symbol, ignored -> new CompletableFuture<>());
+    }
+
+    private boolean isRegistered(String symbol) {
+        return session != null && session.authenticated && registered.contains(symbol)
+                && symbols.contains(symbol)
+                && !("REMOVE".equals(session.control) && session.controlSymbols.contains(symbol))
+                && clock.instant().isBefore(session.lastMessage.plusSeconds(90));
+    }
+
+    /** 응답에 요청 ID가 없으므로 REG/REMOVE는 한 번에 하나씩 보내 응답을 대응시킨다. */
+    private void synchronizeSubscriptions() {
+        if (session == null || !session.authenticated || session.control != null) return;
+        var removed = new HashSet<>(registered);
+        removed.removeAll(symbols);
+        var added = new HashSet<>(symbols);
+        added.removeAll(registered);
+        if (removed.isEmpty() && added.isEmpty()) {
+            state = State.SUBSCRIBED;
+            return;
+        }
+        session.control = removed.isEmpty() ? "REG" : "REMOVE";
+        session.controlSymbols = Set.copyOf(removed.isEmpty() ? added : removed);
+        session.controlStartedAt = clock.instant();
+        state = State.SUBSCRIBING;
+        var packet = new HashMap<String, Object>();
+        packet.put("trnm", session.control);
+        packet.put("grp_no", "1");
+        if ("REG".equals(session.control)) packet.put("refresh", "1");
+        packet.put("data", List.of(Map.of("item", session.controlSymbols.stream().sorted().toList(),
+                "type", List.of("0B", "0D"))));
+        session.send(JSON.writeValueAsString(packet));
+    }
+
     /** 연결 유효성과 가격의 시장 시각은 별개다. */
     public synchronized Optional<StockPrice> latest(String symbol) {
-        if (state != State.SUBSCRIBED || session == null
-                || !clock.instant().isBefore(session.lastMessage.plusSeconds(90))) {
+        if (!isRegistered(symbol)) {
             return Optional.empty();
         }
         return Optional.ofNullable(prices.get(symbol));
@@ -79,33 +165,39 @@ public class KiwoomStockStream {
 
     /** 호가 시각/수신 시각은 별도로 확인해야 한다. 연결 생존만으로 체결 가능성을 보장하지 않는다. */
     public synchronized Optional<OrderBook> latestOrderBook(String symbol) {
-        if (state != State.SUBSCRIBED || session == null
-                || !clock.instant().isBefore(session.lastMessage.plusSeconds(90))) {
+        if (!isRegistered(symbol)) {
             return Optional.empty();
         }
         return Optional.ofNullable(books.get(symbol));
     }
 
     @Scheduled(fixedDelay = 5000)
-    public synchronized void maintainConnection() {
-        if (!enabled || stopped) {
-            return;
-        }
-        Instant now = clock.instant();
-        if (session != null) {
-            boolean handshakeTimeout = state != State.SUBSCRIBED
-                    && !now.isBefore(session.startedAt.plusSeconds(10));
-            boolean idleTimeout = !now.isBefore(session.lastMessage.plusSeconds(90));
-            if (handshakeTimeout || idleTimeout) {
-                disconnect(session);
+    public void maintainConnection() {
+        final Session next;
+        synchronized (this) {
+            if (!enabled || stopped) return;
+            if (symbols.isEmpty()) return;
+            Instant now = clock.instant();
+            if (session != null) {
+                boolean handshakeTimeout = !session.authenticated
+                        && !now.isBefore(session.startedAt.plusSeconds(10));
+                boolean controlTimeout = session.control != null
+                        && !now.isBefore(session.controlStartedAt.plusSeconds(10));
+                boolean idleTimeout = !now.isBefore(session.lastMessage.plusSeconds(90));
+                if (handshakeTimeout || controlTimeout || idleTimeout) disconnect(session);
+                return;
             }
-            return;
-        }
-        try {
-            var next = new Session(tokens.accessToken(), now);
+            next = new Session(now);
             session = next;
             state = State.CONNECTING;
-            http.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(5))
+        }
+        try {
+            // 토큰 HTTP 요청 중에도 주문의 구독 대기 시간과 시세 수신이 막히지 않게 한다.
+            String token = tokens.accessToken();
+            synchronized (this) {
+                if (session != next || stopped) return;
+                next.token = token;
+                http.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(5))
                     .buildAsync(URL, next).whenComplete((socket, error) -> {
                         synchronized (KiwoomStockStream.this) {
                             if (error != null) {
@@ -115,10 +207,9 @@ public class KiwoomStockStream {
                             }
                         }
                     });
-        } catch (RuntimeException error) {
-            if (session != null) {
-                disconnect(session);
             }
+        } catch (RuntimeException error) {
+            disconnect(next);
             log.warn("키움 실시간 연결 준비에 실패했습니다. 다음 주기에 재시도합니다.");
         }
     }
@@ -128,6 +219,10 @@ public class KiwoomStockStream {
             return;
         }
         session = null;
+        registered.clear();
+        registrations.values().forEach(future -> future.completeExceptionally(
+                new IllegalStateException("키움 시세 구독 연결이 종료되었습니다.")));
+        registrations.clear();
         prices.clear();
         books.clear();
         state = stopped ? State.STOPPED : State.DISCONNECTED;
@@ -149,6 +244,9 @@ public class KiwoomStockStream {
         prices.clear();
         books.clear();
         state = State.STOPPED;
+        registrations.values().forEach(future -> future.completeExceptionally(
+                new IllegalStateException("시세 구독이 종료되었습니다.")));
+        registrations.clear();
         http.shutdownNow();
     }
 
@@ -188,9 +286,12 @@ public class KiwoomStockStream {
         private WebSocket socket;
         private final StringBuilder fragments = new StringBuilder();
         private CompletableFuture<?> sends = CompletableFuture.completedFuture(null);
+        private boolean authenticated;
+        private String control;
+        private Set<String> controlSymbols = Set.of();
+        private Instant controlStartedAt;
 
-        private Session(String token, Instant now) {
-            this.token = token;
+        private Session(Instant now) {
             startedAt = now;
             lastMessage = now;
         }
@@ -259,26 +360,35 @@ public class KiwoomStockStream {
                         throw new IllegalStateException();
                     }
                     token = null;
-                    state = State.SUBSCRIBING;
-                    send(JSON.writeValueAsString(Map.of("trnm", "REG", "grp_no", "1", "refresh", "1",
-                            "data", List.of(Map.of("item", symbols, "type", List.of("0B", "0D"))))));
+                    authenticated = true;
+                    synchronizeSubscriptions();
                 }
-                case "REG" -> {
-                    if (state != State.SUBSCRIBING || !"0".equals(message.path("return_code").asText())) {
+                case "REG", "REMOVE" -> {
+                    if (!message.path("trnm").asText().equals(control)
+                            || !"0".equals(message.path("return_code").asText())) {
                         throw new IllegalStateException();
                     }
-                    state = State.SUBSCRIBED;
-                    log.info("키움 현재가·호가 구독에 성공했습니다. 종목 수: {}", symbols.size());
+                    if ("REG".equals(control)) registered.addAll(controlSymbols);
+                    else registered.removeAll(controlSymbols);
+                    control = null;
+                    controlSymbols = Set.of();
+                    lastMessage = clock.instant();
+                    registrations.entrySet().removeIf(entry -> {
+                        if (!isRegistered(entry.getKey())) return false;
+                        entry.getValue().complete(null);
+                        return true;
+                    });
+                    synchronizeSubscriptions();
                 }
                 case "PING" -> send(text);
                 case "REAL" -> {
-                    if (state != State.SUBSCRIBED || !message.path("data").isArray()) {
+                    if (!authenticated || !message.path("data").isArray()) {
                         return;
                     }
                     for (JsonNode entry : message.path("data")) {
                         String type = entry.path("type").asText();
                         String code = entry.path("item").asText();
-                        if (!symbols.contains(code)) {
+                        if (!isRegistered(code)) {
                             continue;
                         }
                         JsonNode values = entry.path("values");

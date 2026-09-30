@@ -1,11 +1,17 @@
 package com.stock_spoon.river_be.order;
 
+import java.util.List;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import java.util.Optional;
 
 public interface OrderRepository extends JpaRepository<Order, Long> {
+    List<Order> findAllByStatus(Order.Status status);
+
+    @Query("select distinct o.stockCode from Order o where o.status = :status")
+    java.util.Set<String> findStockCodesByStatus(@Param("status") Order.Status status);
+
     @Query("select o from Order o where o.id = :orderId and o.account.id = :accountId")
     Optional<Order> findByIdAndAccountId(@Param("orderId") Long orderId, @Param("accountId") Long accountId);
 

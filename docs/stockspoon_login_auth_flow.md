@@ -621,3 +621,25 @@ BE 테스트에서는 실제 카카오 서버 대신 모의 응답을 사용해 
 - 로그아웃 시 Refresh Token 폐기와 두 쿠키 삭제
 
 FE에서는 `state` 일치·불일치·누락·만료·재사용, 로그인 동의 취소와 콜백 중복 처리를 별도로 테스트한다. 실제 카카오 연동은 앱 키와 FE 주소가 정해진 후 브라우저에서 확인한다.
+
+## 로컬 FE와 배포 FE의 CORS 동시 허용
+
+`FRONTEND_ORIGIN`은 쉼표로 구분한 여러 origin을 지원한다. 기존 단일 값도 그대로 사용할 수 있다.
+
+```dotenv
+FRONTEND_ORIGIN=https://실제-FE-도메인,http://localhost:3001
+```
+
+배포 환경에서 기존 FE origin을 유지하고 로컬 주소를 추가한 뒤 변경된 BE를 배포·재시작해야 한다. origin은 스킴·호스트·포트까지 정확히 지정하고 경로나 끝의 `/`는 넣지 않는다. `*`는 사용하지 않는다. 공백과 빈 항목은 제거된다.
+
+FE는 `/csrf` 응답을 기다린 뒤 응답 본문의 토큰을 `X-XSRF-TOKEN` 헤더에 넣어 `/login`을 호출한다. 두 요청 모두 `credentials: "include"`가 필요하다.
+
+주의: CORS 허용만으로 브라우저의 쿠키 정책이 바뀌지는 않는다. 현재 인증·CSRF 쿠키는 `SameSite=Lax`이므로 localhost에서 다른 사이트의 배포 BE로 직접 fetch하면 쿠키가 제한될 수 있다. 로컬 FE 개발 서버의 동일 출처 프록시 사용 또는 별도 테스트 환경의 `SameSite=None; Secure` 정책을 FE·인프라 담당자와 결정해야 한다. 후자는 제3자 쿠키 차단의 영향도 받는다. 이번 변경은 쿠키 정책을 변경하지 않는다. 카카오 인가코드 요청과 BE 토큰 교환의 Redirect URI도 일치해야 한다.
+
+`SecurityJwtTests`에서 배포·로컬 origin의 로그인 preflight 및 CSRF 조회 허용과 미등록 origin 거부를 확인한다. 실제 배포 환경에서의 쿠키 저장·전송과 카카오 로그인은 브라우저 연동 확인이 별도로 필요하다.
+
+### 로컬 BE를 ngrok으로 열어 로그인 확인하기
+
+로컬 `.env.local`에서 `AUTH_CSRF_DISABLED=true`, `AUTH_COOKIE_SAME_SITE=None`, `AUTH_COOKIE_SECURE=true`로 설정하고 BE를 재시작한다. 이때 API의 CSRF 검증은 건너뛰지만 `/api/v1/auth/csrf` 응답은 유지된다. FE는 테스트 중 `/csrf` 호출을 생략해도 된다. ngrok HTTPS 주소에서 발급되는 인증 쿠키는 `SameSite=None; Secure`를 사용한다. 기본 설정은 CSRF 검증 활성화, `SameSite=Lax`다. `.env.local`은 Git에 포함되지 않으므로 배포 서버 설정은 별도로 관리한다.
+
+브라우저가 제3자 쿠키를 차단하면 `SameSite=None`이어도 localhost FE에서 ngrok BE의 쿠키 인증이 실패할 수 있다. 그 경우 FE 개발 서버의 프록시를 사용한다. 테스트가 끝나면 로컬 우회 설정을 해제한다.

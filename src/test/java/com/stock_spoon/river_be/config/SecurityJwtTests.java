@@ -27,12 +27,15 @@ import com.stock_spoon.river_be.auth.service.AuthService;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest(properties = {
         "kakao.client-id=test-app",
-        "kakao.redirect-uri=http://localhost:3000/callback"
+        "kakao.redirect-uri=http://localhost:3000/callback",
+        "kakao.frontend-origin=https://app.example.com, http://localhost:3001, "
 })
 @Import(SecurityJwtTests.ProtectedController.class)
 @Transactional
@@ -47,6 +50,27 @@ class SecurityJwtTests {
     @BeforeEach
     void setup() {
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
+    }
+
+    @Test
+    void corsAllowsConfiguredOriginsAndRejectsOthers() throws Exception {
+        for (String origin : new String[] {"https://app.example.com", "http://localhost:3001"}) {
+            mvc.perform(options("/api/v1/auth/login")
+                            .header("Origin", origin)
+                            .header("Access-Control-Request-Method", "POST")
+                            .header("Access-Control-Request-Headers", "Content-Type,X-XSRF-TOKEN"))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Access-Control-Allow-Origin", origin))
+                    .andExpect(header().string("Access-Control-Allow-Credentials", "true"));
+            mvc.perform(get("/api/v1/auth/csrf").header("Origin", origin))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Access-Control-Allow-Origin", origin));
+        }
+        mvc.perform(options("/api/v1/auth/login")
+                        .header("Origin", "https://untrusted.example.com")
+                        .header("Access-Control-Request-Method", "POST"))
+                .andExpect(status().isForbidden())
+                .andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
     }
 
     @Test

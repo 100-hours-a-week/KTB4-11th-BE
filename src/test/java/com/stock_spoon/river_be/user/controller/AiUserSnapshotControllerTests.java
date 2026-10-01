@@ -62,7 +62,7 @@ class AiUserSnapshotControllerTests {
         var account = accounts.save(new Account(user, "AI 계좌", 1_000_000));
         holdings.save(new Holding(account, "005930", 10, new BigDecimal("1000000.00")));
         var order = orders.save(Order.pendingLimit(account, "005930", Order.Side.SELL, 2,
-                250_000, Order.Source.AI, null, null, Instant.now()));
+                250_000, Order.Source.AI, null, Instant.now()));
         when(stream.latest("005930")).thenReturn(Optional.of(new KiwoomStockStream.StockPrice(
                 "005930", new BigDecimal("200000"), BigDecimal.ZERO, BigDecimal.ZERO,
                 LocalTime.NOON, Instant.parse("2026-09-28T03:00:00Z"))));
@@ -90,7 +90,7 @@ class AiUserSnapshotControllerTests {
         var user = users.save(new User("사용자"));
         var account = accounts.save(new Account(user, "AI 계좌", 1_000_000));
         orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY, 1, 150_000,
-                Order.Source.AI, null, null, Instant.now()));
+                Order.Source.AI, null, Instant.now()));
         when(stream.latest("005930")).thenReturn(Optional.empty());
 
         mvc.perform(get("/api/v1/users/ai-server").cookie(aiCookie()))

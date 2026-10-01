@@ -23,4 +23,7 @@ public interface AccountRepository extends JpaRepository<Account, Long> {
     Optional<Account> findByIdAndUserIdAndActiveTrue(Long accountId, Long userId);
 
     List<Account> findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(Long userId);
+
+    @Query("select a from Account a join fetch a.user where a.active = true and a.aiManaged = true order by a.user.id, a.createdAt, a.id")
+    List<Account> findActiveAiManaged();
 }

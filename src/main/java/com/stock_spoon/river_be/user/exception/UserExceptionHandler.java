@@ -7,6 +7,12 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class UserExceptionHandler {
+    @ExceptionHandler(AiSnapshotUnavailableException.class)
+    ResponseEntity<Map<String, String>> handle(AiSnapshotUnavailableException error) {
+        return ResponseEntity.status(503)
+                .body(Map.of("code", "MARKET_DATA_UNAVAILABLE", "message", error.getMessage()));
+    }
+
     @ExceptionHandler(UserNotFoundException.class)
     ResponseEntity<Map<String, String>> handle(UserNotFoundException error) {
         return ResponseEntity.status(404)

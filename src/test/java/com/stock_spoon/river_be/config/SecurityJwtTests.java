@@ -126,7 +126,7 @@ class SecurityJwtTests {
     }
 
     @Test
-    void onlyAiServerCookieCanReachTheFutureUserSnapshotEndpoint() throws Exception {
+    void onlyAiServerCookieCanReachTheUserSnapshotEndpoint() throws Exception {
         String path = "/api/v1/users/ai-server";
         mvc.perform(get(path)).andExpect(status().isUnauthorized());
         mvc.perform(get(path).header("Authorization", "Bearer " + aiToken("ai-server", "access", "AI")))
@@ -137,9 +137,9 @@ class SecurityJwtTests {
                 .andExpect(status().isForbidden());
         mvc.perform(get(path).cookie(new Cookie("access_token", aiToken("ai-server", "refresh", "AI"))))
                 .andExpect(status().isUnauthorized());
-        // 아직 GET 컨트롤러가 없으므로 인증·인가를 통과한 요청은 404에 도달한다.
         mvc.perform(get(path).cookie(new Cookie("access_token", aiToken("ai-server", "access", "AI"))))
-                .andExpect(status().isNotFound());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.users").isArray());
     }
 
     @Test

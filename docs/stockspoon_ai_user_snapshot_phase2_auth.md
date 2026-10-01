@@ -1,5 +1,8 @@
 # AI 서버용 전체 사용자 조회: 2단계 인증
 
+> 이 문서는 인증 구현 당시의 기록이다. 이후 GET 컨트롤러와 최종 응답을 구현했으며,
+> [AI 사용자 조회 API](stockspoon_ai_user_snapshot_api.md)에 현재 동작을 기록했다.
+
 ## 확정된 요청 방식
 
 AI 서버는 `GET /api/v1/users/ai-server` 요청에 `access_token` 쿠키를 보낸다.

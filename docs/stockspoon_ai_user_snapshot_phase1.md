@@ -1,5 +1,8 @@
 # AI 서버용 전체 사용자 정보 조회: 1단계
 
+> 이 문서는 1단계 당시의 기록이다. 이후 현재가와 HTTP 응답을 연결한 최종 흐름은
+> [AI 사용자 조회 API](stockspoon_ai_user_snapshot_api.md)를 참고한다.
+
 ## 이번 단계의 범위
 
 `GET /api/v1/users/ai-server`의 DB 조회 부분을 준비한다. HTTP 경로, AI 서버 인증,

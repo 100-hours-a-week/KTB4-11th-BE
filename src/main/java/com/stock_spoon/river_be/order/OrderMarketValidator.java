@@ -30,6 +30,14 @@ public class OrderMarketValidator {
     }
 
     public void validateLimit(String stockCode, long limitPrice) {
+        var info = validateMarket(stockCode);
+        long tick = tickSize(limitPrice, "8".equals(info.marketCode()));
+        if (limitPrice <= 0 || limitPrice % tick != 0) {
+            throw new OrderException("지정가가 호가가격단위에 맞지 않습니다.");
+        }
+    }
+
+    public KiwoomMarketClient.StockInfo validateMarket(String stockCode) {
         LocalTime now = LocalTime.ofInstant(clock.instant(), SEOUL);
         if (now.isBefore(OPEN) || !now.isBefore(CLOSE)) {
             throw new OrderException(HttpStatus.CONFLICT, "ORDER_WINDOW_CLOSED",
@@ -45,10 +53,7 @@ public class OrderMarketValidator {
         if (!SUPPORTED_MARKETS.contains(info.marketCode())) {
             throw new OrderException("지원하는 주문 대상 종목이 아닙니다.");
         }
-        long tick = tickSize(limitPrice, "8".equals(info.marketCode()));
-        if (limitPrice <= 0 || limitPrice % tick != 0) {
-            throw new OrderException("지정가가 호가가격단위에 맞지 않습니다.");
-        }
+        return info;
     }
 
     static long tickSize(long price, boolean etp) {

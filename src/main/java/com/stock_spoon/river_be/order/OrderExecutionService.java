@@ -35,6 +35,89 @@ public class OrderExecutionService {
         this.clock = clock;
     }
 
+    /** 시장가 매수: 전량 검증 후 주문·체결·자산을 계좌 잠금 아래 함께 반영한다. */
+    @Transactional
+    public Order executeMarketBuy(long userId, long accountId, String stockCode, long quantity,
+            String reason, com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.OrderBook book) {
+        if (stockCode == null || !stockCode.matches("[0-9]{6}") || quantity <= 0
+                || reason == null || reason.isBlank() || reason.length() > 100000) {
+            throw new OrderException("주문 입력값을 확인하세요.");
+        }
+        var account = accounts.findLockedById(accountId)
+                .orElseThrow(() -> new OrderException("계좌를 찾을 수 없습니다."));
+        if (!account.belongsTo(userId)) {
+            throw new OrderException(org.springframework.http.HttpStatus.FORBIDDEN,
+                    "FORBIDDEN_ACCOUNT", "이 계좌에 주문할 권한이 없습니다.");
+        }
+        if (!account.isActive() || !account.isAiManaged()) {
+            throw new OrderException("운용 가능한 자동매매 계좌가 아닙니다.");
+        }
+        var now = clock.instant();
+        var local = now.atZone(SEOUL);
+        if (local.toLocalTime().isBefore(LocalTime.of(9, 0))
+                || !local.toLocalTime().isBefore(LocalTime.of(15, 30))) {
+            throw new OrderException(org.springframework.http.HttpStatus.CONFLICT,
+                    "ORDER_WINDOW_CLOSED", "주문 생성은 한국 시간 09:00부터 15:30 전까지 가능합니다.");
+        }
+        if (book == null || !stockCode.equals(book.stockCode()) || book.receivedAt() == null
+                || book.quoteTime() == null || book.receivedAt().isAfter(now)
+                || book.receivedAt().isBefore(now.minusSeconds(5))) {
+            throw unavailableBook();
+        }
+        var quotedAt = local.toLocalDate().atTime(book.quoteTime()).atZone(SEOUL).toInstant();
+        if (!book.receivedAt().atZone(SEOUL).toLocalDate().equals(local.toLocalDate())
+                || quotedAt.isBefore(now.minusSeconds(5)) || quotedAt.isAfter(now.plusSeconds(1))) {
+            throw unavailableBook();
+        }
+        var fills = new java.util.ArrayList<com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.QuoteLevel>();
+        long remaining = quantity;
+        long amount = 0;
+        try {
+            for (var level : book.asks()) {
+                if (level == null || level.price() == null || level.price().signum() < 0
+                        || level.quantity() < 0 || (level.quantity() > 0 && level.price().signum() == 0)) {
+                    throw unavailableBook();
+                }
+                try {
+                    level.price().longValueExact();
+                } catch (ArithmeticException error) {
+                    throw unavailableBook();
+                }
+            }
+            for (var level : book.asks().stream()
+                    .sorted(java.util.Comparator.comparing(com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.QuoteLevel::price)).toList()) {
+                if (remaining == 0) break;
+                long filled = Math.min(remaining, level.quantity());
+                if (filled == 0) continue;
+                amount = Math.addExact(amount, Math.multiplyExact(level.price().longValueExact(), filled));
+                fills.add(new com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.QuoteLevel(level.price(), filled));
+                remaining -= filled;
+            }
+        } catch (ArithmeticException error) {
+            throw new OrderException("호가 또는 주문금액이 허용 범위를 초과합니다.");
+        }
+        if (remaining != 0) throw new OrderException("시장가 주문을 전량 체결할 매도 잔량이 부족합니다.");
+        long available = Math.subtractExact(account.getCashBalance(),
+                orders.reservedCash(accountId, Order.Status.PENDING));
+        if (available < amount) throw new OrderException("주문 가능 현금이 부족합니다.");
+        var order = orders.save(Order.pendingMarketBuy(account, stockCode, quantity, reason, now));
+        account.changeCash(-amount);
+        var cost = BigDecimal.valueOf(amount);
+        var holding = holdings.findByAccountIdAndStockCode(accountId, stockCode);
+        if (holding.isPresent()) holding.get().add(quantity, cost);
+        else holdings.save(new Holding(account, stockCode, quantity, cost));
+        for (var fill : fills) {
+            executions.save(new Execution(order, fill.price().longValueExact(), fill.quantity(), null, null, now));
+        }
+        order.execute();
+        return order;
+    }
+
+    private static OrderException unavailableBook() {
+        return new OrderException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                "MARKET_DATA_UNAVAILABLE", "사용 가능한 최신 호가를 확인할 수 없습니다.");
+    }
+
     @Transactional
     public boolean executeLimit(long accountId, long orderId, long currentPrice) {
         if (currentPrice <= 0) throw new IllegalArgumentException("현재가는 양수여야 합니다.");

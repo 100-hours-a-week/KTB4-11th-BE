@@ -14,6 +14,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/v1/accounts/{accountId}/orders")
 public class OrderController {
+    private final OrderExecutionService marketExecution;
+    private final com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream stream;
     private final OrderHistoryService history;
     private final OrderService orders;
     private final OrderMarketValidator market;
@@ -21,7 +23,11 @@ public class OrderController {
     private final OrderExecutionListener execution;
 
     public OrderController(OrderService orders, OrderMarketValidator market,
-            OrderSubscriptionService subscriptions, OrderExecutionListener execution, OrderHistoryService history) {
+            OrderSubscriptionService subscriptions, OrderExecutionListener execution, OrderHistoryService history,
+            OrderExecutionService marketExecution,
+            com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream stream) {
+        this.marketExecution = marketExecution;
+        this.stream = stream;
         this.history = history;
         this.orders = orders;
         this.market = market;
@@ -49,8 +55,9 @@ public class OrderController {
             throw new OrderException(HttpStatus.FORBIDDEN, "AI_ORDER_ONLY",
                     "AI 서버만 주문을 생성할 수 있습니다.");
         }
-        if (!"limit".equalsIgnoreCase(request.orderType())) {
-            throw new OrderException("현재는 지정가 주문만 지원합니다.");
+        boolean marketBuy = "market".equalsIgnoreCase(request.orderType());
+        if (!marketBuy && !"limit".equalsIgnoreCase(request.orderType())) {
+            throw new OrderException("주문 유형을 확인하세요.");
         }
         Order.Side side;
         try {
@@ -58,7 +65,10 @@ public class OrderController {
         } catch (IllegalArgumentException error) {
             throw new OrderException("매수·매도 구분을 확인하세요.");
         }
-        if (request.limitPrice() == null || request.limitPrice() <= 0) {
+        if (marketBuy && (side != Order.Side.BUY || request.limitPrice() != null)) {
+            throw new OrderException("시장가 주문은 매수만 지원하며 지정가는 null이어야 합니다.");
+        }
+        if (!marketBuy && (request.limitPrice() == null || request.limitPrice() <= 0)) {
             throw new OrderException("지정가를 입력하세요.");
         }
         if (request.reason() == null) {
@@ -71,6 +81,13 @@ public class OrderController {
             throw new OrderException(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", "인증 정보를 확인하세요.");
         }
         orders.assertOrderableAccount(userId, accountId);
+        if (marketBuy) {
+            market.validateMarket(request.stockCode());
+            var order = subscriptions.create(request.stockCode(), () -> marketExecution.executeMarketBuy(
+                    userId, accountId, request.stockCode(), request.quantity(), request.reason(),
+                    stream.latestOrderBook(request.stockCode()).orElse(null)));
+            return execution.response(accountId, order.getId());
+        }
         market.validateLimit(request.stockCode(), request.limitPrice());
         Order order = subscriptions.create(request.stockCode(), () -> orders.reserveLimit(userId, accountId, request.stockCode(), side,
                 request.quantity(), request.limitPrice(), request.reason()));

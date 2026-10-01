@@ -60,6 +60,21 @@ public class Order {
         return order;
     }
 
+    public static Order pendingMarketBuy(Account account, String stockCode, long quantity,
+            String reason, Instant now) {
+        var order = new Order();
+        order.account = account;
+        order.stockCode = stockCode;
+        order.side = Side.BUY;
+        order.type = Type.MARKET;
+        order.status = Status.PENDING;
+        order.source = Source.AI;
+        order.quantity = quantity;
+        order.report = new AiOrderReport(order, reason);
+        order.createdAt = now;
+        return order;
+    }
+
     public void execute() {
         if (status != Status.PENDING) throw new IllegalStateException("대기 주문만 체결할 수 있습니다.");
         status = Status.EXECUTED;

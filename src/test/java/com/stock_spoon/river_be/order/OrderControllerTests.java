@@ -48,6 +48,18 @@ class OrderControllerTests {
         }
     }
 
+    @org.springframework.boot.test.context.TestConfiguration
+    static class MarketExecutionClock {
+        @org.springframework.context.annotation.Bean
+        @org.springframework.context.annotation.Primary
+        OrderExecutionService fixedExecution(AccountRepository accounts, OrderRepository orders,
+                HoldingRepository holdings, ExecutionRepository executions) {
+            return new OrderExecutionService(accounts, orders, holdings, executions,
+                    java.time.Clock.fixed(Instant.parse("2026-10-01T01:00:00Z"), java.time.ZoneOffset.UTC));
+        }
+    }
+
+    @Autowired HoldingRepository holdings;
     @Autowired WebApplicationContext context;
     @Autowired UserRepository users;
     @Autowired AccountRepository accounts;
@@ -251,6 +263,93 @@ class OrderControllerTests {
                         "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), Long.MAX_VALUE)
                         .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
                 .andExpect(status().isNotFound());
+    }
+
+    private String marketBody(long quantity, String price) {
+        return "{\"stock_code\":\"005930\",\"order_side\":\"buy\",\"order_type\":\"market\","
+                + "\"limit_price\":" + price + ",\"quantity\":" + quantity + ",\"reason\":\"매수 판단\"}";
+    }
+
+    private void marketBook(Instant receivedAt, java.time.LocalTime quoteTime) {
+        var asks = java.util.List.of(
+                new KiwoomStockStream.QuoteLevel(new java.math.BigDecimal("70200"), 5),
+                new KiwoomStockStream.QuoteLevel(new java.math.BigDecimal("70000"), 3),
+                new KiwoomStockStream.QuoteLevel(new java.math.BigDecimal("70100"), 4));
+        when(stream.latestOrderBook("005930")).thenReturn(java.util.Optional.of(
+                new KiwoomStockStream.OrderBook("005930", asks, java.util.List.of(), quoteTime, receivedAt)));
+    }
+
+    private org.springframework.test.web.servlet.ResultActions marketRequest(long quantity, String price) throws Exception {
+        return mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                .content(marketBody(quantity, price)));
+    }
+
+    @Test
+    void marketBuyConsumesLowestAsksAndUpdatesAssets() throws Exception {
+        marketBook(Instant.parse("2026-10-01T01:00:00Z"), java.time.LocalTime.of(10, 0));
+        holdings.save(new Holding(account, "005930", 2, new java.math.BigDecimal("120000")));
+        marketRequest(10, "null").andExpect(status().isCreated())
+                .andExpect(jsonPath("$.order_type").value("market"))
+                .andExpect(jsonPath("$.order_status").value("executed"))
+                .andExpect(jsonPath("$.reserved_cash").value(0))
+                .andExpect(jsonPath("$.limit_price").isEmpty())
+                .andExpect(jsonPath("$.executions.length()").value(3))
+                .andExpect(jsonPath("$.executions[0].execution_price").value(70000))
+                .andExpect(jsonPath("$.executions[0].execution_quantity").value(3))
+                .andExpect(jsonPath("$.executions[1].execution_quantity").value(4))
+                .andExpect(jsonPath("$.executions[2].execution_quantity").value(3))
+                .andExpect(jsonPath("$.executions[0].realized_pnl").isEmpty());
+        assertThat(account.getCashBalance()).isEqualTo(299000);
+        var held = holdings.findByAccountIdAndStockCode(account.getId(), "005930").orElseThrow();
+        assertThat(held.getQuantity()).isEqualTo(12);
+        assertThat(held.getTotalCost()).isEqualByComparingTo("821000");
+    }
+
+    @Test
+    void marketBuyRejectsMissingBookWithoutSaving() throws Exception {
+        marketRequest(1, "null").andExpect(status().isServiceUnavailable());
+        assertThat(orders.count()).isZero();
+        assertThat(executions.count()).isZero();
+        assertThat(account.getCashBalance()).isEqualTo(1000000);
+    }
+
+    @Test
+    void marketBuyRejectsInsufficientLiquidityWithoutPartialFills() throws Exception {
+        marketBook(Instant.parse("2026-10-01T01:00:00Z"), java.time.LocalTime.of(10, 0));
+        marketRequest(13, "null").andExpect(status().isBadRequest());
+        assertThat(orders.count()).isZero();
+        assertThat(executions.count()).isZero();
+        assertThat(holdings.count()).isZero();
+        assertThat(account.getCashBalance()).isEqualTo(1000000);
+    }
+
+    @Test
+    void marketBuyAccountsForPendingReservations() throws Exception {
+        orders.save(Order.pendingLimit(account, "000660", Order.Side.BUY, 3, 100000,
+                Order.Source.AI, "예약", Instant.parse("2026-10-01T01:00:00Z")));
+        marketBook(Instant.parse("2026-10-01T01:00:00Z"), java.time.LocalTime.of(10, 0));
+        marketRequest(10, "null").andExpect(status().isBadRequest());
+        assertThat(orders.count()).isEqualTo(1);
+        assertThat(executions.count()).isZero();
+        assertThat(account.getCashBalance()).isEqualTo(1000000);
+    }
+
+    @Test
+    void marketBuyRejectsOldOrFutureBookAndNonNullLimit() throws Exception {
+        for (var received : java.util.List.of(Instant.parse("2026-10-01T00:59:54Z"),
+                Instant.parse("2026-10-01T01:00:01Z"))) {
+            marketBook(received, java.time.LocalTime.of(10, 0));
+            marketRequest(1, "null").andExpect(status().isServiceUnavailable());
+        }
+        for (var quote : java.util.List.of(java.time.LocalTime.of(9, 59, 54), java.time.LocalTime.of(10, 0, 2))) {
+            marketBook(Instant.parse("2026-10-01T01:00:00Z"), quote);
+            marketRequest(1, "null").andExpect(status().isServiceUnavailable());
+        }
+        marketRequest(1, "0").andExpect(status().isBadRequest());
+        marketRequest(1, "70000").andExpect(status().isBadRequest());
+        assertThat(orders.count()).isZero();
+        assertThat(executions.count()).isZero();
     }
 
     private Cookie aiCookie(User owner) {

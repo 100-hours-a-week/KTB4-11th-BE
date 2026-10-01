@@ -1,3 +1,5 @@
+> 2026-10-01 변경: 아래 decision_id/summary 계약과 주문 행의 근거 저장 설명은 이전 구현 기록입니다. 현재 reason은 문자열이며 주문과 1:1인 ai_order_reports에 저장합니다. 최신 계약은 [AI 리포트 상세 조회](stockspoon_ai_report.md)를 참고하세요.
+
 # 주문 생성 구현 흐름과 정책 결정 (v1)
 
 이 문서는 `feat/13-order`의 주문 생성 HTTP API가 어떤 순서로 동작하는지와 구현 중 확정한 정책을 기록한다. 요청·응답의 간단한 계약은 [주문 생성 API](stockspoon_order_create.md), 앞서 만든 예약·취소 내부 규칙은 [주문 1단계](stockspoon_order_phase1.md)를 참고한다. 현재 주문은 **BE 내부 모의 주문**이며 키움에는 주문을 보내지 않는다.

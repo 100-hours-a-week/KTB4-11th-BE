@@ -59,8 +59,7 @@ public class OrderController {
         orders.assertOrderableAccount(userId, accountId);
         market.validateLimit(request.stockCode(), request.limitPrice());
         Order order = subscriptions.create(request.stockCode(), () -> orders.reserveLimit(userId, accountId, request.stockCode(), side,
-                request.quantity(), request.limitPrice(), request.reason().decisionId(),
-                request.reason().summary()));
+                request.quantity(), request.limitPrice(), request.reason()));
         execution.orderCreated(order);
         return execution.response(accountId, order.getId());
     }

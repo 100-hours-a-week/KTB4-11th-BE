@@ -65,7 +65,7 @@ class OrderControllerTests {
         String body = """
                 {"stock_code":"005930","order_side":"buy","order_type":"limit",
                  "limit_price":70000,"quantity":2,
-                 "reason":{"decision_id":"d-1","summary":"매수 판단"}}
+                 "reason":"매수 판단"}
                 """;
         for (int i = 0; i < 2; i++) {
             mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
@@ -78,8 +78,7 @@ class OrderControllerTests {
         assertThat(orders.count()).isEqualTo(2);
         assertThat(orders.findAll()).allSatisfy(order -> {
             assertThat(order.getSource()).isEqualTo(Order.Source.AI);
-            assertThat(order.getDecisionId()).isEqualTo("d-1");
-            assertThat(order.getDecisionSummary()).isEqualTo("매수 판단");
+            assertThat(order.getReport().getReason()).isEqualTo("매수 판단");
         });
     }
 
@@ -89,7 +88,7 @@ class OrderControllerTests {
         String body = """
                 {"stock_code":"005930","order_side":"buy","order_type":"limit",
                  "limit_price":70000,"quantity":1,
-                 "reason":{"decision_id":"d-2","summary":"매수 판단"}}
+                 "reason":"매수 판단"}
                 """;
         mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
                         .cookie(aiCookie(other)).with(csrf())
@@ -103,7 +102,7 @@ class OrderControllerTests {
         mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
                         .cookie(aiCookie(user)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(body.replace("\"reason\":{\"decision_id\":\"d-2\",\"summary\":\"매수 판단\"}",
+                        .content(body.replace("\"reason\":\"매수 판단\"",
                                 "\"reason\":null")))
                 .andExpect(status().isBadRequest());
         assertThat(orders.count()).isZero();
@@ -117,7 +116,7 @@ class OrderControllerTests {
                         .content("""
                                 {"stock_code":"005930","order_side":"buy","order_type":"limit",
                                  "limit_price":70000,"quantity":1,
-                                 "reason":{"decision_id":"d-3","summary":"매수 판단"}}
+                                 "reason":"매수 판단"}
                                 """))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("AI_ORDER_ONLY"));
@@ -133,13 +132,114 @@ class OrderControllerTests {
                         .content("""
                                 {"stock_code":"005930","order_side":"buy","order_type":"limit",
                                  "limit_price":70000,"quantity":1,
-                                 "reason":{"decision_id":"d-4","summary":"매수 판단"}}
+                                 "reason":"매수 판단"}
                                 """))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value("MARKET_STREAM_UNAVAILABLE"));
         assertThat(orders.count()).isZero();
         assertThat(orders.reservedCash(account.getId(), Order.Status.PENDING)).isZero();
         assertThat(accounts.findById(account.getId()).orElseThrow().getCashBalance()).isEqualTo(1_000_000);
+    }
+
+    @Autowired jakarta.persistence.EntityManager entityManager;
+    @Autowired ExecutionRepository executions;
+
+    @Test
+    void acceptsLongTextAndRejectsInvalidReasonWithoutSaving() throws Exception {
+        String body = "{\"stock_code\":\"005930\",\"order_side\":\"buy\",\"order_type\":\"limit\","
+                + "\"limit_price\":70000,\"quantity\":1,\"reason\":%s}";
+        mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                        .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content(body.formatted("\"" + "근거".repeat(1000) + "\"")))
+                .andExpect(status().isCreated());
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(orders.findAll().getFirst().getReport().getReason()).isEqualTo("근거".repeat(1000));
+        for (String invalid : java.util.List.of("null", "\" \"", "{}", "\"" + "a".repeat(100001) + "\"")) {
+            mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                            .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                            .content(body.formatted(invalid)))
+                    .andExpect(status().isBadRequest());
+        }
+        assertThat(orders.count()).isEqualTo(1);
+        assertThat(((Number) entityManager.createNativeQuery("select count(*) from ai_order_reports")
+                .getSingleResult()).longValue()).isEqualTo(1);
+    }
+
+    @Test
+    void databaseRejectsSecondReportForSameOrder() {
+        var order = orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY,
+                1, 70000, Order.Source.AI, "근거", Instant.now()));
+        entityManager.flush();
+        assertThat(org.assertj.core.api.Assertions.catchThrowable(() -> {
+            entityManager.persist(new AiOrderReport(order, "중복"));
+            entityManager.flush();
+        })).isInstanceOf(jakarta.persistence.PersistenceException.class);
+    }
+
+
+    @Test
+    void readsOwnedReportAndAggregatesSellExecutions() throws Exception {
+        var order = orders.save(Order.pendingLimit(account, "000660", Order.Side.SELL,
+                2, 196000, Order.Source.AI, "매도 판단", Instant.parse("2026-09-03T05:20:00Z")));
+        executions.save(new Execution(order, 196000, 1, new java.math.BigDecimal("9400"),
+                new java.math.BigDecimal("5.0375"), Instant.parse("2026-09-03T05:21:00Z")));
+        executions.save(new Execution(order, 197000, 1, new java.math.BigDecimal("10400"),
+                new java.math.BigDecimal("5.5734"), Instant.parse("2026-09-03T05:22:00Z")));
+        order.execute();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                        "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), order.getId())
+                        .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.summary").value("매도 판단"))
+                .andExpect(jsonPath("$.report_id").doesNotExist())
+                .andExpect(jsonPath("$.stock_name").value("[더미] 종목명"))
+                .andExpect(jsonPath("$.decided_at").value("2026-09-03T14:20:00+09:00"))
+                .andExpect(jsonPath("$.buy_analysis").isEmpty())
+                .andExpect(jsonPath("$.sell_analysis.trade_result.holding_days").value(0))
+                .andExpect(jsonPath("$.sell_analysis.trade_result.target_return_percent").value(0))
+                .andExpect(jsonPath("$.sell_analysis.trade_result.target_reached").value(false))
+                .andExpect(jsonPath("$.sell_analysis.trade_result.stop_loss_triggered").value(false))
+                .andExpect(jsonPath("$.sell_analysis.buy_decision.buy_report_id").value(0))
+                .andExpect(jsonPath("$.sell_analysis.buy_decision.summary").value("[더미] 매수 당시 판단"))
+                .andExpect(jsonPath("$.sell_analysis.holding_changes[0].summary").value("[더미] 보유 중 변화"))
+                .andExpect(jsonPath("$.sell_analysis.sell_decision").value("[더미] 매도 판단"))
+                .andExpect(jsonPath("$.sell_analysis.expectation_vs_outcome.expected_return_min_percent").value(0))
+                .andExpect(jsonPath("$.sell_analysis.expectation_vs_outcome.expected_return_max_percent").value(0))
+                .andExpect(jsonPath("$.sell_analysis.expectation_vs_outcome.summary").value("[더미] 예상과 결과"))
+                .andExpect(jsonPath("$.order_status").doesNotExist())
+                .andExpect(jsonPath("$.execution.execution_count").doesNotExist())
+                .andExpect(jsonPath("$.execution.execution_price").value(196500))
+                .andExpect(jsonPath("$.execution.execution_quantity").value(2))
+                .andExpect(jsonPath("$.execution.trade_amount").value(393000))
+                .andExpect(jsonPath("$.sell_analysis.trade_result.average_buy_price").value(186600))
+                .andExpect(jsonPath("$.sell_analysis.trade_result.realized_pnl").value(19800))
+                .andExpect(jsonPath("$.sell_analysis.trade_result.realized_return_percent").value(5.3055));
+        var other = users.save(new User("다른 조회 사용자"));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                        "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), order.getId())
+                        .cookie(new Cookie("access_token", tokens.issue(other.getId()).accessToken())))
+                .andExpect(status().isForbidden());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                        "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), order.getId()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void pendingReportHasNoExecutionAndMissingReportReturns404() throws Exception {
+        var order = orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY,
+                1, 70000, Order.Source.AI, "판단".repeat(600), Instant.now()));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                        "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), order.getId())
+                        .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.summary").value("판단".repeat(600)))
+                .andExpect(jsonPath("$.order_status").doesNotExist())
+                .andExpect(jsonPath("$.execution").isEmpty());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                        "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), Long.MAX_VALUE)
+                        .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
+                .andExpect(status().isNotFound());
     }
 
     private Cookie aiCookie(User owner) {

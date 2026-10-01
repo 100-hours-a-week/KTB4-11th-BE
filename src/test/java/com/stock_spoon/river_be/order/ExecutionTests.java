@@ -26,7 +26,7 @@ class ExecutionTests {
     void persistsOrderLinkAndPolicyPrecision() {
         var account = accounts.save(new Account(users.save(new User("체결테스트")), "AI 계좌", 1000000));
         var order = orders.save(Order.pendingLimit(account, "005930", Order.Side.SELL,
-                1, 70000, Order.Source.AI, null, null, Instant.now()));
+                1, 70000, Order.Source.AI, null, Instant.now()));
         var execution = executions.save(new Execution(order, 70100, 1,
                 new BigDecimal("123.455"), new BigDecimal("1.23455"), Instant.now()));
         em.flush();

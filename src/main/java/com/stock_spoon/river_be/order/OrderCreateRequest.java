@@ -1,7 +1,6 @@
 package com.stock_spoon.river_be.order;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -14,9 +13,6 @@ public record OrderCreateRequest(
         @JsonProperty("order_type") @NotBlank String orderType,
         @JsonProperty("limit_price") Long limitPrice,
         @NotNull @Min(1) Long quantity,
-        @Valid Reason reason) {
+        @NotBlank @Size(max = 100000) String reason) {
 
-    public record Reason(
-            @JsonProperty("decision_id") @NotBlank @Size(max = 100) String decisionId,
-            @NotBlank @Size(max = 500) String summary) {}
 }

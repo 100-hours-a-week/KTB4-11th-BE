@@ -49,9 +49,9 @@ class AiUserSnapshotServiceTests {
         var inactive = accounts.save(new Account(firstUser, "비활성 계좌", 1_000_000));
         holdings.save(new Holding(active, "005930", 10, new BigDecimal("1000000.00")));
         var pending = orders.save(Order.pendingLimit(active, "005930", Order.Side.BUY, 1,
-                150_000, Order.Source.AI, "decision-1", "매수", Instant.parse("2026-09-28T01:00:00Z")));
+                150_000, Order.Source.AI, "매수", Instant.parse("2026-09-28T01:00:00Z")));
         var cancelled = Order.pendingLimit(active, "005930", Order.Side.SELL, 2,
-                250_000, Order.Source.AI, "decision-2", "매도", Instant.parse("2026-09-28T01:00:00Z"));
+                250_000, Order.Source.AI, "매도", Instant.parse("2026-09-28T01:00:00Z"));
         cancelled.cancel(Instant.parse("2026-09-28T01:01:00Z"));
         orders.save(cancelled);
         // v1은 개별 가격의 수신 후 경과 시간을 제한하지 않는다.
@@ -92,7 +92,7 @@ class AiUserSnapshotServiceTests {
         var second = accounts.save(new Account(user, "둘째 계좌", 1_000_000));
         for (var account : java.util.List.of(first, second)) {
             orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY, 1, 150_000,
-                    Order.Source.AI, null, null, Instant.now()));
+                    Order.Source.AI, null, Instant.now()));
         }
         when(stream.latest("005930")).thenReturn(Optional.of(new KiwoomStockStream.StockPrice(
                 "005930", new BigDecimal("200000"), BigDecimal.ZERO, BigDecimal.ZERO,
@@ -102,7 +102,7 @@ class AiUserSnapshotServiceTests {
         verify(stream, times(1)).latest("005930");
 
         orders.save(Order.pendingLimit(second, "000660", Order.Side.BUY, 1, 250_000,
-                Order.Source.AI, null, null, Instant.now()));
+                Order.Source.AI, null, Instant.now()));
         when(stream.latest("000660")).thenReturn(Optional.empty());
         assertThrows(AiSnapshotUnavailableException.class, service::snapshot);
     }

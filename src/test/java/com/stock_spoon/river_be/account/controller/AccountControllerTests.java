@@ -216,7 +216,7 @@ class AccountControllerTests {
         renameAccount(user, accountId, "변경된 계좌")
                 .andExpect(status().isOk());
         orders.reserveLimit(accountId, "005930", com.stock_spoon.river_be.order.Order.Side.BUY,
-                10, 70_000, null, null);
+                10, 70_000, null);
 
         mvc.perform(get("/api/v1/users/me/accounts/{accountId}", accountId)
                         .cookie(authCookie(user)))

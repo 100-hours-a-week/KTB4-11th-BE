@@ -43,27 +43,26 @@ public class OrderService {
 
     @Transactional
     public Order reserveLimit(long accountId, String stockCode, Order.Side side,
-            long quantity, long limitPrice, String decisionId, String decisionSummary) {
+            long quantity, long limitPrice, String reason) {
         return reserveLimit(null, accountId, stockCode, side, quantity, limitPrice,
-                decisionId, decisionSummary);
+                reason);
     }
 
     @Transactional
     public Order reserveLimit(long userId, long accountId, String stockCode, Order.Side side,
-            long quantity, long limitPrice, String decisionId, String decisionSummary) {
+            long quantity, long limitPrice, String reason) {
         return reserveLimit(Long.valueOf(userId), accountId, stockCode, side, quantity,
-                limitPrice, decisionId, decisionSummary);
+                limitPrice, reason);
     }
 
     private Order reserveLimit(Long userId, long accountId, String stockCode, Order.Side side,
-            long quantity, long limitPrice, String decisionId, String decisionSummary) {
+            long quantity, long limitPrice, String reason) {
         if (side == null || quantity <= 0 || limitPrice <= 0 || stockCode == null
                 || !stockCode.matches("[0-9]{6}")) {
             throw new OrderException("주문 입력값을 확인하세요.");
         }
-        if (decisionSummary != null && decisionSummary.length() > 500
-                || decisionId != null && decisionId.length() > 100) {
-            throw new OrderException("AI 판단 정보의 길이를 확인하세요.");
+        if (reason != null && (reason.isBlank() || reason.length() > 100000)) {
+            throw new OrderException("AI 판단 근거는 공백이 아닌 100,000자 이하의 텍스트여야 합니다.");
         }
         Account account = lockedAccount(accountId);
         if (userId != null && !account.belongsTo(userId)) {
@@ -83,7 +82,7 @@ public class OrderService {
             throw new OrderException("매도 가능 수량이 부족합니다.");
         }
         return orders.save(Order.pendingLimit(account, stockCode, side, quantity,
-                limitPrice, Order.Source.AI, decisionId, decisionSummary, clock.instant()));
+                limitPrice, Order.Source.AI, reason, clock.instant()));
     }
 
     /**

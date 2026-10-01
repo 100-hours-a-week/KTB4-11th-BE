@@ -16,16 +16,14 @@ AI가 서명한 JWT에는 `actor: "AI"`가 있어야 한다. JWT `sub`의 사용
   "order_type": "limit",
   "limit_price": 70000,
   "quantity": 2,
-  "reason": {
-    "decision_id": "decision-1001",
-    "summary": "목표 가격에 접근해 매수를 결정했어요."
-  }
+  "reason": "목표 가격에 접근해 매수를 결정했어요."
 }
 ```
 
-`reason`의 두 필드는 **AI 파트의 상세 근거 형식 확정 전 임시 계약**이다. 현재는 주문의
-`decision_id`, `decision_summary`에 저장한다. 요청 DTO는 향후 사용자 주문의 `reason` 생략·`null`을
-표현할 수 있지만, 사용자 직접 주문을 지원하지 않는 v1 엔드포인트는 근거를 필수로 검사한다.
+`reason`은 필수 문자열이며 공백만 있는 값은 거절한다. 최대 100,000자(Java UTF-16 길이)이며,
+기존 `decision_id`·`summary` 객체는 더 이상 받지 않는다. `ai_order_reports.reason`에 주문과
+같은 트랜잭션으로 저장한다. `order_id` UNIQUE 외래키로 주문당 최대 한 리포트를 보장한다.
+상세 조회와 DB 이관은 [AI 리포트 상세 조회](stockspoon_ai_report.md)를 참고한다.
 `order_source`는 body에서 받지 않고 v1 주문을 `AI`로 저장한다.
 
 현재 주문 생성은 `ka10100`의 시장구분코드 `0`(코스피)과 `8`(국내 ETF)만 허용한다.
@@ -33,7 +31,7 @@ AI가 서명한 JWT에는 `actor: "AI"`가 있어야 한다. JWT `sub`의 사용
 정확히 가려내는지는 검증되지 않았으므로, 이는 상품 유형을 엄격히 제한하는 검사와 다르다.
 
 이번 단계는 지정가만 접수한다. 시장가는 체결 엔진과 함께 구현한다. 동일 요청의 재전송도
-별도 주문으로 접수한다. `decision_id`는 중복 방지 키가 아니다.
+별도 주문으로 접수한다. 요청 재전송의 중복 방지는 현재 제공하지 않는다.
 
 ## 접수 검증
 

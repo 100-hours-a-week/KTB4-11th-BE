@@ -34,10 +34,8 @@ public class Order {
     private Long limitPrice;
     @Column(name = "reserved_cash", nullable = false)
     private long reservedCash;
-    @Column(name = "decision_id", length = 100)
-    private String decisionId;
-    @Column(name = "decision_summary", length = 500)
-    private String decisionSummary;
+    @OneToOne(mappedBy = "order", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    private AiOrderReport report;
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
     @Column(name = "cancelled_at")
@@ -46,8 +44,7 @@ public class Order {
     protected Order() {}
 
     public static Order pendingLimit(Account account, String stockCode, Side side,
-            long quantity, long limitPrice, Source source, String decisionId,
-            String decisionSummary, Instant now) {
+            long quantity, long limitPrice, Source source, String reason, Instant now) {
         var order = new Order();
         order.account = account;
         order.stockCode = stockCode;
@@ -58,8 +55,7 @@ public class Order {
         order.quantity = quantity;
         order.limitPrice = limitPrice;
         order.reservedCash = side == Side.BUY ? Math.multiplyExact(quantity, limitPrice) : 0;
-        order.decisionId = decisionId;
-        order.decisionSummary = decisionSummary;
+        if (reason != null) order.report = new AiOrderReport(order, reason);
         order.createdAt = now;
         return order;
     }
@@ -87,8 +83,7 @@ public class Order {
     public long getQuantity() { return quantity; }
     public Long getLimitPrice() { return limitPrice; }
     public long getReservedCash() { return reservedCash; }
-    public String getDecisionId() { return decisionId; }
-    public String getDecisionSummary() { return decisionSummary; }
+    public AiOrderReport getReport() { return report; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getCancelledAt() { return cancelledAt; }
 }

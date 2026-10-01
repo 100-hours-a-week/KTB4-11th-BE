@@ -14,17 +14,31 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/v1/accounts/{accountId}/orders")
 public class OrderController {
+    private final OrderHistoryService history;
     private final OrderService orders;
     private final OrderMarketValidator market;
     private final OrderSubscriptionService subscriptions;
     private final OrderExecutionListener execution;
 
     public OrderController(OrderService orders, OrderMarketValidator market,
-            OrderSubscriptionService subscriptions, OrderExecutionListener execution) {
+            OrderSubscriptionService subscriptions, OrderExecutionListener execution, OrderHistoryService history) {
+        this.history = history;
         this.orders = orders;
         this.market = market;
         this.subscriptions = subscriptions;
         this.execution = execution;
+    }
+
+    @org.springframework.web.bind.annotation.GetMapping
+    public OrderHistoryResponse list(@AuthenticationPrincipal Jwt jwt, @PathVariable long accountId,
+            @org.springframework.web.bind.annotation.RequestParam(required = false) String limit) {
+        long userId;
+        try {
+            userId = Long.parseLong(jwt.getSubject());
+        } catch (NumberFormatException error) {
+            throw new OrderException(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", "인증 정보를 확인하세요.");
+        }
+        return history.list(userId, accountId, limit);
     }
 
     @PostMapping

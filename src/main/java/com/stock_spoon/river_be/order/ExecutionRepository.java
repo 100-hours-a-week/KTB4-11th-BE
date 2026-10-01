@@ -14,6 +14,10 @@ public interface ExecutionRepository extends JpaRepository<Execution, Long> {
             @org.springframework.data.repository.query.Param("accountId") long accountId,
             @org.springframework.data.repository.query.Param("stockCodes") java.util.List<String> stockCodes);
 
+    @org.springframework.data.jpa.repository.Query("select e from Execution e where e.order.id in :orderIds")
+    java.util.List<Execution> findForOrders(
+            @org.springframework.data.repository.query.Param("orderIds") java.util.List<Long> orderIds);
+
     interface LastBuyTime {
         String getStockCode();
         java.time.Instant getLastPurchasedAt();

@@ -27,6 +27,29 @@ class KiwoomMarketClientTests {
     }
 
     @Test
+    void requestsInitialCurrentPriceAndRejectsMissingOrNonPositivePrice() {
+        server.expect(requestTo("https://api.kiwoom.com/api/dostk/stkinfo"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("api-id", "ka10001"))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer test-token"))
+                .andExpect(content().json("{\"stk_cd\":\"005930\"}"))
+                .andRespond(withSuccess("""
+                        {"return_code":0,"stk_cd":"005930","cur_prc":"-69,000"}
+                        """, MediaType.APPLICATION_JSON));
+        for (String price : new String[]{"0", "invalid", "69000.5"}) {
+            server.expect(requestTo("https://api.kiwoom.com/api/dostk/stkinfo"))
+                    .andRespond(withSuccess("""
+                            {"return_code":0,"stk_cd":"005930","cur_prc":"%s"}
+                            """.formatted(price), MediaType.APPLICATION_JSON));
+        }
+        assertThat(client.currentPrice("005930")).isEqualTo(69000);
+        for (int i = 0; i < 3; i++) {
+            assertThatThrownBy(() -> client.currentPrice("005930")).isInstanceOf(IllegalStateException.class);
+        }
+        server.verify();
+    }
+
+    @Test
     void requestsKospiIndexWithBearerTokenAndParsesSignedNumbers() {
         server.expect(requestTo("https://api.kiwoom.com/api/dostk/sect"))
                 .andExpect(method(HttpMethod.POST))

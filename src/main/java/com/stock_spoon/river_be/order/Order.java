@@ -64,6 +64,12 @@ public class Order {
         return order;
     }
 
+    public void execute() {
+        if (status != Status.PENDING) throw new IllegalStateException("대기 주문만 체결할 수 있습니다.");
+        status = Status.EXECUTED;
+        reservedCash = 0;
+    }
+
     public void cancel(Instant now) {
         if (status != Status.PENDING) throw new IllegalStateException("대기 중인 주문만 취소할 수 있습니다.");
         status = Status.CANCELLED;

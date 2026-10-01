@@ -31,8 +31,9 @@ public class AuthController {
     @PostMapping("/login")
     public KakaoLoginResponse login(@Valid @RequestBody KakaoLoginRequest request,
             HttpServletResponse response) {
-        cookies.write(response, service.login(request.authorizationCode()));
-        return KakaoLoginResponse.loginSuccess();
+        var tokens = service.login(request.authorizationCode());
+        cookies.write(response, tokens);
+        return KakaoLoginResponse.loginSuccess(tokens.userId());
     }
 
     @PostMapping("/reissue")

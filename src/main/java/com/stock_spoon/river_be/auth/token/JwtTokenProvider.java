@@ -35,7 +35,7 @@ public class JwtTokenProvider {
         Instant now = clock.instant();
         Instant accessExpiresAt = now.plus(properties.accessExpiration());
         Instant refreshExpiresAt = now.plus(properties.refreshExpiration());
-        return new LoginTokens(
+        return new LoginTokens(userId,
                 encode(userId, "access", now, accessExpiresAt),
                 encode(userId, "refresh", now, refreshExpiresAt),
                 refreshExpiresAt);

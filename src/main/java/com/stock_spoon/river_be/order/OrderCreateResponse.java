@@ -16,13 +16,26 @@ public record OrderCreateResponse(
         @JsonProperty("order_status") String orderStatus,
         @JsonProperty("reserved_cash") long reservedCash,
         @JsonProperty("created_at") Instant createdAt,
-        List<Object> executions) {
+        List<ExecutionItem> executions) {
 
-    static OrderCreateResponse from(Order order) {
+    static OrderCreateResponse from(Order order, List<Execution> executions) {
         return new OrderCreateResponse("success", order.getId(), order.getAccountId(),
                 order.getStockCode(), order.getSide().name().toLowerCase(java.util.Locale.ROOT),
                 order.getType().name().toLowerCase(java.util.Locale.ROOT), order.getLimitPrice(),
                 order.getQuantity(), order.getStatus().name().toLowerCase(java.util.Locale.ROOT),
-                order.getReservedCash(), order.getCreatedAt(), List.of());
+                order.getReservedCash(), order.getCreatedAt(), executions.stream().map(ExecutionItem::from).toList());
+    }
+
+    public record ExecutionItem(
+            @JsonProperty("execution_id") long executionId,
+            @JsonProperty("execution_price") long executionPrice,
+            @JsonProperty("execution_quantity") long executionQuantity,
+            @JsonProperty("realized_pnl") java.math.BigDecimal realizedPnl,
+            @JsonProperty("realized_return_percent") java.math.BigDecimal realizedReturnPercent,
+            @JsonProperty("created_at") Instant createdAt) {
+        static ExecutionItem from(Execution execution) {
+            return new ExecutionItem(execution.getId(), execution.getPrice(), execution.getQuantity(),
+                    execution.getRealizedPnl(), execution.getRealizedReturnPercent(), execution.getCreatedAt());
+        }
     }
 }

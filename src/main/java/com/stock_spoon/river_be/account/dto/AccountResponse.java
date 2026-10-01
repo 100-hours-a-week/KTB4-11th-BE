@@ -8,10 +8,10 @@ public record AccountResponse(
         @JsonProperty("account_name") String accountName,
         @JsonProperty("initial_capital") long initialCapital,
         @JsonProperty("cash_balance") long cashBalance,
-        @JsonProperty("ai_delegated") boolean aiDelegated) {
+        @JsonProperty("is_ai_managed") boolean aiManaged) {
 
     public static AccountResponse from(Account account) {
         return new AccountResponse(account.getId(), account.getName(),
-                account.getInitialCapital(), account.getCashBalance(), account.isAiDelegated());
+                account.getInitialCapital(), account.getCashBalance(), account.isAiManaged());
     }
 }

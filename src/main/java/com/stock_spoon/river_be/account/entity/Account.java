@@ -38,7 +38,7 @@ public class Account {
     private long cashBalance;
 
     @Column(name = "is_ai_managed", nullable = false)
-    private boolean aiDelegated;
+    private boolean aiManaged;
 
     @Column(name = "is_active", nullable = false)
     private boolean active;
@@ -59,12 +59,16 @@ public class Account {
         this.name = name;
         this.initialCapital = initialCapital;
         this.cashBalance = initialCapital;
-        this.aiDelegated = true;
+        this.aiManaged = true;
         this.active = true;
     }
 
     public Long getId() {
         return id;
+    }
+
+    public User getUser() {
+        return user;
     }
 
     public boolean belongsTo(long userId) {
@@ -83,12 +87,18 @@ public class Account {
         return cashBalance;
     }
 
-    public boolean isAiDelegated() {
-        return aiDelegated;
+    public boolean isAiManaged() {
+        return aiManaged;
     }
 
     public boolean isActive() {
         return active;
+    }
+
+    public void changeCash(long delta) {
+        long next = Math.addExact(cashBalance, delta);
+        if (next < 0) throw new IllegalStateException("현금 잔액이 부족합니다.");
+        cashBalance = next;
     }
 
     public void rename(String name) {

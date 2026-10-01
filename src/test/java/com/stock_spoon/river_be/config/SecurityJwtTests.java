@@ -125,6 +125,42 @@ class SecurityJwtTests {
                 .andExpect(status().isUnauthorized());
     }
 
+    @Test
+    void onlyAiServerCookieCanReachTheUserSnapshotEndpoint() throws Exception {
+        String path = "/api/v1/users/ai-server";
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        mvc.perform(get(path).header("Authorization", "Bearer " + aiToken("ai-server", "access", "AI")))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(get(path).cookie(new Cookie("access_token", aiToken("1", "access", null))))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(path).cookie(new Cookie("access_token", aiToken("1", "access", "AI"))))
+                .andExpect(status().isForbidden());
+        mvc.perform(get(path).cookie(new Cookie("access_token", aiToken("ai-server", "refresh", "AI"))))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(get(path).cookie(new Cookie("access_token", aiToken("ai-server", "access", "AI"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.users").isArray());
+    }
+
+    @Test
+    void aiServerTokenCannotReachOtherProtectedEndpoints() throws Exception {
+        mvc.perform(get("/test/protected")
+                        .cookie(new Cookie("access_token", aiToken("ai-server", "access", "AI"))))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/test/protected")).andExpect(status().isUnauthorized());
+    }
+
+    private String aiToken(String subject, String type, String actor) {
+        Instant now = Instant.now();
+        var claims = JwtClaimsSet.builder().issuer(jwtProperties.issuer()).subject(subject)
+                .issuedAt(now).expiresAt(now.plusSeconds(900)).claim("type", type);
+        if (actor != null) {
+            claims.claim("actor", actor);
+        }
+        return jwtEncoder.encode(JwtEncoderParameters.from(
+                JwsHeader.with(MacAlgorithm.HS256).type("JWT").build(), claims.build())).getTokenValue();
+    }
+
     @RestController
     static class ProtectedController {
         @GetMapping("/test/protected")

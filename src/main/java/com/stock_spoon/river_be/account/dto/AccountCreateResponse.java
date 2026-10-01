@@ -12,6 +12,6 @@ public record AccountCreateResponse(
 
     public static AccountCreateResponse from(Account account) {
         return new AccountCreateResponse(account.getId(), account.getName(),
-                account.getInitialCapital(), account.getCashBalance(), account.isAiDelegated());
+                account.getInitialCapital(), account.getCashBalance(), account.isAiManaged());
     }
 }

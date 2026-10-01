@@ -31,7 +31,7 @@ class OrderExecutionServiceTests {
         return accounts.save(new Account(users.save(new User("체결검증")), "AI 계좌", 1000000));
     }
     private Order pending(Account account, Order.Side side, long quantity, long limit) {
-        return orders.save(Order.pendingLimit(account, "005930", side, quantity, limit, Order.Source.AI, null, null, now));
+        return orders.save(Order.pendingLimit(account, "005930", side, quantity, limit, Order.Source.AI, null, now));
     }
 
     @Test

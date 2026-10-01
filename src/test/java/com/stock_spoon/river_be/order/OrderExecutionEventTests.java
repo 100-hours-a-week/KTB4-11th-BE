@@ -65,7 +65,7 @@ class OrderExecutionEventTests {
 
     private Order order(Account account) {
         return orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY, 1, 70000,
-                Order.Source.AI, null, null, NOW.minusSeconds(1)));
+                Order.Source.AI, null, NOW.minusSeconds(1)));
     }
 
     private KiwoomStockStream.StockPrice price() {

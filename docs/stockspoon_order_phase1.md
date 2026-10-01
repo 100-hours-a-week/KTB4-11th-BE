@@ -1,3 +1,5 @@
+> 2026-10-01 변경: 아래 decision_id/summary 계약과 주문 행의 근거 저장 설명은 이전 구현 기록입니다. 현재 reason은 문자열이며 주문과 1:1인 ai_order_reports에 저장합니다. 최신 계약은 [AI 리포트 상세 조회](stockspoon_ai_report.md)를 참고하세요.
+
 # 주문 1단계: 지정가 예약과 취소 내부 규칙
 
 예약·취소의 기본 규칙은 `03_주문_체결_정책_v1_확정본.md`를 따른다. 주문 생성 시간과 개별 종목 거래정지 검사는 이후 합의한 [현행 주문 생성 정책](stockspoon_order_create_flow.md)을 따른다. 기존 실행 모델의 `accounts` 단일 계좌에 주문과 보유종목을 연결한다. 별도의 ERD 초안에 있던 `investment_accounts`/`trading_portfolios`는 현재 실행 모델과 다르므로 그대로 적용하지 않았다.

@@ -37,6 +37,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @Transactional
 class OrderControllerTests {
+    // 주문 접수 테스트는 장중으로 고정한다. 실제 시각이 15:30 이후면 구독 갱신이 주문을 취소한다.
+    @org.springframework.boot.test.context.TestConfiguration
+    static class MarketHours {
+        @org.springframework.context.annotation.Bean
+        @org.springframework.context.annotation.Primary
+        OrderService marketHoursOrderService(AccountRepository accounts, OrderRepository orders, HoldingRepository holdings) {
+            return new OrderService(accounts, orders, holdings,
+                    java.time.Clock.fixed(Instant.parse("2026-10-01T01:00:00Z"), java.time.ZoneOffset.UTC));
+        }
+    }
+
     @Autowired WebApplicationContext context;
     @Autowired UserRepository users;
     @Autowired AccountRepository accounts;

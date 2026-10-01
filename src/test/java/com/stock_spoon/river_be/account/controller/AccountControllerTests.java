@@ -295,6 +295,30 @@ class AccountControllerTests {
         onboard(second, 10_000_000).andExpect(status().isCreated());
     }
 
+    @Test
+    void holdingsSupportsEmptyAccountsAndRejectsInvalidQueries() throws Exception {
+        User user = users.save(new User("보유조회 사용자"));
+        var account = accounts.save(new com.stock_spoon.river_be.account.entity.Account(user, "조회 계좌", 1000000));
+        mvc.perform(get("/api/v1/users/me/accounts/{id}/holdings", account.getId()).cookie(authCookie(user)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("success"))
+                .andExpect(jsonPath("$.account_id").value(account.getId()))
+                .andExpect(jsonPath("$.holdings").isEmpty())
+                .andExpect(jsonPath("$.length()").value(3));
+        for (String query : new String[]{"sort=unknown", "order=up", "limit=0", "limit=-1", "limit=abc"}) {
+            mvc.perform(get("/api/v1/users/me/accounts/" + account.getId() + "/holdings?" + query)
+                            .cookie(authCookie(user)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_HOLDINGS_QUERY"));
+        }
+        User other = users.save(new User("다른 사용자"));
+        mvc.perform(get("/api/v1/users/me/accounts/{id}/holdings", account.getId()).cookie(authCookie(other)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("ACCOUNT_NOT_FOUND"));
+        mvc.perform(get("/api/v1/users/me/accounts/{id}/holdings", account.getId()))
+                .andExpect(status().isUnauthorized());
+    }
+
     private org.springframework.test.web.servlet.ResultActions onboard(User user, long initialCapital)
             throws Exception {
         CsrfCredentials csrf = csrf();

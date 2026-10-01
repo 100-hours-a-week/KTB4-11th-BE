@@ -10,10 +10,12 @@ import org.springframework.web.client.RestClientException;
 
 /** 키움 시세 조회. 실전 주문 API는 호출하지 않는다. */
 public class KiwoomMarketClient {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(KiwoomMarketClient.class);
     private static final ParameterizedTypeReference<Map<String, Object>> JSON =
             new ParameterizedTypeReference<>() {};
     private final RestClient client;
     private final KiwoomTokenProvider tokens;
+    private long nextQueryAt;
 
     public KiwoomMarketClient(RestClient client, KiwoomTokenProvider tokens) {
         this.client = client;
@@ -21,14 +23,10 @@ public class KiwoomMarketClient {
     }
 
     public KospiIndex kospi() {
+        String token = tokens.accessToken();
         Map<String, Object> response;
         try {
-            response = client.post().uri("/api/dostk/sect")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .header("api-id", "ka20001")
-                    .headers(headers -> headers.setBearerAuth(tokens.accessToken()))
-                    .body(Map.of("mrkt_tp", "0", "inds_cd", "001"))
-                    .retrieve().body(JSON);
+            response = query("ka20001", "/api/dostk/sect", Map.of("mrkt_tp", "0", "inds_cd", "001"), token);
         } catch (RestClientException error) {
             throw new IllegalStateException("키움 코스피 지수 조회에 실패했습니다.");
         }
@@ -48,20 +46,7 @@ public class KiwoomMarketClient {
 
     /** ka10100: 주문 대상의 상장 시장과 종목 상태를 조회한다. */
     public StockInfo stockInfo(String stockCode) {
-        Map<String, Object> response;
-        try {
-            response = client.post().uri("/api/dostk/stkinfo")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .header("api-id", "ka10100")
-                    .headers(headers -> headers.setBearerAuth(tokens.accessToken()))
-                    .body(Map.of("stk_cd", stockCode))
-                    .retrieve().body(JSON);
-        } catch (RestClientException error) {
-            throw new IllegalStateException("키움 종목정보 조회에 실패했습니다.");
-        }
-        if (response == null || !"0".equals(String.valueOf(response.get("return_code")))) {
-            throw new IllegalStateException("키움 종목정보 조회가 거부되었습니다.");
-        }
+        Map<String, Object> response = stockInfoResponse(stockCode);
         if (!stockCode.equals(response.get("code"))
                 || !(response.get("marketCode") instanceof String marketCode)
                 || marketCode.isBlank()) {
@@ -78,17 +63,15 @@ public class KiwoomMarketClient {
             throw new IllegalArgumentException("종목코드를 확인하세요.");
         }
         Map<String, Object> response;
+        String token = tokens.accessToken();
         try {
-            response = client.post().uri("/api/dostk/stkinfo")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .header("api-id", "ka10001")
-                    .headers(headers -> headers.setBearerAuth(tokens.accessToken()))
-                    .body(Map.of("stk_cd", stockCode))
-                    .retrieve().body(JSON);
+            response = query("ka10001", "/api/dostk/stkinfo", Map.of("stk_cd", stockCode), token);
         } catch (RestClientException error) {
+            log.error("키움 조회 통신 실패 apiId=ka10001 stockCode={} causeType={}", stockCode, error.getClass().getSimpleName());
             throw new IllegalStateException("키움 현재가 조회에 실패했습니다.");
         }
         if (response == null || !"0".equals(String.valueOf(response.get("return_code")))) {
+            log.error("키움 조회 거부 apiId=ka10001 stockCode={} returnCode={}", stockCode, safeReturnCode(response));
             throw new IllegalStateException("키움 현재가 조회가 거부되었습니다.");
         }
         try {
@@ -100,6 +83,68 @@ public class KiwoomMarketClient {
             throw new IllegalStateException("키움 현재가 응답 형식이 올바르지 않습니다.");
         }
     }
+
+    /** 업종코드 사전을 추측해 연결하지 않고, 종목정보의 업종명을 그대로 읽는다. */
+    public StockDetails stockDetails(String stockCode) {
+        var response = stockInfoResponse(stockCode);
+        if (!stockCode.equals(response.get("code")) || !(response.get("name") instanceof String name)
+                || name.isBlank()) {
+            throw new IllegalStateException("키움 종목명 응답 형식이 올바르지 않습니다.");
+        }
+        Object sector = response.get("upName");
+        if (sector != null && !(sector instanceof String)) {
+            throw new IllegalStateException("키움 업종명 응답 형식이 올바르지 않습니다.");
+        }
+        return new StockDetails(stockCode, name, sector == null ? "" : ((String) sector).trim());
+    }
+
+    // 주문 검증과 보유 조회가 같은 ka10100 호출을 재사용하되 각자의 필수 필드만 검증한다.
+    private Map<String, Object> stockInfoResponse(String stockCode) {
+        if (stockCode == null || !stockCode.matches("[0-9A-Z]{6}")) throw new IllegalArgumentException("종목코드를 확인하세요.");
+        // 토큰 갱신 대기가 끝난 뒤 간격을 적용해야 대기 요청이 한꺼번에 출발하지 않는다.
+        String token = tokens.accessToken();
+        Map<String, Object> response;
+        try {
+            response = query("ka10100", "/api/dostk/stkinfo", Map.of("stk_cd", stockCode), token);
+        } catch (RestClientException error) {
+            log.error("키움 조회 통신 실패 apiId=ka10100 stockCode={} causeType={}", stockCode, error.getClass().getSimpleName());
+            throw new IllegalStateException("키움 종목정보 조회에 실패했습니다.");
+        }
+        if (response == null || !"0".equals(String.valueOf(response.get("return_code")))) {
+            log.error("키움 조회 거부 apiId=ka10100 stockCode={} returnCode={}", stockCode, safeReturnCode(response));
+            throw new IllegalStateException("키움 종목정보 조회가 거부되었습니다.");
+        }
+        log.debug("키움 종목정보 수신 apiId=ka10100 stockCode={}", stockCode);
+        return response;
+    }
+
+    private String safeReturnCode(Map<String, Object> response) {
+        String code = response == null ? "missing" : String.valueOf(response.get("return_code"));
+        return code.matches("-?[0-9]{1,10}") ? code : "invalid";
+    }
+
+    // ponytail: 단일 서버 직렬 조회. 처리량이 필요하면 검증된 배치 조회와 분산 호출 제한으로 교체한다.
+    // 응답 완료 후 간격을 둬 토큰 갱신·요청 초기화에 지연된 요청도 몰아서 출발하지 않게 한다.
+    private synchronized Map<String, Object> query(String apiId, String path, Map<String, String> body, String token) {
+        long remaining = nextQueryAt - System.nanoTime();
+        if (remaining > 0) {
+            try {
+                java.util.concurrent.TimeUnit.NANOSECONDS.sleep(remaining);
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("키움 조회 대기가 중단되었습니다.");
+            }
+        }
+        try {
+            return client.post().uri(path).contentType(MediaType.APPLICATION_JSON)
+                    .header("api-id", apiId).headers(headers -> headers.setBearerAuth(token))
+                    .body(body).retrieve().body(JSON);
+        } finally {
+            nextQueryAt = System.nanoTime() + 220_000_000L;
+        }
+    }
+
+    public record StockDetails(String stockCode, String stockName, String sector) {}
 
     private BigDecimal number(Object value) {
         if (!(value instanceof String) && !(value instanceof Number)) {

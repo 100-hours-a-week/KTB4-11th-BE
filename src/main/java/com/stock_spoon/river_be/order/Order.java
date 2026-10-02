@@ -51,6 +51,14 @@ public class Order {
     public static Order pendingLimit(Account account, String stockCode, Side side,
             long quantity, long limitPrice, Source source, String reason, String stockName,
             java.util.List<ReportReasoning> reasoning, Instant now) {
+        return pendingLimit(account, stockCode, side, quantity, limitPrice, source, reason,
+                stockName, reasoning, null, null, now);
+    }
+
+    public static Order pendingLimit(Account account, String stockCode, Side side,
+            long quantity, long limitPrice, Source source, String reason, String stockName,
+            java.util.List<ReportReasoning> reasoning, Double holdingWeightLimitPercent,
+            Boolean isLowerTriggered, Instant now) {
         var order = new Order();
         order.account = account;
         order.stockCode = stockCode;
@@ -61,7 +69,7 @@ public class Order {
         order.quantity = quantity;
         order.limitPrice = limitPrice;
         order.reservedCash = side == Side.BUY ? Math.multiplyExact(quantity, limitPrice) : 0;
-        if (reason != null) order.report = new AiOrderReport(order, reason, stockName, reasoning);
+        if (reason != null) order.report = new AiOrderReport(order, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered);
         order.createdAt = now;
         return order;
     }
@@ -78,6 +86,12 @@ public class Order {
 
     public static Order pendingMarket(Account account, String stockCode, Side side, long quantity,
             String reason, String stockName, java.util.List<ReportReasoning> reasoning, Instant now) {
+        return pendingMarket(account, stockCode, side, quantity, reason, stockName, reasoning, null, null, now);
+    }
+
+    public static Order pendingMarket(Account account, String stockCode, Side side, long quantity,
+            String reason, String stockName, java.util.List<ReportReasoning> reasoning,
+            Double holdingWeightLimitPercent, Boolean isLowerTriggered, Instant now) {
         var order = new Order();
         order.account = account;
         order.stockCode = stockCode;
@@ -86,7 +100,7 @@ public class Order {
         order.status = Status.PENDING;
         order.source = Source.AI;
         order.quantity = quantity;
-        order.report = new AiOrderReport(order, reason, stockName, reasoning);
+        order.report = new AiOrderReport(order, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered);
         order.createdAt = now;
         return order;
     }

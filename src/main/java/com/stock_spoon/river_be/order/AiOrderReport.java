@@ -16,6 +16,11 @@ public class AiOrderReport {
 
     @Column(name = "stock_name", length = 255, updatable = false)
     private String stockName;
+    @Column(name = "holding_weight_limit_percent", updatable = false)
+    private Double holdingWeightLimitPercent;
+    @Column(name = "is_lower_triggered", updatable = false)
+    private Boolean isLowerTriggered;
+
     @ElementCollection
     @CollectionTable(name = "ai_report_reasoning", joinColumns = @JoinColumn(name = "report_id"))
     @OrderColumn(name = "reasoning_index")
@@ -28,6 +33,17 @@ public class AiOrderReport {
     }
 
     public AiOrderReport(Order order, String reason, String stockName, java.util.List<ReportReasoning> reasoning) {
+        this(order, reason, stockName, reasoning, null, null);
+    }
+
+    public AiOrderReport(Order order, String reason, String stockName, java.util.List<ReportReasoning> reasoning,
+            Double holdingWeightLimitPercent, Boolean isLowerTriggered) {
+        if (holdingWeightLimitPercent != null && (!Double.isFinite(holdingWeightLimitPercent)
+                || holdingWeightLimitPercent < 0 || holdingWeightLimitPercent > 100)) {
+            throw new IllegalArgumentException("비중 상한은 0~100의 숫자여야 합니다.");
+        }
+        this.holdingWeightLimitPercent = holdingWeightLimitPercent;
+        this.isLowerTriggered = isLowerTriggered;
         if (reason == null || reason.isBlank() || reason.length() > 100000) {
             throw new IllegalArgumentException("AI 판단 근거는 공백이 아닌 100,000자 이하의 텍스트여야 합니다.");
         }
@@ -40,6 +56,8 @@ public class AiOrderReport {
         this.reasoning = new java.util.ArrayList<>(reasoning == null ? java.util.List.of() : java.util.List.copyOf(reasoning));
     }
 
+    public Double getHoldingWeightLimitPercent() { return holdingWeightLimitPercent; }
+    public Boolean getIsLowerTriggered() { return isLowerTriggered; }
     public Long getId() { return id; }
     public String getReason() { return reason; }
     public String getStockName() { return stockName; }

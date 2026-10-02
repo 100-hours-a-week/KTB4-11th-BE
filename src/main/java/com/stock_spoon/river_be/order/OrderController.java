@@ -65,6 +65,7 @@ public class OrderController {
         } catch (IllegalArgumentException error) {
             throw new OrderException("매수·매도 구분을 확인하세요.");
         }
+        request.validateReportInputs(side);
         if (marketOrder && request.limitPrice() != null) {
             throw new OrderException("시장가 주문의 지정가는 null이어야 합니다.");
         }

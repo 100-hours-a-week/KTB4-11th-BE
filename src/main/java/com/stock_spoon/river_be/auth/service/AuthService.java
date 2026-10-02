@@ -7,6 +7,7 @@ import com.stock_spoon.river_be.auth.token.LoginTokens;
 
 @Service
 public class AuthService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AuthService.class);
     private final KakaoAuthService kakaoAuthService;
     private final RefreshTokenService refreshTokenService;
 
@@ -17,18 +18,23 @@ public class AuthService {
 
     public LoginTokens login(String authorizationCode) {
         var user = kakaoAuthService.verify(authorizationCode);
-        return refreshTokenService.create(user);
+        var tokens = refreshTokenService.create(user);
+        log.info("event=auth_login_completed");
+        return tokens;
     }
 
     public LoginTokens reissue(String refreshToken) {
         if (refreshToken == null || refreshToken.isBlank()) {
             throw invalidRefreshToken();
         }
-        return refreshTokenService.rotate(refreshToken);
+        var tokens = refreshTokenService.rotate(refreshToken);
+        log.info("event=auth_reissue_completed");
+        return tokens;
     }
 
     public void logout(String refreshToken) {
         refreshTokenService.revoke(refreshToken);
+        log.info("event=auth_logout_completed");
     }
 
     private AuthException invalidRefreshToken() {

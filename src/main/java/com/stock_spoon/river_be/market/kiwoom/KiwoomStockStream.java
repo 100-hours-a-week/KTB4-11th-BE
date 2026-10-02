@@ -108,6 +108,7 @@ public class KiwoomStockStream {
         prices.clear();
         books.clear();
         state = stopped ? State.STOPPED : State.DISCONNECTED;
+        log.info("event=kiwoom_stream_idle_closed");
         idle.token = null;
         registrations.values().forEach(future -> future.completeExceptionally(
                 new IllegalStateException("활성 주문이 없어 시세 연결을 종료했습니다.")));
@@ -190,12 +191,16 @@ public class KiwoomStockStream {
                 boolean controlTimeout = session.control != null
                         && !now.isBefore(session.controlStartedAt.plusSeconds(10));
                 boolean idleTimeout = !now.isBefore(session.lastMessage.plusSeconds(90));
-                if (handshakeTimeout || controlTimeout || idleTimeout) disconnect(session);
+                if (handshakeTimeout || controlTimeout || idleTimeout) {
+                    log.warn("event=kiwoom_stream_timeout handshake={} control={} idle={}", handshakeTimeout, controlTimeout, idleTimeout);
+                    disconnect(session);
+                }
                 return;
             }
             next = new Session(now);
             session = next;
             state = State.CONNECTING;
+            log.info("event=kiwoom_stream_connecting symbolCount={}", symbols.size());
         }
         try {
             // 토큰 HTTP 요청 중에도 주문의 구독 대기 시간과 시세 수신이 막히지 않게 한다.
@@ -207,6 +212,7 @@ public class KiwoomStockStream {
                     .buildAsync(URL, next).whenComplete((socket, error) -> {
                         synchronized (KiwoomStockStream.this) {
                             if (error != null) {
+                                log.warn("event=kiwoom_stream_connect_failed causeType={}", error.getClass().getSimpleName());
                                 disconnect(next);
                             } else if (session != next || stopped) {
                                 socket.abort();
@@ -216,7 +222,7 @@ public class KiwoomStockStream {
             }
         } catch (RuntimeException error) {
             disconnect(next);
-            log.warn("키움 실시간 연결 준비에 실패했습니다. 다음 주기에 재시도합니다.");
+            log.warn("event=kiwoom_stream_prepare_failed causeType={}", error.getClass().getSimpleName());
         }
     }
 
@@ -237,7 +243,7 @@ public class KiwoomStockStream {
             failed.socket.abort();
         }
         if (!stopped) {
-            log.warn("키움 실시간 연결이 종료되었습니다. 다음 주기에 재구독합니다.");
+            log.warn("event=kiwoom_stream_disconnected");
         }
     }
 
@@ -312,6 +318,7 @@ public class KiwoomStockStream {
                     return;
                 }
                 state = State.AUTHENTICATING;
+                log.info("event=kiwoom_stream_opened");
                 send(JSON.writeValueAsString(Map.of("trnm", "LOGIN", "token", token)));
                 socket.request(1);
             }
@@ -346,6 +353,7 @@ public class KiwoomStockStream {
                         lastMessage = clock.instant();
                     }
                 } catch (RuntimeException error) {
+                    log.warn("event=kiwoom_stream_protocol_failed causeType={}", error.getClass().getSimpleName());
                     receivedPrices.clear();
                     disconnect(this);
                 }
@@ -356,7 +364,7 @@ public class KiwoomStockStream {
                     priceListener.accept(price);
                 } catch (RuntimeException error) {
                     // DB 체결 오류는 시세 프로토콜 오류가 아니므로 연결을 끊지 않는다.
-                    log.warn("현재가에 대한 주문 처리에 실패했습니다. 다음 시세에서 재시도합니다.");
+                    log.warn("event=kiwoom_stream_price_processing_failed stockCode={} causeType={}", price.stockCode(), error.getClass().getSimpleName());
                 }
             }
             synchronized (KiwoomStockStream.this) {
@@ -373,20 +381,24 @@ public class KiwoomStockStream {
                         throw new IllegalStateException();
                     }
                     if (!"0".equals(message.path("return_code").asText())) {
+                        log.warn("event=kiwoom_stream_login_rejected returnCode={}", KiwoomMarketClient.safeReturnCode(Map.of("return_code", message.path("return_code").asText())));
                         tokens.invalidate(token);
                         throw new IllegalStateException();
                     }
                     token = null;
                     authenticated = true;
+                    log.info("event=kiwoom_stream_authenticated");
                     synchronizeSubscriptions();
                 }
                 case "REG", "REMOVE" -> {
                     if (!message.path("trnm").asText().equals(control)
                             || !"0".equals(message.path("return_code").asText())) {
+                        log.warn("event=kiwoom_stream_subscription_rejected operation={} returnCode={}", control, KiwoomMarketClient.safeReturnCode(Map.of("return_code", message.path("return_code").asText())));
                         throw new IllegalStateException();
                     }
                     if ("REG".equals(control)) registered.addAll(controlSymbols);
                     else registered.removeAll(controlSymbols);
+                    log.info("event=kiwoom_stream_subscription_updated operation={} symbolCount={}", control, controlSymbols.size());
                     control = null;
                     controlSymbols = Set.of();
                     lastMessage = clock.instant();
@@ -436,12 +448,14 @@ public class KiwoomStockStream {
 
         @Override
         public CompletionStage<?> onClose(WebSocket socket, int statusCode, String reason) {
+            log.info("event=kiwoom_stream_closed closeStatus={}", statusCode);
             disconnect(this);
             return null;
         }
 
         @Override
         public void onError(WebSocket socket, Throwable error) {
+            log.warn("event=kiwoom_stream_failed causeType={}", error.getClass().getSimpleName());
             disconnect(this);
         }
     }

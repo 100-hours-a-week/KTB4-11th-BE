@@ -45,7 +45,7 @@ public class OrderExecutionListener {
             }
             attempt(order, price);
         } catch (RuntimeException error) {
-            log.warn("주문 {}의 초기 현재가 조회에 실패했습니다. 웹소켓 시세를 기다립니다.", order.getId());
+            log.warn("event=order_initial_price_failed orderId={} causeType={}", order.getId(), error.getClass().getSimpleName());
         } finally {
             subscriptions.refresh();
         }
@@ -61,8 +61,8 @@ public class OrderExecutionListener {
                 if (!order.getCreatedAt().isAfter(price.receivedAt())) executed |= attempt(order, currentPrice);
             }
         } catch (RuntimeException error) {
-            log.warn("종목 {}의 대기 주문 조회 또는 가격 처리에 실패했습니다. 다음 시세에서 재시도합니다.",
-                    price.stockCode());
+            log.warn("event=order_price_processing_failed stockCode={} causeType={}",
+                    price.stockCode(), error.getClass().getSimpleName());
         } finally {
             if (executed) subscriptions.refresh();
         }
@@ -70,10 +70,13 @@ public class OrderExecutionListener {
 
     private boolean attempt(Order order, long price) {
         try {
-            return execution.executeLimit(order.getAccountId(), order.getId(), price);
+            boolean executed = execution.executeLimit(order.getAccountId(), order.getId(), price);
+            if (executed) log.info("event=order_executed orderId={} stockCode={} type=LIMIT side={}",
+                    order.getId(), order.getStockCode(), order.getSide());
+            return executed;
         } catch (RuntimeException error) {
             // 한 주문의 롤백이 다른 주문 처리를 막지 않는다. 원문/인증정보는 로그에 남기지 않는다.
-            log.warn("주문 {} 체결 처리에 실패했습니다. 다음 시세에서 재시도합니다.", order.getId());
+            log.warn("event=order_execution_failed orderId={} causeType={}", order.getId(), error.getClass().getSimpleName());
             return false;
         }
     }

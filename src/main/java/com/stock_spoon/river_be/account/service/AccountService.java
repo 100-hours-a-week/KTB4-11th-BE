@@ -25,6 +25,7 @@ import com.stock_spoon.river_be.order.OrderService;
 
 @Service
 public class AccountService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AccountService.class);
     private static final String ONBOARDING_ACCOUNT_NAME = "기본 계좌";
     private static final String DEFAULT_ACCOUNT_NAME_PREFIX = "기본 계좌 ";
 
@@ -114,6 +115,7 @@ public class AccountService {
             return snapshot(rows, false);
         });
         var values = evaluate(snapshot);
+        log.info("event=account_valuation_completed accountCount={} holdingCount={}", snapshot.accounts().size(), snapshot.holdings().size());
         return snapshot.accounts().stream().map(a -> AccountListResponse.from(a,
                 values.getOrDefault(a.getId(), 0L))).toList();
     }
@@ -126,6 +128,7 @@ public class AccountService {
             return snapshot(List.of(account), true);
         });
         var values = evaluate(snapshot);
+        log.info("event=account_valuation_completed accountCount={} holdingCount={}", snapshot.accounts().size(), snapshot.holdings().size());
         return AccountDetailResponse.from(snapshot.accounts().getFirst(), snapshot.availableCash(),
                 values.getOrDefault(accountId, 0L));
     }
@@ -146,6 +149,7 @@ public class AccountService {
             try {
                 price = prices.computeIfAbsent(holding.code(), market::currentPrice);
             } catch (IllegalStateException error) {
+                log.warn("event=account_valuation_failed stockCode={} causeType={}", holding.code(), error.getClass().getSimpleName());
                 throw new AccountException(HttpStatus.SERVICE_UNAVAILABLE, "HOLDINGS_DATA_UNAVAILABLE",
                         "보유 종목 정보를 조회할 수 없습니다.");
             }

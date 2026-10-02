@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/v1/users/me/onboarding")
 public class OnboardingController {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OnboardingController.class);
     private final AccountService service;
 
     public OnboardingController(AccountService service) {
@@ -26,6 +27,8 @@ public class OnboardingController {
     @ResponseStatus(HttpStatus.CREATED)
     public AccountResponse onboard(@AuthenticationPrincipal Jwt jwt,
             @Valid @RequestBody OnboardingRequest request) {
-        return service.onboard(Long.parseLong(jwt.getSubject()), request);
+        var result = service.onboard(Long.parseLong(jwt.getSubject()), request);
+        log.info("event=onboarding_completed");
+        return result;
     }
 }

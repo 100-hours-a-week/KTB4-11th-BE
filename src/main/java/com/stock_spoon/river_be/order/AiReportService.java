@@ -7,6 +7,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AiReportService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AiReportService.class);
     private final AccountRepository accounts;
     private final OrderRepository orders;
     private final ExecutionRepository executions;
@@ -33,7 +34,9 @@ public class AiReportService {
             holdingDays = holdingDays(executions.findHoldingTrades(accountId, order.getStockCode(),
                     last.getCreatedAt(), last.getId()), last.getCreatedAt());
         }
-        return AiReportResponse.from(order, fills, holdingDays);
+        var result = AiReportResponse.from(order, fills, holdingDays);
+        log.info("event=ai_report_completed orderId={} executionCount={}", orderId, fills.size());
+        return result;
     }
 
     private static Integer holdingDays(java.util.List<ExecutionRepository.HoldingTrade> trades,

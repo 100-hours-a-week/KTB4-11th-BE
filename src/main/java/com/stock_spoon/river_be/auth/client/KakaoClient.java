@@ -17,6 +17,7 @@ import com.stock_spoon.river_be.config.KakaoProperties;
 // 카카오 서버에 토큰과 사용자 정보를 요청
 @Component
 public class KakaoClient {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(KakaoClient.class);
     private static final ParameterizedTypeReference<Map<String, Object>> JSON =
             new ParameterizedTypeReference<>() {};
     private final RestClient client;
@@ -70,9 +71,15 @@ public class KakaoClient {
     }
 
     private <T> T call(Supplier<T> request, boolean tokenExchange) {
+        long started = System.nanoTime();
+        String stage = tokenExchange ? "token_exchange" : "user_info";
         try {
-            return request.get();
+            T result = request.get();
+            log.debug("event=kakao_call_completed stage={} elapsedMs={}", stage, (System.nanoTime() - started) / 1_000_000);
+            return result;
         } catch (RestClientResponseException error) {
+            log.warn("event=kakao_call_failed stage={} httpStatus={} causeType={} elapsedMs={}",
+                    stage, error.getStatusCode().value(), error.getClass().getSimpleName(), (System.nanoTime() - started) / 1_000_000);
             if (tokenExchange) {
                 String oauthError = oauthError(error);
                 if ("invalid_grant".equals(oauthError)) {
@@ -86,6 +93,8 @@ public class KakaoClient {
             }
             throw providerError();
         } catch (ResourceAccessException error) {
+            log.warn("event=kakao_call_failed stage={} causeType={} elapsedMs={}",
+                    stage, error.getClass().getSimpleName(), (System.nanoTime() - started) / 1_000_000);
             Throwable cause = error;
             while (cause != null) {
                 if (cause instanceof java.net.SocketTimeoutException
@@ -97,6 +106,8 @@ public class KakaoClient {
             }
             throw providerError();
         } catch (RestClientException error) {
+            log.warn("event=kakao_call_failed stage={} causeType={} elapsedMs={}",
+                    stage, error.getClass().getSimpleName(), (System.nanoTime() - started) / 1_000_000);
             throw providerError();
         }
     }

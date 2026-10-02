@@ -19,6 +19,7 @@ public record AiReportResponse(
         @JsonProperty("report_status") String reportStatus,
         @JsonProperty("decided_at") OffsetDateTime decidedAt,
         String summary,
+        List<ReportReasoning> reasoning,
         ExecutionSummary execution,
         @JsonProperty("buy_analysis") Map<String, Object> buyAnalysis,
         @JsonProperty("sell_analysis") SellAnalysis sellAnalysis) {
@@ -54,8 +55,8 @@ public record AiReportResponse(
         }
         return new AiReportResponse("success", order.getId(),
                 order.getSide().name().toLowerCase(Locale.ROOT),
-                order.getStockCode(), "[더미] 종목명", "completed", seoul(order.getCreatedAt()),
-                order.getReport().getReason(), execution, null, sell);
+                order.getStockCode(), order.getReport().getStockName() == null ? "[더미] 종목명" : order.getReport().getStockName(), "completed", seoul(order.getCreatedAt()),
+                order.getReport().getReason(), order.getReport().getReasoning(), execution, null, sell);
     }
 
     public record ExecutionSummary(

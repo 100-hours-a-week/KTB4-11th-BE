@@ -21,6 +21,7 @@ GET `/api/v1/accounts/{account_id}/orders/{order_id}/ai-report`, 본문 없음, 
   "report_status": "completed",
   "decided_at": "2026-09-03T14:20:00+09:00",
   "summary": "목표 수익률에 도달했고 상승 흐름이 약해져 매도했어요.",
+  "reasoning": [],
   "execution": {
     "executed_at": "2026-09-03T14:21:00+09:00",
     "execution_price": 196000,
@@ -85,11 +86,11 @@ execution.execution_count도 제거했다. 화면은 집계된 평균 가격·�
 
 더미는 응답 조립에서만 만들고 DB에는 저장하지 않는다. 숫자 0·false는 실제 결과를 뜻하지 않는다.
 buy_report_id=0은 연결 가능한 실제 리포트 ID가 아니다. FE에서 상세 링크로 사용하지 않는다.
-판단 흐름 데이터의 AI 수신·영구 저장은 아직 v1에 추가하지 않았다.
+판단 흐름은 아래 reasoning 계약에 따라 입력 순서대로 영구 저장한다.
 
 | 필드 | 현재 임시 값 | 실제 데이터로 교체할 작업 |
 |---|---|---|
-| stock_name | [더미] 종목명 | 종목 정보 저장·조회 연동 |
+| stock_name | 신규 주문은 AI가 제공한 저장값, 기존 이름 없는 주문은 [더미] 종목명 | 새 주문은 외부 조회 없이 저장값 반환 |
 | decided_at | 주문 생성 시각 | AI 판단 시각 수신·저장. 주문 시각과 의미가 다름 |
 | trade_result.holding_days | 0 | 추가 매수·부분 매도에 대한 기간 정책 및 체결 이력 조회 |
 | trade_result.target_return_percent | 0 | 거래 당시 목표 수익률 스냅샷 저장 |
@@ -110,3 +111,25 @@ buy_report_id=0은 연결 가능한 실제 리포트 ID가 아니다. FE에서 �
 새 코드에서는 읽거나 쓰지 않는다. 테이블 생성과 이관은 자동 실행되지 않는다.
 구버전 앱의 쓰기를 중단한 뒤 이관하고 새 버전을 배포해야 새 주문의 근거가 누락되지 않는다.
 SQL은 MySQL 8.4용이며 실제 운영 DB에는 이번 작업에서 적용하지 않았다.
+
+
+## AI 종목명·판단 흐름 계약
+
+주문 생성의 stock_name은 선택 문자열이며 생략 또는 null을 허용한다. 값을 보내는 경우 공백은 불가하며 최대 255 Java UTF-16 코드 단위까지 허용한다.
+AI가 제공한 원문을 ai_order_reports.stock_name에 저장하고, 주문 생성 응답과 리포트 상세 조회의
+stock_name으로 그대로 반환한다. 이 이름을 반환하기 위해 외부 종목정보를 조회하지 않는다.
+기존 리포트의 이름은 SQL로 추정해 채우지 않으며, 이름이 NULL이면 기존 상세 응답의
+"[더미] 종목명"을 유지한다.
+
+reason은 기존처럼 필수이며 상세 조회에서는 summary가 된다.
+reasoning은 선택 항목인 순서 있는 [{label, body}] 배열이다. label은 공백 불가·최대 255자,
+body는 공백 불가·최대 16,000자(Java UTF-16 기준)이고 null 항목은 거절한다.
+생략·null·빈 목록은 빈 배열로 저장/반환한다. API 필드명은 thoughts가 아니라 reasoning이다.
+매수·매도, 지정가·시장가 모두 같은 리포트 계약을 사용한다.
+
+reasoning은 ai_report_reasoning 테이블에 report_id와 reasoning_index로 순서를 보존하여
+주문·리포트와 같은 트랜잭션으로 저장한다. 상세 조회에는 reasoning을 그대로 반환한다.
+focused_news·decision_summary를 reason에 JSON 문자열로 저장하는 계약은 추가하지 않았다.
+
+기존 DB에는 새 앱 배포 전에 db/ai_report_reasoning.sql을 1회 적용해야 한다.
+이 SQL은 자동 실행되지 않으며 운영 DB 적용은 별도 배포 작업이다.

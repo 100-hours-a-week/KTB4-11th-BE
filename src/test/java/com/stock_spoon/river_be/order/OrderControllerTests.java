@@ -86,7 +86,7 @@ class OrderControllerTests {
     @Test
     void acceptsLimitOrderWithReasonAndEachRequestCreatesAnOrder() throws Exception {
         String body = """
-                {"stock_code":"005930","order_side":"buy","order_type":"limit",
+                {"holding_weight_limit_percent":30,"is_lower_triggered":false,"stock_code":"005930","stock_name":"삼성전자","order_side":"buy","order_type":"limit",
                  "limit_price":70000,"quantity":2,
                  "reason":"매수 판단"}
                 """;
@@ -109,7 +109,7 @@ class OrderControllerTests {
     void rejectsAnotherUsersAccountAndInvalidOrderWithoutSaving() throws Exception {
         User other = users.save(new User("다른 사용자"));
         String body = """
-                {"stock_code":"005930","order_side":"buy","order_type":"limit",
+                {"holding_weight_limit_percent":30,"is_lower_triggered":false,"stock_code":"005930","stock_name":"삼성전자","order_side":"buy","order_type":"limit",
                  "limit_price":70000,"quantity":1,
                  "reason":"매수 판단"}
                 """;
@@ -137,7 +137,7 @@ class OrderControllerTests {
                         .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken()))
                         .with(csrf()).contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"stock_code":"005930","order_side":"buy","order_type":"limit",
+                                {"holding_weight_limit_percent":30,"is_lower_triggered":false,"stock_code":"005930","stock_name":"삼성전자","order_side":"buy","order_type":"limit",
                                  "limit_price":70000,"quantity":1,
                                  "reason":"매수 판단"}
                                 """))
@@ -153,7 +153,7 @@ class OrderControllerTests {
         mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
                         .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"stock_code":"005930","order_side":"buy","order_type":"limit",
+                                {"holding_weight_limit_percent":30,"is_lower_triggered":false,"stock_code":"005930","stock_name":"삼성전자","order_side":"buy","order_type":"limit",
                                  "limit_price":70000,"quantity":1,
                                  "reason":"매수 판단"}
                                 """))
@@ -169,7 +169,7 @@ class OrderControllerTests {
 
     @Test
     void acceptsLongTextAndRejectsInvalidReasonWithoutSaving() throws Exception {
-        String body = "{\"stock_code\":\"005930\",\"order_side\":\"buy\",\"order_type\":\"limit\","
+        String body = "{\"holding_weight_limit_percent\":30,\"is_lower_triggered\":false,\"stock_code\":\"005930\",\"stock_name\":\"삼성전자\",\"order_side\":\"buy\",\"order_type\":\"limit\","
                 + "\"limit_price\":70000,\"quantity\":1,\"reason\":%s}";
         mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
                         .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
@@ -266,7 +266,7 @@ class OrderControllerTests {
     }
 
     private String marketBody(long quantity, String price) {
-        return "{\"stock_code\":\"005930\",\"order_side\":\"buy\",\"order_type\":\"market\","
+        return "{\"holding_weight_limit_percent\":30,\"is_lower_triggered\":false,\"stock_code\":\"005930\",\"stock_name\":\"삼성전자\",\"order_side\":\"buy\",\"order_type\":\"market\","
                 + "\"limit_price\":" + price + ",\"quantity\":" + quantity + ",\"reason\":\"매수 판단\"}";
     }
 
@@ -437,6 +437,191 @@ class OrderControllerTests {
         assertThat(executions.count()).isZero();
         assertThat(holdings.count()).isZero();
         assertThat(account.getCashBalance()).isEqualTo(1000000);
+    }
+
+    @Test
+    void reportPersistsReasoningInInputOrderAndProvidedStockName() throws Exception {
+        String body = """
+                {"holding_weight_limit_percent":30,"is_lower_triggered":false,"stock_code":"005930","stock_name":"AI가 보낸 삼성전자","order_side":"buy",
+                 "order_type":"limit","limit_price":70000,"quantity":1,"reason":"매수 근거",
+                 "reasoning":[{"label":"업황","body":"수요 증가"},{"label":"위험","body":"비중 확인"}]}
+                """;
+        mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                        .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isCreated());
+        long orderId = orders.findAll().getFirst().getId();
+        entityManager.flush();
+        entityManager.clear();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                        "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), orderId)
+                        .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.stock_name").value("AI가 보낸 삼성전자"))
+                .andExpect(jsonPath("$.summary").value("매수 근거"))
+                .andExpect(jsonPath("$.reasoning[0].label").value("업황"))
+                .andExpect(jsonPath("$.reasoning[1].body").value("비중 확인"))
+                .andExpect(jsonPath("$.thoughts").doesNotExist());
+    }
+
+    @Test
+    void invalidReasoningIsRejectedWithoutSaving() throws Exception {
+        for (String invalid : java.util.List.of("[{\"label\":\" \",\"body\":\"내용\"}]",
+                "[{\"label\":\"위험\",\"body\":\" \"}]", "[null]",
+                "[{\"label\":\"" + "가".repeat(256) + "\",\"body\":\"내용\"}]",
+                "[{\"label\":\"위험\",\"body\":\"" + "가".repeat(16001) + "\"}]")) {
+            String body = "{\"holding_weight_limit_percent\":30,\"is_lower_triggered\":false,\"stock_code\":\"005930\",\"stock_name\":\"삼성전자\",\"order_side\":\"buy\","
+                    + "\"order_type\":\"limit\",\"limit_price\":70000,\"quantity\":1,"
+                    + "\"reason\":\"근거\",\"reasoning\":" + invalid + "}";
+            mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                            .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isBadRequest());
+        }
+        assertThat(orders.count()).isZero();
+    }
+
+    @Test
+    void stockNameIsOptionalAndCannotBeBlankOrTooLong() throws Exception {
+        String body = """
+                {"holding_weight_limit_percent":30,"is_lower_triggered":false,"stock_code":"005930","order_side":"buy","order_type":"limit",
+                 "limit_price":70000,"quantity":1,"reason":"근거"}
+                """;
+        mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                        .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isCreated());
+        for (String invalid : java.util.List.of("\"\"", "\" \"", "\"" + "가".repeat(256) + "\"")) {
+            mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                            .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                            .content(body.replace("\"reason\"", "\"stock_name\":" + invalid + ",\"reason\"")))
+                    .andExpect(status().isBadRequest());
+        }
+        mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                        .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content(body.replace("\"reason\"", "\"stock_name\":null,\"reason\"")))
+                .andExpect(status().isCreated());
+        assertThat(orders.count()).isEqualTo(2);
+    }
+
+    @Test
+    void limitAndMarketBuySellReturnSavedNameAndReasoning() throws Exception {
+        holdings.save(new Holding(account, "005930", 10, new java.math.BigDecimal("700000")));
+        var levels = java.util.List.of(new KiwoomStockStream.QuoteLevel(new java.math.BigDecimal("70000"), 100));
+        when(stream.latestOrderBook("005930")).thenReturn(java.util.Optional.of(
+                new KiwoomStockStream.OrderBook("005930", levels, levels, java.time.LocalTime.of(10, 0),
+                        Instant.parse("2026-10-01T01:00:00Z"))));
+        for (String type : java.util.List.of("limit", "market")) {
+            for (String side : java.util.List.of("buy", "sell")) {
+                String name = type + "-" + side + " 종목명";
+                String body = """
+                        {"holding_weight_limit_percent":30,"is_lower_triggered":false,"stock_code":"005930","stock_name":"%s","order_side":"%s","order_type":"%s",
+                         "limit_price":%s,"quantity":1,"reason":"판단 근거",
+                         "reasoning":[{"label":"분석","body":"저장 내용"}]}
+                        """.formatted(name, side, type, "limit".equals(type) ? "70000" : "null");
+                var result = mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                                .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body))
+                        .andExpect(status().isCreated()).andExpect(jsonPath("$.stock_name").value(name)).andReturn();
+                long orderId = tools.jackson.databind.json.JsonMapper.builder().build()
+                        .readTree(result.getResponse().getContentAsString()).path("order_id").asLong();
+                entityManager.flush();
+                entityManager.clear();
+                mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                                "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), orderId)
+                                .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
+                        .andExpect(status().isOk()).andExpect(jsonPath("$.stock_name").value(name))
+                        .andExpect(jsonPath("$.reasoning[0].label").value("분석"))
+                        .andExpect(jsonPath("$.reasoning[0].body").value("저장 내용"));
+            }
+        }
+    }
+
+
+    private String reportInputBody(String side, String type, String fields) {
+        return """
+                {"stock_code":"005930","order_side":"%s","order_type":"%s",
+                 "limit_price":%s,"quantity":1,"reason":"근거"%s}
+                """.formatted(side, type, "limit".equals(type) ? "70000" : "null", fields);
+    }
+
+    @Test
+    void reportInputsRequireBuyLimitAndSellLossResult() throws Exception {
+        holdings.save(new Holding(account, "005930", 20, new java.math.BigDecimal("1400000")));
+        for (String type : java.util.List.of("limit", "market")) {
+            for (String side : java.util.List.of("buy", "sell")) {
+                for (String fields : java.util.List.of("", ",\"holding_weight_limit_percent\":null,\"is_lower_triggered\":null")) {
+                    mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                                    .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                                    .content(reportInputBody(side, type, fields)))
+                            .andExpect(status().isBadRequest());
+                }
+            }
+        }
+        assertThat(orders.count()).isZero();
+        org.mockito.Mockito.verifyNoInteractions(market);
+    }
+
+    @Test
+    void reportInputsRejectInvalidRangeAndBooleanType() throws Exception {
+        for (String value : java.util.List.of("-0.01", "100.01", "1e309", "\"NaN\"", "\"Infinity\"")) {
+            mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                            .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                            .content(reportInputBody("buy", "limit", ",\"holding_weight_limit_percent\":" + value)))
+                    .andExpect(status().isBadRequest());
+        }
+        for (String value : java.util.List.of("\"false\"", "\"true\"", "0", "1", "{}", "[]")) {
+            mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                            .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                            .content(reportInputBody("sell", "limit", ",\"is_lower_triggered\":" + value)))
+                    .andExpect(status().isBadRequest());
+        }
+        assertThat(orders.count()).isZero();
+    }
+
+    @Test
+    void reportInputsPersistBothValuesForLimitAndMarketInBothDirections() throws Exception {
+        holdings.save(new Holding(account, "005930", 10, new java.math.BigDecimal("700000")));
+        var levels = java.util.List.of(new KiwoomStockStream.QuoteLevel(new java.math.BigDecimal("70000"), 100));
+        when(stream.latestOrderBook("005930")).thenReturn(java.util.Optional.of(
+                new KiwoomStockStream.OrderBook("005930", levels, levels, java.time.LocalTime.of(10, 0),
+                        Instant.parse("2026-10-01T01:00:00Z"))));
+        for (String type : java.util.List.of("limit", "market")) {
+            for (String side : java.util.List.of("buy", "sell")) {
+                boolean triggered = "sell".equals(side);
+                var result = mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                                .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                                .content(reportInputBody(side, type,
+                                        ",\"holding_weight_limit_percent\":30.123456,\"is_lower_triggered\":" + triggered)))
+                        .andExpect(status().isCreated()).andReturn();
+                long id = tools.jackson.databind.json.JsonMapper.builder().build()
+                        .readTree(result.getResponse().getContentAsString()).path("order_id").asLong();
+                entityManager.flush();
+                entityManager.clear();
+                Object[] row = (Object[]) entityManager.createNativeQuery(
+                                "select holding_weight_limit_percent, is_lower_triggered from ai_order_reports where order_id = :id")
+                        .setParameter("id", id).getSingleResult();
+                assertThat(((Number) row[0]).doubleValue()).isEqualTo(30.123456);
+                assertThat(row[1]).isEqualTo(triggered);
+            }
+        }
+    }
+
+    @Test
+    void reportInputsAllowBoundariesAndOmittedOrNullOtherSideFields() throws Exception {
+        holdings.save(new Holding(account, "005930", 10, new java.math.BigDecimal("700000")));
+        for (String fields : java.util.List.of(",\"holding_weight_limit_percent\":0",
+                ",\"holding_weight_limit_percent\":100,\"is_lower_triggered\":null",
+                ",\"is_lower_triggered\":false", ",\"is_lower_triggered\":true,\"holding_weight_limit_percent\":null")) {
+            String side = fields.startsWith(",\"holding") ? "buy" : "sell";
+            var result = mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                            .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                            .content(reportInputBody(side, "limit", fields)))
+                    .andExpect(status().isCreated()).andReturn();
+            long id = tools.jackson.databind.json.JsonMapper.builder().build()
+                    .readTree(result.getResponse().getContentAsString()).path("order_id").asLong();
+            entityManager.flush();
+            Object[] row = (Object[]) entityManager.createNativeQuery(
+                            "select holding_weight_limit_percent, is_lower_triggered from ai_order_reports where order_id = :id")
+                    .setParameter("id", id).getSingleResult();
+            assertThat(row["buy".equals(side) ? 1 : 0]).isNull();
+        }
     }
 
     private Cookie aiCookie(User owner) {

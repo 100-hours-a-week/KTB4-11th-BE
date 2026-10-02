@@ -55,8 +55,22 @@ public class OrderService {
                 limitPrice, reason);
     }
 
+    @Transactional
+    public Order reserveLimit(long userId, long accountId, OrderCreateRequest request) {
+        return reserveLimit(Long.valueOf(userId), accountId, request.stockCode(),
+                Order.Side.valueOf(request.orderSide().toUpperCase(java.util.Locale.ROOT)),
+                request.quantity(), request.limitPrice(), request.reason(), request.stockName(), request.reasoning(),
+                request.holdingWeightLimitPercent(), request.isLowerTriggered());
+    }
+
     private Order reserveLimit(Long userId, long accountId, String stockCode, Order.Side side,
             long quantity, long limitPrice, String reason) {
+        return reserveLimit(userId, accountId, stockCode, side, quantity, limitPrice, reason, null, java.util.List.of(), null, null);
+    }
+
+    private Order reserveLimit(Long userId, long accountId, String stockCode, Order.Side side,
+            long quantity, long limitPrice, String reason, String stockName, java.util.List<ReportReasoning> reasoning,
+            Double holdingWeightLimitPercent, Boolean isLowerTriggered) {
         if (side == null || quantity <= 0 || limitPrice <= 0 || stockCode == null
                 || !stockCode.matches("[0-9]{6}")) {
             throw new OrderException("주문 입력값을 확인하세요.");
@@ -82,7 +96,7 @@ public class OrderService {
             throw new OrderException("매도 가능 수량이 부족합니다.");
         }
         return orders.save(Order.pendingLimit(account, stockCode, side, quantity,
-                limitPrice, Order.Source.AI, reason, clock.instant()));
+                limitPrice, Order.Source.AI, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered, clock.instant()));
     }
 
     /**

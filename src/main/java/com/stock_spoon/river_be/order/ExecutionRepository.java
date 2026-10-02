@@ -18,6 +18,25 @@ public interface ExecutionRepository extends JpaRepository<Execution, Long> {
     java.util.List<Execution> findForOrders(
             @org.springframework.data.repository.query.Param("orderIds") java.util.List<Long> orderIds);
 
+    @org.springframework.data.jpa.repository.Query("""
+            select e.id as id, e.order.side as side, e.quantity as quantity, e.createdAt as createdAt
+            from Execution e where e.order.account.id = :accountId and e.order.stockCode = :stockCode
+            and (e.createdAt < :cutoff or (e.createdAt = :cutoff and e.id <= :lastId))
+            order by e.createdAt, e.id
+            """)
+    java.util.List<HoldingTrade> findHoldingTrades(
+            @org.springframework.data.repository.query.Param("accountId") long accountId,
+            @org.springframework.data.repository.query.Param("stockCode") String stockCode,
+            @org.springframework.data.repository.query.Param("cutoff") java.time.Instant cutoff,
+            @org.springframework.data.repository.query.Param("lastId") long lastId);
+
+    interface HoldingTrade {
+        Long getId();
+        Order.Side getSide();
+        long getQuantity();
+        java.time.Instant getCreatedAt();
+    }
+
     interface LastBuyTime {
         String getStockCode();
         java.time.Instant getLastPurchasedAt();

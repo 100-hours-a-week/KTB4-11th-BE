@@ -1,112 +1,78 @@
-# AI 매매 리포트 상세 조회 (v1)
+# AI 매매 리포트 상세 조회
 
-구현 순서와 근거는 [구현 과정](stockspoon_ai_report_flow.md)을 참고한다.
+GET /api/v1/accounts/{account_id}/orders/{order_id}/ai-report
 
-GET `/api/v1/accounts/{account_id}/orders/{order_id}/ai-report`, 본문 없음, 정상 200.
-사용자 access_token 쿠키로 본인의 활성 계좌 AI 주문을 조회한다.
-미인증 401, 타인/없는/비활성 계좌 403, 주문·리포트 없음 또는 USER 주문 404.
+인증된 사용자의 활성 계좌에 속한 AI 주문의 근거와 체결 결과를 조회한다.
+계좌 접근 권한 검사는 기존 구현을 유지한다. 타인 계좌는 403 FORBIDDEN_ACCOUNT,
+주문·AI 리포트가 없거나 AI 주문이 아닌 경우 404 AI_REPORT_NOT_FOUND다.
+체결된 주문만 조회하는 정책을 적용한다. 미체결·취소 또는 체결 이력이 없는 주문은 404 AI_REPORT_NOT_FOUND를 반환한다.
 
-주문 생성 reason은 필수 문자열(공백 불가, 최대 100,000 UTF-16 코드 단위)이며
-주문과 1:1인 ai_order_reports에 같은 트랜잭션으로 저장한다.
+## 응답 필드
 
-## 응답 예시: 체결된 매도
+| 필드 | 출처 |
+|---|---|
+| order_id/order_side/stock_code | 주문 |
+| stock_name | AI가 주문 생성에 보낸 저장 종목명 |
+| reason | 저장된 AI 판단 근거 |
+| reasoning | 저장 순서의 label/body 배열 |
+| holding_weight_limit_percent | 매수 리포트의 저장 Double, 매도는 null |
+| holding_weight_after_trade_percent | 매수 체결 시점에 저장한 평가 비중, 매도는 null |
+| execution | 해당 주문의 실제 체결 이력 집계 |
+| sell_result | 매도 결과, 매수는 null |
 
-```json
-{
-  "message": "success",
-  "order_id": 104,
-  "order_side": "sell",
-  "stock_code": "000660",
-  "stock_name": "[더미] 종목명",
-  "report_status": "completed",
-  "decided_at": "2026-09-03T14:20:00+09:00",
-  "summary": "목표 수익률에 도달했고 상승 흐름이 약해져 매도했어요.",
-  "execution": {
-    "executed_at": "2026-09-03T14:21:00+09:00",
-    "execution_price": 196000,
-    "execution_quantity": 2,
-    "trade_amount": 392000
-  },
-  "buy_analysis": null,
-  "sell_analysis": {
-    "trade_result": {
-      "average_buy_price": 186600,
-      "holding_days": 0,
-      "realized_pnl": 18800,
-      "realized_return_percent": 5.0375,
-      "target_return_percent": 0,
-      "target_reached": false,
-      "stop_loss_triggered": false
-    },
-    "buy_decision": {"buy_report_id": 0, "summary": "[더미] 매수 당시 판단"},
-    "holding_changes": [
-      {"observed_at": "2026-09-03T14:20:00+09:00", "summary": "[더미] 보유 중 변화"}
-    ],
-    "sell_decision": "[더미] 매도 판단",
-    "expectation_vs_outcome": {
-      "expected_return_min_percent": 0,
-      "expected_return_max_percent": 0,
-      "summary": "[더미] 예상과 결과"
-    }
-  }
-}
-```
+기존 message/report_status/decided_at/summary/buy_analysis/sell_analysis 및 매도 하단
+매수 판단·보유 변화·예상 결과 더미 구조는 제거한다. JSON null 키는 응답에 포함한다.
+종목명·기준값·계산 불가 값은 null, reasoning이 없으면 []를 반환한다. 임의 더미는 사용하지 않는다.
 
-summary는 실제 AI 텍스트 원문이다. report_status=completed는 원문 저장 완료를 뜻한다.
-매수는 sell_analysis=null, buy_analysis는 문서의 예시와 같이 null이다.
-매수 상세 분석의 객체 형식은 공유 문서에 정의되지 않아 임의 구조를 만들지 않았다.
-체결이 없으면 execution=null이다. 매도 분석 구조는 미체결 매도에서도 더미 값으로 존재한다.
-체결의 실현손익이 누락된 매도에서는 실제 계산이 불가능한 결과도 임시 0이므로 개선 대상이다.
+## 체결 및 손익 계산
 
-execution은 실제 체결 수량·금액 합, 수량 가중 평균가격, 마지막 체결 시각을 반환한다.
-평균 가격과 실현수익률은 소수점 4자리 HALF_UP이다. JSON 숫자 표기의 소수점 자릿수는
-시트 예시와 다를 수 있다. 실현손익은 합산하고 취득원가=매도금액−실현손익으로 역산한다.
-원가 복원은 저장된 손익의 소수점 2자리 정밀도에 한정된다.
-상세 조회의 날짜는 문서와 같이 +09:00이며, 주문 생성 응답의 기존 UTC Z 형식은 유지한다.
+- execution_quantity: 모든 체결 수량의 합.
+- trade_amount: 체결 가격×수량의 합.
+- execution_price: 총 금액/총 수량의 수량 가중평균, 기존 소수4자리 HALF_UP.
+- executed_at: 마지막 체결시각, Asia/Seoul 오프셋.
+- realized_pnl: 저장된 체결별 실현손익 합계.
+- 매도 원가: 총 금액-실현손익.
+- average_buy_price: 매도 원가/매도 수량.
+- realized_return_percent: 실현손익/매도 원가×100. 체결별 수익률 단순 평균 금지.
 
-## 응답에서 제거한 필드와 근거
+기존 체결 엔진은 수수료·세금을 차감하지 않는다. 저장 손익이 소수2자리이므로
+역산 원가와 평균매수가에는 해당 반올림 정밀도 제한이 있다.
+손익이 하나라도 없으면 관련 손익/평균매수가/수익률을 추정하지 않는다.
+원가가 양수가 아니면 평균매수가·수익률을 계산하지 않는다.
+비용 차감 전 손익 및 기존 반올림 기준을 유지한다. 누락 손익은 null로 반환한다.
 
-최상위 report_id는 제거했다. 주문과 리포트가 1:1이므로 API에서는 order_id로 식별한다. DB 내부 report_id PK와 문서에 존재하는 buy_decision.buy_report_id는 유지한다.
+## 보유기간
 
-주문 목록 화면은 체결 완료된 주문의 근거만 열도록 한다는 사용자 정책에 따라
-상세 조회의 order_status를 제거했다. 표시 대상이 이미 체결 완료라 화면에 중복 정보를 줄 필요가 없다.
-주문 생성 응답의 order_status는 기존 계약대로 유지한다.
+매도 마지막 체결까지의 계좌·종목 체결을 시각·ID 순서로 읽는다.
+현재 보유 구간 최초 매수일과 매도일의 서울 날짜 차이로 holding_days를 계산한다.
+당일0일, 추가매수는 시작일 유지, 전량매도 후 재매수는 시작일 초기화.
+뒤에 발생한 거래는 과거 리포트 계산에서 제외한다.
+이력이 부족하여 보유량이 음수가 되거나 최초 매수를 확인할 수 없으면 추정하지 않는다.
 
-execution.execution_count도 제거했다. 화면은 집계된 평균 가격·수량·총 거래금액만 필요하며,
-행 개수는 집계 결과 계산에 필수인 입력도 아니다. 수량 가중 평균과 실현손익 합산은
-체결 행 목록으로 계속 수행하므로 건수 필드 제거가 계산 정확도에 영향을 주지 않는다.
-체결 건수 표시는 실제 제품 요구가 생길 때 추가할 수 있다.
+## 거래 직후 평가 비중
 
-이번 변경은 응답 필드와 문서에 한정된다. 체결 완료 주문만 노출하는 목록 필터를 새로 구현하거나,
-상세 조회에서 미체결 주문을 거절하는 검사까지 추가한 것은 아니다.
-미체결 직접 조회는 기존처럼 execution=null을 반환한다.
+매수의 자산 변경·체결·리포트 저장과 같은 트랜잭션에서 계산한다.
+비중=해당 종목 평가액/(체결 후 현금+모든 보유종목 평가액)×100.
+해당 종목의 전체 보유수량에는 이번 주문 평균 체결가를 적용한다.
+다른 종목은 KiwoomStockStream.latest에 이미 보관된 현재가를 사용한다.
+별도 REST 조회·구독 추가는 하지 않는다. 이 계산은 캐시에 보관된 가격 기준 평가다.
+필요한 다른 종목 시세가 없거나 가격이 유효하지 않으면 비중만 null로 남기고 주문을 실패시키지 않는다.
+비중은 소수4자리 HALF_UP을 적용한 Double로 저장한다.
+후속 거래나 시세 변동 시 조회 API에서 다시 계산하지 않는다.
+저장된 상한을 초과하더라도 표시용이므로 주문을 거절하지 않는다.
 
-## 개선 사항: 더미 데이터 교체
+## 손실 제한 및 목표
 
-더미는 응답 조립에서만 만들고 DB에는 저장하지 않는다. 숫자 0·false는 실제 결과를 뜻하지 않는다.
-buy_report_id=0은 연결 가능한 실제 리포트 ID가 아니다. FE에서 상세 링크로 사용하지 않는다.
-판단 흐름 데이터의 AI 수신·영구 저장은 아직 v1에 추가하지 않았다.
+sell_result.stop_loss_triggered는 AI 입력 is_lower_triggered를 저장한 Boolean이다.
+실제 false와 누락을 구분하며 BE가 손익으로 손실 제한 결과를 다시 판단하지 않는다.
+목표 수익률 출처가 없으므로 target_return_percent와 target_reached는 null로 반환한다. 문서 예시값을 상수로 반환하지 않는다.
 
-| 필드 | 현재 임시 값 | 실제 데이터로 교체할 작업 |
-|---|---|---|
-| stock_name | [더미] 종목명 | 종목 정보 저장·조회 연동 |
-| decided_at | 주문 생성 시각 | AI 판단 시각 수신·저장. 주문 시각과 의미가 다름 |
-| trade_result.holding_days | 0 | 추가 매수·부분 매도에 대한 기간 정책 및 체결 이력 조회 |
-| trade_result.target_return_percent | 0 | 거래 당시 목표 수익률 스냅샷 저장 |
-| trade_result.target_reached | false | 목표 스냅샷과 실제 결과 비교 |
-| trade_result.stop_loss_triggered | false | AI 판단 조건/발동 여부 수신·저장 |
-| buy_decision | ID 0, [더미] 텍스트 | 매도와 관련 매수 리포트 연결 정책 |
-| holding_changes | 주문 시각과 [더미] 텍스트 한 건 | 보유 중 분석 이력 수신·저장 |
-| sell_decision | [더미] 매도 판단 | 매도 상세 분석 계약 확정 |
-| expectation_vs_outcome | 예상 범위 0~0%, [더미] 텍스트 | 예상 수익률 수신·저장 및 실제 결과 비교 |
-| buy_analysis | null | 매수 상세 객체 스키마 합의 후 응답 구현 |
-| 미체결/손익 누락 매도의 결과 | 임시 0 | 미체결·결측값 표현을 FE와 합의. 실제 체결 값으로 교체 |
+## DB 적용 순서
 
-## DB 적용
+1. db/ai_report_reasoning.sql: stock_name 및 ai_report_reasoning.
+2. db/ai_report_order_inputs.sql: 상한 Double·손실 제한 Boolean.
+3. db/ai_report_holding_weight.sql: 체결 시점 비중 Double.
 
-기존 MySQL DB에는 새 애플리케이션 배포 전에 `db/ai_order_reports.sql`을 1회 적용한다.
-기존 AI 주문의 비어 있지 않은 decision_summary를 새 리포트로 이관한다. 근거가 없는
-기존 주문은 리포트가 없으므로 상세 조회 시 404다. 이전 컬럼은 복구용으로 남기지만
-새 코드에서는 읽거나 쓰지 않는다. 테이블 생성과 이관은 자동 실행되지 않는다.
-구버전 앱의 쓰기를 중단한 뒤 이관하고 새 버전을 배포해야 새 주문의 근거가 누락되지 않는다.
-SQL은 MySQL 8.4용이며 실제 운영 DB에는 이번 작업에서 적용하지 않았다.
+SQL은 자동 실행되지 않는다. 기존 스키마를 확인한 뒤 미적용 변경만 적용한다.
+기존 주문의 과거 비중을 현재 시세로 임의 채우지 않는다.
+이번 상세조회 작업은 로컬/운영 DB에 SQL을 자동 적용하지 않는다.

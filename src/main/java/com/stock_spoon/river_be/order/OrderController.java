@@ -65,6 +65,7 @@ public class OrderController {
         } catch (IllegalArgumentException error) {
             throw new OrderException("매수·매도 구분을 확인하세요.");
         }
+        request.validateReportInputs(side);
         if (marketOrder && request.limitPrice() != null) {
             throw new OrderException("시장가 주문의 지정가는 null이어야 합니다.");
         }
@@ -85,17 +86,12 @@ public class OrderController {
             market.validateMarket(request.stockCode());
             var order = subscriptions.create(request.stockCode(), () -> {
                 var book = stream.latestOrderBook(request.stockCode()).orElse(null);
-                return side == Order.Side.BUY
-                        ? marketExecution.executeMarketBuy(userId, accountId, request.stockCode(),
-                                request.quantity(), request.reason(), book)
-                        : marketExecution.executeMarketSell(userId, accountId, request.stockCode(),
-                                request.quantity(), request.reason(), book);
+                return marketExecution.executeMarket(userId, accountId, request, book);
             });
             return execution.response(accountId, order.getId());
         }
         market.validateLimit(request.stockCode(), request.limitPrice());
-        Order order = subscriptions.create(request.stockCode(), () -> orders.reserveLimit(userId, accountId, request.stockCode(), side,
-                request.quantity(), request.limitPrice(), request.reason()));
+        Order order = subscriptions.create(request.stockCode(), () -> orders.reserveLimit(userId, accountId, request));
         execution.orderCreated(order);
         return execution.response(accountId, order.getId());
     }

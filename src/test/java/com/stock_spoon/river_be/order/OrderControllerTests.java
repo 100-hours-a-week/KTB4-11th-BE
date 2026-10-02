@@ -795,6 +795,105 @@ class OrderControllerTests {
         }
     }
 
+
+    @Test
+    void patchCancelPreservesBuyOrderAndReleasesReservedCash() throws Exception {
+        var order = orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY,
+                2, 70000, Order.Source.AI, "근거", Instant.now()));
+        long id = order.getId();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch(
+                        "/api/v1/accounts/{account}/orders/{order}", account.getId(), id)
+                .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken()))
+                .with(csrf()).contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"cancelled\"}"))
+                .andExpect(status().isNoContent());
+        entityManager.flush();
+        entityManager.clear();
+        var saved = orders.findById(id).orElseThrow();
+        assertThat(saved.getStatus()).isEqualTo(Order.Status.CANCELLED);
+        assertThat(saved.getReservedCash()).isZero();
+        assertThat(saved.getCancelledAt()).isNotNull();
+        assertThat(accounts.findById(account.getId()).orElseThrow().getCashBalance()).isEqualTo(1_000_000);
+        assertThat(orders.reservedCash(account.getId(), Order.Status.PENDING)).isZero();
+    }
+
+    @Test
+    void patchCancelReleasesSellReservationWithoutChangingHolding() throws Exception {
+        holdings.save(new Holding(account, "005930", 10, new java.math.BigDecimal("650000")));
+        var order = orders.save(Order.pendingLimit(account, "005930", Order.Side.SELL,
+                7, 70000, Order.Source.AI, null, Instant.now()));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch(
+                        "/api/v1/accounts/{account}/orders/{order}", account.getId(), order.getId())
+                .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken()))
+                .with(csrf()).contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"cancelled\"}"))
+                .andExpect(status().isNoContent());
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(orders.findById(order.getId()).orElseThrow().getStatus()).isEqualTo(Order.Status.CANCELLED);
+        assertThat(orders.pendingSellQuantity(account.getId(), "005930", Order.Side.SELL, Order.Status.PENDING)).isZero();
+        assertThat(holdings.findByAccountIdAndStockCode(account.getId(), "005930").orElseThrow().getQuantity()).isEqualTo(10);
+    }
+
+    @Test
+    void patchCancelRejectsAnotherOwnerAndAccountOrderMismatch() throws Exception {
+        var another = users.save(new User("취소 권한 없는 사용자"));
+        var order = orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY,
+                1, 70000, Order.Source.AI, null, Instant.now()));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch(
+                        "/api/v1/accounts/{account}/orders/{order}", account.getId(), order.getId())
+                .cookie(new Cookie("access_token", tokens.issue(another.getId()).accessToken()))
+                .with(csrf()).contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"cancelled\"}"))
+                .andExpect(status().isForbidden());
+        var otherAccount = accounts.save(new Account(user, "다른 계좌", 1_000_000));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch(
+                        "/api/v1/accounts/{account}/orders/{order}", otherAccount.getId(), order.getId())
+                .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken()))
+                .with(csrf()).contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"cancelled\"}"))
+                .andExpect(status().isNotFound());
+        assertThat(order.getStatus()).isEqualTo(Order.Status.PENDING);
+    }
+
+    @Test
+    void patchCancelRejectsMissingOrUnsupportedStatus() throws Exception {
+        var order = orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY,
+                1, 70000, Order.Source.AI, null, Instant.now()));
+        for (String body : java.util.List.of("{}", "{\"status\":null}", "{\"status\":\"executed\"}", "{\"status\":\"pending\"}")) {
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch(
+                            "/api/v1/accounts/{account}/orders/{order}", account.getId(), order.getId())
+                    .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken()))
+                    .with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isBadRequest());
+        }
+        assertThat(order.getStatus()).isEqualTo(Order.Status.PENDING);
+        assertThat(order.getReservedCash()).isEqualTo(70000);
+    }
+
+    @Test
+    void patchCancelRejectsExecutedAndAlreadyCancelledOrders() throws Exception {
+        for (boolean executed : java.util.List.of(true, false)) {
+            var order = orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY,
+                    1, 70000, Order.Source.AI, null, Instant.now()));
+            if (executed) order.execute();
+            else order.cancel(Instant.parse("2026-10-01T01:00:00Z"));
+            var originalTime = order.getCancelledAt();
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch(
+                            "/api/v1/accounts/{account}/orders/{order}", account.getId(), order.getId())
+                    .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken()))
+                    .with(csrf()).contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"cancelled\"}"))
+                    .andExpect(status().isConflict());
+            assertThat(order.getStatus()).isEqualTo(executed ? Order.Status.EXECUTED : Order.Status.CANCELLED);
+            assertThat(order.getCancelledAt()).isEqualTo(originalTime);
+        }
+    }
+
+    @Test
+    void patchCancelRequiresAuthentication() throws Exception {
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch(
+                        "/api/v1/accounts/1/orders/1")
+                .with(csrf()).contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"cancelled\"}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+
     private Cookie aiCookie(User owner) {
         Instant now = Instant.now();
         JwtClaimsSet claims = JwtClaimsSet.builder()

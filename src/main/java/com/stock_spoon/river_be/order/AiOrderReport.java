@@ -16,6 +16,8 @@ public class AiOrderReport {
 
     @Column(name = "stock_name", length = 255, updatable = false)
     private String stockName;
+    @Column(name = "holding_weight_after_trade_percent")
+    private Double holdingWeightAfterTradePercent;
     @Column(name = "holding_weight_limit_percent", updatable = false)
     private Double holdingWeightLimitPercent;
     @Column(name = "is_lower_triggered", updatable = false)
@@ -56,6 +58,10 @@ public class AiOrderReport {
         this.reasoning = new java.util.ArrayList<>(reasoning == null ? java.util.List.of() : java.util.List.copyOf(reasoning));
     }
 
+    void recordHoldingWeight(Double weight) {
+        holdingWeightAfterTradePercent = weight;
+    }
+    public Double getHoldingWeightAfterTradePercent() { return holdingWeightAfterTradePercent; }
     public Double getHoldingWeightLimitPercent() { return holdingWeightLimitPercent; }
     public Boolean getIsLowerTriggered() { return isLowerTriggered; }
     public Long getId() { return id; }

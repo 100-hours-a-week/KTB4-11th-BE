@@ -53,9 +53,9 @@ class OrderControllerTests {
         @org.springframework.context.annotation.Bean
         @org.springframework.context.annotation.Primary
         OrderExecutionService fixedExecution(AccountRepository accounts, OrderRepository orders,
-                HoldingRepository holdings, ExecutionRepository executions) {
+                HoldingRepository holdings, ExecutionRepository executions, KiwoomStockStream stream) {
             return new OrderExecutionService(accounts, orders, holdings, executions,
-                    java.time.Clock.fixed(Instant.parse("2026-10-01T01:00:00Z"), java.time.ZoneOffset.UTC));
+                    java.time.Clock.fixed(Instant.parse("2026-10-01T01:00:00Z"), java.time.ZoneOffset.UTC), stream);
         }
     }
 
@@ -214,30 +214,30 @@ class OrderControllerTests {
                         "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), order.getId())
                         .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.summary").value("매도 판단"))
+                .andExpect(jsonPath("$.reason").value("매도 판단"))
                 .andExpect(jsonPath("$.report_id").doesNotExist())
-                .andExpect(jsonPath("$.stock_name").value("[더미] 종목명"))
-                .andExpect(jsonPath("$.decided_at").value("2026-09-03T14:20:00+09:00"))
-                .andExpect(jsonPath("$.buy_analysis").isEmpty())
-                .andExpect(jsonPath("$.sell_analysis.trade_result.holding_days").value(0))
-                .andExpect(jsonPath("$.sell_analysis.trade_result.target_return_percent").value(0))
-                .andExpect(jsonPath("$.sell_analysis.trade_result.target_reached").value(false))
-                .andExpect(jsonPath("$.sell_analysis.trade_result.stop_loss_triggered").value(false))
-                .andExpect(jsonPath("$.sell_analysis.buy_decision.buy_report_id").value(0))
-                .andExpect(jsonPath("$.sell_analysis.buy_decision.summary").value("[더미] 매수 당시 판단"))
-                .andExpect(jsonPath("$.sell_analysis.holding_changes[0].summary").value("[더미] 보유 중 변화"))
-                .andExpect(jsonPath("$.sell_analysis.sell_decision").value("[더미] 매도 판단"))
-                .andExpect(jsonPath("$.sell_analysis.expectation_vs_outcome.expected_return_min_percent").value(0))
-                .andExpect(jsonPath("$.sell_analysis.expectation_vs_outcome.expected_return_max_percent").value(0))
-                .andExpect(jsonPath("$.sell_analysis.expectation_vs_outcome.summary").value("[더미] 예상과 결과"))
+                .andExpect(jsonPath("$.stock_name").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.holding_weight_after_trade_percent").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.holding_weight_limit_percent").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.reasoning").isArray())
+                .andExpect(jsonPath("$.sell_result.holding_days").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.sell_result.target_return_percent").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.sell_result.target_reached").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.sell_result.stop_loss_triggered").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.message").doesNotExist())
+                .andExpect(jsonPath("$.summary").doesNotExist())
+                .andExpect(jsonPath("$.report_status").doesNotExist())
+                .andExpect(jsonPath("$.decided_at").doesNotExist())
+                .andExpect(jsonPath("$.buy_analysis").doesNotExist())
+                .andExpect(jsonPath("$.sell_analysis").doesNotExist())
                 .andExpect(jsonPath("$.order_status").doesNotExist())
                 .andExpect(jsonPath("$.execution.execution_count").doesNotExist())
                 .andExpect(jsonPath("$.execution.execution_price").value(196500))
                 .andExpect(jsonPath("$.execution.execution_quantity").value(2))
                 .andExpect(jsonPath("$.execution.trade_amount").value(393000))
-                .andExpect(jsonPath("$.sell_analysis.trade_result.average_buy_price").value(186600))
-                .andExpect(jsonPath("$.sell_analysis.trade_result.realized_pnl").value(19800))
-                .andExpect(jsonPath("$.sell_analysis.trade_result.realized_return_percent").value(5.3055));
+                .andExpect(jsonPath("$.sell_result.average_buy_price").value(186600))
+                .andExpect(jsonPath("$.sell_result.realized_pnl").value(19800))
+                .andExpect(jsonPath("$.sell_result.realized_return_percent").value(5.3055));
         var other = users.save(new User("다른 조회 사용자"));
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
                         "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), order.getId())
@@ -249,16 +249,18 @@ class OrderControllerTests {
     }
 
     @Test
-    void pendingReportHasNoExecutionAndMissingReportReturns404() throws Exception {
-        var order = orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY,
-                1, 70000, Order.Source.AI, "판단".repeat(600), Instant.now()));
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
-                        "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), order.getId())
-                        .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.summary").value("판단".repeat(600)))
-                .andExpect(jsonPath("$.order_status").doesNotExist())
-                .andExpect(jsonPath("$.execution").isEmpty());
+    void pendingCancelledAndMissingExecutionReportsReturn404() throws Exception {
+        for (String state : java.util.List.of("pending", "cancelled", "executed_without_fill")) {
+            var order = orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY,
+                    1, 70000, Order.Source.AI, "판단", Instant.now()));
+            if ("cancelled".equals(state)) order.cancel(Instant.now());
+            if ("executed_without_fill".equals(state)) order.execute();
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                            "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), order.getId())
+                            .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.code").value("AI_REPORT_NOT_FOUND"));
+        }
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
                         "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), Long.MAX_VALUE)
                         .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
@@ -449,7 +451,10 @@ class OrderControllerTests {
         mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
                         .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isCreated());
-        long orderId = orders.findAll().getFirst().getId();
+        var saved = orders.findAll().getFirst();
+        long orderId = saved.getId();
+        executions.save(new Execution(saved, 70000, 1, null, null, Instant.parse("2026-10-01T01:01:00Z")));
+        saved.execute();
         entityManager.flush();
         entityManager.clear();
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
@@ -457,7 +462,7 @@ class OrderControllerTests {
                         .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.stock_name").value("AI가 보낸 삼성전자"))
-                .andExpect(jsonPath("$.summary").value("매수 근거"))
+                .andExpect(jsonPath("$.reason").value("매수 근거"))
                 .andExpect(jsonPath("$.reasoning[0].label").value("업황"))
                 .andExpect(jsonPath("$.reasoning[1].body").value("비중 확인"))
                 .andExpect(jsonPath("$.thoughts").doesNotExist());
@@ -521,6 +526,13 @@ class OrderControllerTests {
                         .andExpect(status().isCreated()).andExpect(jsonPath("$.stock_name").value(name)).andReturn();
                 long orderId = tools.jackson.databind.json.JsonMapper.builder().build()
                         .readTree(result.getResponse().getContentAsString()).path("order_id").asLong();
+                var saved = orders.findById(orderId).orElseThrow();
+                if (saved.getStatus() == Order.Status.PENDING) {
+                    executions.save(new Execution(saved, 70000, 1,
+                            saved.getSide() == Order.Side.SELL ? java.math.BigDecimal.ZERO : null,
+                            null, Instant.parse("2026-10-01T01:01:00Z")));
+                    saved.execute();
+                }
                 entityManager.flush();
                 entityManager.clear();
                 mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
@@ -533,6 +545,165 @@ class OrderControllerTests {
         }
     }
 
+
+
+    @Test
+    void detailReturnsStoredBuyLimitAndSellLossResultWithoutDummyFields() throws Exception {
+        for (var side : Order.Side.values()) {
+            var order = orders.save(Order.pendingLimit(account, "005930", side, 3, 70000,
+                    Order.Source.AI, "입력 근거", "삼성전자",
+                    java.util.List.of(new ReportReasoning("위험", "확인 내용")), 30.123456, false,
+                    Instant.parse("2026-10-01T01:00:00Z")));
+            executions.save(new Execution(order, 70000, 3,
+                    side == Order.Side.SELL ? java.math.BigDecimal.ZERO : null,
+                    side == Order.Side.SELL ? java.math.BigDecimal.ZERO : null,
+                    Instant.parse("2026-10-01T01:01:00Z")));
+            order.execute();
+            long id = order.getId();
+            entityManager.flush();
+            entityManager.clear();
+            var response = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                            "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), id)
+                            .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            var json = tools.jackson.databind.json.JsonMapper.builder().build().readTree(response);
+            java.util.Set<String> fields = new java.util.HashSet<>();
+            json.properties().forEach(entry -> fields.add(entry.getKey()));
+            assertThat(fields).containsExactlyInAnyOrder("order_id", "order_side", "stock_code", "stock_name",
+                    "holding_weight_after_trade_percent", "holding_weight_limit_percent", "execution",
+                    "reason", "reasoning", "sell_result");
+            assertThat(json.path("reason").asText()).isEqualTo("입력 근거");
+            assertThat(json.path("reasoning").get(0).path("label").asText()).isEqualTo("위험");
+            assertThat(json.path("stock_name").asText()).isEqualTo("삼성전자");
+            assertThat(json.path("execution").path("executed_at").asText()).isEqualTo("2026-10-01T10:01:00+09:00");
+            assertThat(response).doesNotContain("[더미]");
+            if (side == Order.Side.BUY) {
+                assertThat(json.path("holding_weight_limit_percent").asDouble()).isEqualTo(30.123456);
+                assertThat(json.path("sell_result").isNull()).isTrue();
+            } else {
+                assertThat(json.path("holding_weight_limit_percent").isNull()).isTrue();
+                assertThat(json.path("sell_result").path("stop_loss_triggered").asBoolean()).isFalse();
+                assertThat(json.path("sell_result").path("realized_pnl").asDouble()).isZero();
+                assertThat(json.path("sell_result").path("realized_return_percent").asDouble()).isZero();
+            }
+        }
+    }
+
+    @Test
+    void detailDoesNotInventMissingSellPnlAndReturnsNegativePnl() throws Exception {
+        for (boolean missing : java.util.List.of(true, false)) {
+            var order = orders.save(Order.pendingLimit(account, "000660", Order.Side.SELL, 3, 100,
+                    Order.Source.AI, "매도", null, java.util.List.of(), null, true, Instant.now()));
+            executions.save(new Execution(order, 100, 1, new java.math.BigDecimal("-10"), null, Instant.now()));
+            executions.save(new Execution(order, 100, 2, missing ? null : new java.math.BigDecimal("-20"), null, Instant.now()));
+            order.execute();
+            var result = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                            "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), order.getId())
+                            .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.execution.trade_amount").value(300))
+                    .andExpect(jsonPath("$.execution.execution_quantity").value(3))
+                    .andExpect(jsonPath("$.sell_result.stop_loss_triggered").value(true)).andReturn();
+            var json = tools.jackson.databind.json.JsonMapper.builder().build()
+                    .readTree(result.getResponse().getContentAsString()).path("sell_result");
+            if (missing) {
+                assertThat(json.path("realized_pnl").isNull()).isTrue();
+                assertThat(json.path("average_buy_price").isNull()).isTrue();
+                assertThat(json.path("realized_return_percent").isNull()).isTrue();
+            } else {
+                assertThat(json.path("realized_pnl").asDouble()).isEqualTo(-30);
+                assertThat(json.path("average_buy_price").asDouble()).isEqualTo(110);
+                assertThat(json.path("realized_return_percent").asDouble()).isEqualTo(-9.0909);
+            }
+        }
+    }
+
+
+    private Order historicalTrade(Order.Side side, long quantity, String time) {
+        var instant = Instant.parse(time);
+        var order = orders.save(Order.pendingLimit(account, "000660", side, quantity, 100,
+                Order.Source.AI, "근거", instant));
+        executions.save(new Execution(order, 100, quantity,
+                side == Order.Side.SELL ? java.math.BigDecimal.ZERO : null, null, instant));
+        order.execute();
+        return order;
+    }
+
+    @Test
+    void holdingDaysKeepsFirstBuyResetsAfterFullSaleAndIgnoresFutureTrades() throws Exception {
+        historicalTrade(Order.Side.BUY, 2, "2026-08-01T01:00:00Z");
+        historicalTrade(Order.Side.BUY, 1, "2026-08-05T01:00:00Z");
+        var partial = historicalTrade(Order.Side.SELL, 1, "2026-08-10T01:00:00Z");
+        historicalTrade(Order.Side.SELL, 2, "2026-08-11T01:00:00Z");
+        historicalTrade(Order.Side.BUY, 1, "2026-08-20T14:59:00Z");
+        var next = historicalTrade(Order.Side.SELL, 1, "2026-08-20T15:01:00Z");
+        historicalTrade(Order.Side.BUY, 10, "2026-09-01T01:00:00Z");
+        for (var entry : java.util.Map.of(partial.getId(), 9, next.getId(), 1).entrySet()) {
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                            "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), entry.getKey())
+                            .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.sell_result.holding_days").value(entry.getValue()));
+        }
+    }
+
+    @Test
+    void buyWeightIsSavedAtExecutionAndDoesNotChangeAfterLaterBuy() throws Exception {
+        for (String type : java.util.List.of("market", "limit")) {
+            if ("market".equals(type)) marketBook(Instant.parse("2026-10-01T01:00:00Z"), java.time.LocalTime.of(10, 0));
+            else when(stream.latest("005930")).thenReturn(java.util.Optional.of(
+                    new KiwoomStockStream.StockPrice("005930", new java.math.BigDecimal("70000"),
+                            java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO,
+                            java.time.LocalTime.of(10, 0), Instant.parse("2026-10-01T01:00:00Z"))));
+            var result = mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                            .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                            .content(reportInputBody("buy", type, ",\"holding_weight_limit_percent\":0")))
+                    .andExpect(status().isCreated()).andReturn();
+            long id = tools.jackson.databind.json.JsonMapper.builder().build()
+                    .readTree(result.getResponse().getContentAsString()).path("order_id").asLong();
+            entityManager.flush();
+            entityManager.clear();
+            var expected = "market".equals(type) ? 7 : 14;
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                            "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), id)
+                            .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.holding_weight_after_trade_percent").value(expected));
+        }
+        var first = orders.findAll().stream().min(java.util.Comparator.comparing(Order::getId)).orElseThrow();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                        "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), first.getId())
+                        .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
+                .andExpect(jsonPath("$.holding_weight_after_trade_percent").value(7));
+    }
+
+    @Test
+    void buyWeightUsesOtherStockPriceAndMissingPriceKeepsOrderSuccessful() throws Exception {
+        holdings.save(new Holding(account, "000660", 10, new java.math.BigDecimal("50000")));
+        account.changeCash(-50000);
+        marketBook(Instant.parse("2026-10-01T01:00:00Z"), java.time.LocalTime.of(10, 0));
+        for (boolean available : java.util.List.of(false, true)) {
+            when(stream.latest("000660")).thenReturn(available ? java.util.Optional.of(
+                    new KiwoomStockStream.StockPrice("000660", new java.math.BigDecimal("10000"),
+                            java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO,
+                            java.time.LocalTime.of(10, 0), Instant.parse("2026-10-01T01:00:00Z")))
+                    : java.util.Optional.empty());
+            var result = mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                            .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                            .content(reportInputBody("buy", "market", ",\"holding_weight_limit_percent\":30")))
+                    .andExpect(status().isCreated()).andReturn();
+            long id = tools.jackson.databind.json.JsonMapper.builder().build()
+                    .readTree(result.getResponse().getContentAsString()).path("order_id").asLong();
+            var report = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                            "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), id)
+                            .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
+                    .andExpect(status().isOk()).andReturn();
+            var weight = tools.jackson.databind.json.JsonMapper.builder().build()
+                    .readTree(report.getResponse().getContentAsString()).path("holding_weight_after_trade_percent");
+            if (available) assertThat(weight.asDouble()).isEqualTo(13.3333);
+            else assertThat(weight.isNull()).isTrue();
+        }
+    }
 
     private String reportInputBody(String side, String type, String fields) {
         return """

@@ -24,15 +24,24 @@ public class OrderExecutionService {
     private final HoldingRepository holdings;
     private final ExecutionRepository executions;
     private final Clock clock;
+    private final com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream stream;
 
     @Autowired
     public OrderExecutionService(AccountRepository accounts, OrderRepository orders,
-            HoldingRepository holdings, ExecutionRepository executions) {
-        this(accounts, orders, holdings, executions, Clock.systemUTC());
+            HoldingRepository holdings, ExecutionRepository executions,
+            com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream stream) {
+        this(accounts, orders, holdings, executions, Clock.systemUTC(), stream);
     }
 
     OrderExecutionService(AccountRepository accounts, OrderRepository orders,
             HoldingRepository holdings, ExecutionRepository executions, Clock clock) {
+        this(accounts, orders, holdings, executions, clock, null);
+    }
+
+    OrderExecutionService(AccountRepository accounts, OrderRepository orders,
+            HoldingRepository holdings, ExecutionRepository executions, Clock clock,
+            com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream stream) {
+        this.stream = stream;
         this.accounts = accounts;
         this.orders = orders;
         this.holdings = holdings;
@@ -173,8 +182,34 @@ public class OrderExecutionService {
             }
             executions.save(new Execution(order, fill.price().longValueExact(), fill.quantity(), pnl, returnPercent, now));
         }
+        if (order.getSide() == Order.Side.BUY) recordBuyWeight(order, account, amount, quantity);
         order.execute();
         return order;
+    }
+
+    private void recordBuyWeight(Order order,
+            com.stock_spoon.river_be.account.entity.Account account, long amount, long quantity) {
+        if (order.getReport() == null) return;
+        var fillPrice = BigDecimal.valueOf(amount).divide(BigDecimal.valueOf(quantity), java.math.MathContext.DECIMAL128);
+        BigDecimal total = BigDecimal.valueOf(account.getCashBalance());
+        BigDecimal stockValue = null;
+        for (var owned : holdings.findAllByAccountIds(java.util.List.of(account.getId()))) {
+            BigDecimal price;
+            if (owned.getStockCode().equals(order.getStockCode())) {
+                price = fillPrice;
+            } else {
+                var quote = stream == null ? null : stream.latest(owned.getStockCode()).orElse(null);
+                if (quote == null || quote.currentPrice() == null || quote.currentPrice().signum() <= 0) return;
+                price = quote.currentPrice();
+            }
+            var value = price.multiply(BigDecimal.valueOf(owned.getQuantity()));
+            total = total.add(value);
+            if (owned.getStockCode().equals(order.getStockCode())) stockValue = value;
+        }
+        if (stockValue != null && total.signum() > 0) {
+            order.getReport().recordHoldingWeight(stockValue.multiply(BigDecimal.valueOf(100))
+                    .divide(total, 4, RoundingMode.HALF_UP).doubleValue());
+        }
     }
 
     private static BigDecimal soldCost(BigDecimal totalCost, long heldQuantity, long soldQuantity) {
@@ -227,6 +262,7 @@ public class OrderExecutionService {
             else owned.reduce(quantity, soldCost);
         }
         executions.save(new Execution(order, currentPrice, quantity, pnl, returnPercent, now));
+        if (order.getSide() == Order.Side.BUY) recordBuyWeight(order, account, amount, quantity);
         order.execute();
         return true;
     }

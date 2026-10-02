@@ -107,7 +107,7 @@ Cookie: access_token={StockSpoon Access JWT}
 }
 ```
 
-`available_cash`는 기존 주문 로직을 재사용해 현금에서 대기 매수 주문의 예약금을 뺀 실제 값이다. `is_duel_account=false`, `holdings_market_value=0`, `total_assets=cash_balance`, `return_percent=0.0`, `executed_trade_count=0`은 임시 표시값이며 보유종목 평가·체결 기능 연동 시 교체한다.
+`available_cash`는 기존 주문 로직을 재사용해 현금에서 대기 매수 주문의 예약금을 뺀 실제 값이다. `holdings_market_value`는 전체 보유종목의 키움 현재가 × 보유수량 합계이며, `total_assets`는 현금 잔액 + 보유 평가액이다. `return_percent`는 (총자산 - 초기자본) / 초기자본 × 100을 소수점 4자리 HALF_UP으로 계산한다. `is_duel_account=false`와 `executed_trade_count=0`은 임시 표시값이다.
 
 추가 계좌 생성은 API 문서에 맞춘 `AccountCreateResponse`를 반환한다. 위 온보딩 응답의 `ai_delegated` 대신 `is_ai_managed`를 제공하며, 실제 AI 위임 상태인 `true`를 반환한다.
 
@@ -126,7 +126,7 @@ Cookie: access_token={StockSpoon Access JWT}
 ]
 ```
 
-목록의 `is_duel_account=false`, `total_assets=cash_balance`, `return_percent=0.0`은 FE 응답 형식을 맞추기 위한 임시 표시값이다. 보유종목이 있어도 평가액·실제 수익률을 반영하지 않는다. 대결 계좌 및 보유종목 평가 연동 시 실제 값으로 교체해야 한다. `cash_balance`는 계좌 생성 시 시작 자금으로 초기화되며, 매매에 따른 잔액 갱신은 아직 없다.
+목록의 `total_assets`와 `return_percent`는 상세와 같은 기준으로 전체 보유종목 평가액을 반영한다. `is_duel_account=false`는 임시 표시값이다. `cash_balance`는 계좌 생성 시 초기자본으로 초기화되고 매매 체결 시 갱신된다.
 
 ## 5. 계좌명 수정
 
@@ -186,3 +186,9 @@ Cookie: access_token={StockSpoon Access JWT}; XSRF-TOKEN={csrf-token}
 - 계좌 생성·이름 수정의 사전 중복 검사는 동시 요청의 경합까지 보장하지 않는다. 특히 MySQL 이전 시 유일 제약, 예외 변환, 자동 이름 생성의 동시성을 설계해야 한다.
 - 총자산, 수익률, 주문 가능 현금, 보유수량, 주식분할·병합 처리는 보유종목·주문·체결·시세 개발 단계에서 구현해야 한다.
 - 마지막 활성 계좌 비활성화 허용 여부, 활성 계좌 0개일 때 온보딩 상태, 병합 단주, 회원 탈퇴 시 이력 보존 범위는 아직 정책이 확정되지 않았다.
+
+### 계좌 평가액 조회
+
+계좌 목록과 상세 모두 요청 시점 키움 REST 현재가(기존 currentPrice)를 사용한다. 현재가를 별도 저장하지 않으며 목록 요청 안에서는 동일 종목의 현재가를 재사용한다. 모든 보유종목을 합산하고 매도 대기 수량도 실제 체결 전까지 포함한다. 총자산에는 available_cash가 아닌 cash_balance를 사용하므로 미체결 매수 예약금은 자산에서 차감하지 않는다.
+
+권한 검증과 보유 조회 후 DB 트랜잭션 밖에서 현재가를 조회한다. 시세 실패는 503 HOLDINGS_DATA_UNAVAILABLE로 반환하며 일부 종목을 누락한 평가액이나 더미 값을 반환하지 않는다. 보유종목이 없으면 평가액은 0이고 외부 조회를 하지 않는다. 종목별 시세는 순차 조회하므로 모든 가격이 같은 순간의 스냅샷이라는 의미는 아니다.

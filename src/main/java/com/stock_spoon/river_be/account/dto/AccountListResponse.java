@@ -11,9 +11,15 @@ public record AccountListResponse(
         @JsonProperty("total_assets") long totalAssets,
         @JsonProperty("return_percent") double returnPercent) {
 
-    public static AccountListResponse from(Account account) {
-        // ponytail: 임시 표시값. 대결 계좌와 보유종목 평가 연동 시 실제 상태·총자산·수익률로 교체한다.
+    public static AccountListResponse from(Account account, long holdingsMarketValue) {
+        // ponytail: 대결 계좌 상태는 임시값. 대결 계좌 연동 시 교체한다.
+        long totalAssets = Math.addExact(account.getCashBalance(), holdingsMarketValue);
+        double returnPercent = java.math.BigDecimal.valueOf(totalAssets)
+                .subtract(java.math.BigDecimal.valueOf(account.getInitialCapital()))
+                .multiply(java.math.BigDecimal.valueOf(100))
+                .divide(java.math.BigDecimal.valueOf(account.getInitialCapital()), 4, java.math.RoundingMode.HALF_UP)
+                .doubleValue();
         return new AccountListResponse(account.getId(), account.getName(), false,
-                account.getCashBalance(), account.getCashBalance(), 0.0);
+                account.getCashBalance(), totalAssets, returnPercent);
     }
 }

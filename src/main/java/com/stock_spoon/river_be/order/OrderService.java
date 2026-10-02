@@ -122,14 +122,31 @@ public class OrderService {
     @Transactional
     public Order cancel(long accountId, long orderId) {
         lockedAccount(accountId);
+        return cancelPending(accountId, orderId);
+    }
+
+    @Transactional
+    public Order cancel(long userId, long accountId, long orderId) {
+        Account account = lockedAccount(accountId);
+        if (!account.belongsTo(userId)) {
+            throw new OrderException(HttpStatus.FORBIDDEN, "FORBIDDEN_ACCOUNT",
+                    "이 계좌의 주문을 취소할 권한이 없습니다.");
+        }
+        return cancelPending(accountId, orderId);
+    }
+
+    private Order cancelPending(long accountId, long orderId) {
         Order order = orders.findByIdAndAccountId(orderId, accountId)
-                .orElseThrow(() -> new OrderException("주문을 찾을 수 없습니다."));
+                .orElseThrow(() -> new OrderException(HttpStatus.NOT_FOUND,
+                        "ORDER_NOT_FOUND", "주문을 찾을 수 없습니다."));
         if (order.getStatus() != Order.Status.PENDING) {
-            throw new OrderException("대기 중인 주문만 취소할 수 있습니다.");
+            throw new OrderException(HttpStatus.CONFLICT, "ORDER_NOT_PENDING",
+                    "대기 중인 주문만 취소할 수 있습니다.");
         }
         order.cancel(clock.instant());
         return order;
     }
+
 
     @Transactional(readOnly = true)
     public long availableCash(long accountId) {

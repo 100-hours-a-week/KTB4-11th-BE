@@ -47,6 +47,21 @@ public class OrderController {
         return history.list(userId, accountId, limit);
     }
 
+
+    @org.springframework.web.bind.annotation.PatchMapping("/{orderId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void cancel(@AuthenticationPrincipal Jwt jwt, @PathVariable long accountId,
+            @PathVariable long orderId, @Valid @RequestBody OrderCancelRequest request) {
+        long userId;
+        try {
+            userId = Long.parseLong(jwt.getSubject());
+        } catch (NumberFormatException error) {
+            throw new OrderException(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", "인증 정보를 확인하세요.");
+        }
+        orders.cancel(userId, accountId, orderId);
+    }
+
+
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public OrderCreateResponse create(@AuthenticationPrincipal Jwt jwt,

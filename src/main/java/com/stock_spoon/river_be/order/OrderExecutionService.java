@@ -56,17 +56,19 @@ public class OrderExecutionService {
     public Order executeMarket(long userId, long accountId, OrderCreateRequest request, OrderBook book) {
         return executeMarket(userId, accountId, request.stockCode(),
                 Order.Side.valueOf(request.orderSide().toUpperCase(java.util.Locale.ROOT)),
-                request.quantity(), request.reason(), book, request.stockName(), request.reasoning());
+                request.quantity(), request.reason(), book, request.stockName(), request.reasoning(),
+                request.holdingWeightLimitPercent(), request.isLowerTriggered());
     }
 
     /** 공개 메서드의 트랜잭션 안에서 주문·체결·자산을 전량 반영한다. */
     private Order executeMarket(long userId, long accountId, String stockCode, Order.Side side,
             long quantity, String reason, OrderBook book) {
-        return executeMarket(userId, accountId, stockCode, side, quantity, reason, book, null, java.util.List.of());
+        return executeMarket(userId, accountId, stockCode, side, quantity, reason, book, null, java.util.List.of(), null, null);
     }
 
     private Order executeMarket(long userId, long accountId, String stockCode, Order.Side side,
-            long quantity, String reason, OrderBook book, String stockName, java.util.List<ReportReasoning> reasoning) {
+            long quantity, String reason, OrderBook book, String stockName, java.util.List<ReportReasoning> reasoning,
+            Double holdingWeightLimitPercent, Boolean isLowerTriggered) {
         if (stockCode == null || !stockCode.matches("[0-9]{6}") || quantity <= 0
                 || reason == null || reason.isBlank() || reason.length() > 100000) {
             throw new OrderException("주문 입력값을 확인하세요.");
@@ -150,7 +152,7 @@ public class OrderExecutionService {
         } catch (ArithmeticException error) {
             throw new OrderException("현금 잔액이 허용 범위를 초과합니다.");
         }
-        var order = orders.save(Order.pendingMarket(account, stockCode, side, quantity, reason, stockName, reasoning, now));
+        var order = orders.save(Order.pendingMarket(account, stockCode, side, quantity, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered, now));
         account.changeCash(cashDelta);
         var cost = BigDecimal.valueOf(amount);
         if (side == Order.Side.BUY) {

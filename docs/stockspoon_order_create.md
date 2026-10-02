@@ -17,6 +17,7 @@ AI가 서명한 JWT에는 `actor: "AI"`가 있어야 한다. JWT `sub`의 사용
   "order_type": "limit",
   "limit_price": 70000,
   "quantity": 2,
+  "holding_weight_limit_percent": 30.5,
   "reason": "목표 가격에 접근해 매수를 결정했어요.",
   "reasoning": [{"label": "가격", "body": "목표 가격에 접근했어요."}]
 }
@@ -124,3 +125,38 @@ focused_news·decision_summary를 reason에 JSON 문자열로 저장하는 계�
 
 기존 DB에는 새 앱 배포 전에 db/ai_report_reasoning.sql을 1회 적용해야 한다.
 이 SQL은 자동 실행되지 않으며 운영 DB 적용은 별도 배포 작업이다.
+
+
+## AI 주문 리포트 추가 입력
+
+| 필드 | Java 타입 | 매수 | 매도 |
+|---|---|---|---|
+| holding_weight_limit_percent | Double | 필수 | 생략/null 또는 값 허용 |
+| is_lower_triggered | Boolean | 생략/null 또는 값 허용 | 필수 |
+
+holding_weight_limit_percent는 0~100의 유한한 숫자이며 소수 자릿수 제한 없이 Double 정밀도로 저장한다.
+is_lower_triggered는 JSON true/false로 받는다. false도 유효하며 문자열 "false"나 숫자 0/1은 거절한다.
+방향별 필수값 누락/null 및 잘못된 값은 400이다. 반대 방향 필드도 보내면 받아 저장한다.
+두 값은 시장가·지정가 모두 주문별 ai_order_reports에 주문과 같은 트랜잭션으로 저장한다.
+비중 상한은 표시용이며 실제 비중 비교·주문 거절 기준으로 사용하지 않는다.
+손실 제한 결과는 AI가 보낸 값이며 BE가 수익률로 재계산하거나 강제 매도를 추가하지 않는다.
+
+매도 요청 예시:
+
+```json
+{
+  "stock_code": "005930",
+  "stock_name": "삼성전자",
+  "order_side": "sell",
+  "order_type": "market",
+  "limit_price": null,
+  "quantity": 1,
+  "is_lower_triggered": false,
+  "reason": "상승 흐름이 약해져 매도했어요.",
+  "reasoning": [{"label": "흐름 검토", "body": "보유분을 정리하기로 했어요."}]
+}
+```
+
+기존 DB에는 db/ai_report_order_inputs.sql을 배포 전에 1회 적용한다.
+SQL은 자동 실행되지 않으며 기존 리포트의 두 열은 NULL로 유지한다.
+이번 변경은 요청 검증과 저장만 반영한다. 주문 생성 응답과 리포트 상세조회 응답 구조는 변경하지 않는다.

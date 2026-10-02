@@ -14,7 +14,7 @@ public record OrderCreateRequest(
         @JsonProperty("limit_price") Long limitPrice,
         @NotNull @Min(1) Long quantity,
         @NotBlank @Size(max = 100000) String reason,
-        @JsonProperty("stock_name") @NotBlank @Size(max = 255) String stockName,
+        @JsonProperty("stock_name") @Pattern(regexp = "(?s).*[^\\p{javaWhitespace}].*") @Size(max = 255) String stockName,
         java.util.List<@NotNull @jakarta.validation.Valid ReportReasoning> reasoning) {
 
 }

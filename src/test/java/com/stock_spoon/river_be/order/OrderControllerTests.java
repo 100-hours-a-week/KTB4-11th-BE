@@ -480,21 +480,25 @@ class OrderControllerTests {
     }
 
     @Test
-    void stockNameIsRequiredAndCannotBeBlankOrTooLong() throws Exception {
+    void stockNameIsOptionalAndCannotBeBlankOrTooLong() throws Exception {
         String body = """
                 {"stock_code":"005930","order_side":"buy","order_type":"limit",
                  "limit_price":70000,"quantity":1,"reason":"근거"}
                 """;
         mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
                         .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body))
-                .andExpect(status().isBadRequest());
-        for (String invalid : java.util.List.of("null", "\"\"", "\" \"", "\"" + "가".repeat(256) + "\"")) {
+                .andExpect(status().isCreated());
+        for (String invalid : java.util.List.of("\"\"", "\" \"", "\"" + "가".repeat(256) + "\"")) {
             mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
                             .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
                             .content(body.replace("\"reason\"", "\"stock_name\":" + invalid + ",\"reason\"")))
                     .andExpect(status().isBadRequest());
         }
-        assertThat(orders.count()).isZero();
+        mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                        .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content(body.replace("\"reason\"", "\"stock_name\":null,\"reason\"")))
+                .andExpect(status().isCreated());
+        assertThat(orders.count()).isEqualTo(2);
     }
 
     @Test

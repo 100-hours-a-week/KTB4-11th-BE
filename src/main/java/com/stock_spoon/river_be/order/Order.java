@@ -62,10 +62,15 @@ public class Order {
 
     public static Order pendingMarketBuy(Account account, String stockCode, long quantity,
             String reason, Instant now) {
+        return pendingMarket(account, stockCode, Side.BUY, quantity, reason, now);
+    }
+
+    public static Order pendingMarket(Account account, String stockCode, Side side, long quantity,
+            String reason, Instant now) {
         var order = new Order();
         order.account = account;
         order.stockCode = stockCode;
-        order.side = Side.BUY;
+        order.side = side;
         order.type = Type.MARKET;
         order.status = Status.PENDING;
         order.source = Source.AI;

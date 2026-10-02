@@ -55,8 +55,8 @@ public class OrderController {
             throw new OrderException(HttpStatus.FORBIDDEN, "AI_ORDER_ONLY",
                     "AI 서버만 주문을 생성할 수 있습니다.");
         }
-        boolean marketBuy = "market".equalsIgnoreCase(request.orderType());
-        if (!marketBuy && !"limit".equalsIgnoreCase(request.orderType())) {
+        boolean marketOrder = "market".equalsIgnoreCase(request.orderType());
+        if (!marketOrder && !"limit".equalsIgnoreCase(request.orderType())) {
             throw new OrderException("주문 유형을 확인하세요.");
         }
         Order.Side side;
@@ -65,10 +65,10 @@ public class OrderController {
         } catch (IllegalArgumentException error) {
             throw new OrderException("매수·매도 구분을 확인하세요.");
         }
-        if (marketBuy && (side != Order.Side.BUY || request.limitPrice() != null)) {
-            throw new OrderException("시장가 주문은 매수만 지원하며 지정가는 null이어야 합니다.");
+        if (marketOrder && request.limitPrice() != null) {
+            throw new OrderException("시장가 주문의 지정가는 null이어야 합니다.");
         }
-        if (!marketBuy && (request.limitPrice() == null || request.limitPrice() <= 0)) {
+        if (!marketOrder && (request.limitPrice() == null || request.limitPrice() <= 0)) {
             throw new OrderException("지정가를 입력하세요.");
         }
         if (request.reason() == null) {
@@ -81,11 +81,16 @@ public class OrderController {
             throw new OrderException(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", "인증 정보를 확인하세요.");
         }
         orders.assertOrderableAccount(userId, accountId);
-        if (marketBuy) {
+        if (marketOrder) {
             market.validateMarket(request.stockCode());
-            var order = subscriptions.create(request.stockCode(), () -> marketExecution.executeMarketBuy(
-                    userId, accountId, request.stockCode(), request.quantity(), request.reason(),
-                    stream.latestOrderBook(request.stockCode()).orElse(null)));
+            var order = subscriptions.create(request.stockCode(), () -> {
+                var book = stream.latestOrderBook(request.stockCode()).orElse(null);
+                return side == Order.Side.BUY
+                        ? marketExecution.executeMarketBuy(userId, accountId, request.stockCode(),
+                                request.quantity(), request.reason(), book)
+                        : marketExecution.executeMarketSell(userId, accountId, request.stockCode(),
+                                request.quantity(), request.reason(), book);
+            });
             return execution.response(accountId, order.getId());
         }
         market.validateLimit(request.stockCode(), request.limitPrice());

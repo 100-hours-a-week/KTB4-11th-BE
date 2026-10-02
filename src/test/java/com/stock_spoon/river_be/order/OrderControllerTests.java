@@ -352,6 +352,93 @@ class OrderControllerTests {
         assertThat(executions.count()).isZero();
     }
 
+    private void sellBook() {
+        var levels = java.util.List.of(
+                new KiwoomStockStream.QuoteLevel(new java.math.BigDecimal("70000"), 5),
+                new KiwoomStockStream.QuoteLevel(new java.math.BigDecimal("70200"), 3),
+                new KiwoomStockStream.QuoteLevel(new java.math.BigDecimal("70100"), 4));
+        when(stream.latestOrderBook("005930")).thenReturn(java.util.Optional.of(
+                new KiwoomStockStream.OrderBook("005930", java.util.List.of(), levels,
+                        java.time.LocalTime.of(10, 0), Instant.parse("2026-10-01T01:00:00Z"))));
+    }
+
+    private org.springframework.test.web.servlet.ResultActions sellRequest(long quantity, String price) throws Exception {
+        return mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                .content(marketBody(quantity, price).replace("\"buy\"", "\"sell\"")));
+    }
+
+    @Test
+    void marketSellConsumesHighestBidsAndUsesOriginalAverageCost() throws Exception {
+        sellBook();
+        holdings.save(new Holding(account, "005930", 20, new java.math.BigDecimal("1200000")));
+        sellRequest(10, "null").andExpect(status().isCreated())
+                .andExpect(jsonPath("$.order_side").value("sell"))
+                .andExpect(jsonPath("$.order_type").value("market"))
+                .andExpect(jsonPath("$.order_status").value("executed"))
+                .andExpect(jsonPath("$.reserved_cash").value(0))
+                .andExpect(jsonPath("$.limit_price").isEmpty())
+                .andExpect(jsonPath("$.executions.length()").value(3))
+                .andExpect(jsonPath("$.executions[0].execution_price").value(70200))
+                .andExpect(jsonPath("$.executions[0].execution_quantity").value(3))
+                .andExpect(jsonPath("$.executions[0].realized_pnl").value(30600))
+                .andExpect(jsonPath("$.executions[0].realized_return_percent").value(17.0000))
+                .andExpect(jsonPath("$.executions[1].execution_price").value(70100))
+                .andExpect(jsonPath("$.executions[1].execution_quantity").value(4))
+                .andExpect(jsonPath("$.executions[1].realized_pnl").value(40400))
+                .andExpect(jsonPath("$.executions[1].realized_return_percent").value(16.8333))
+                .andExpect(jsonPath("$.executions[2].execution_price").value(70000))
+                .andExpect(jsonPath("$.executions[2].execution_quantity").value(3))
+                .andExpect(jsonPath("$.executions[2].realized_pnl").value(30000))
+                .andExpect(jsonPath("$.executions[2].realized_return_percent").value(16.6667));
+        assertThat(account.getCashBalance()).isEqualTo(1701000);
+        var held = holdings.findByAccountIdAndStockCode(account.getId(), "005930").orElseThrow();
+        assertThat(held.getQuantity()).isEqualTo(10);
+        assertThat(held.getTotalCost()).isEqualByComparingTo("600000");
+        assertThat(orders.findAll()).allSatisfy(order ->
+                assertThat(order.getReport().getReason()).isEqualTo("매수 판단"));
+    }
+
+    @Test
+    void marketSellRejectsReservedSharesAndInsufficientBidLiquidity() throws Exception {
+        sellBook();
+        var held = holdings.save(new Holding(account, "005930", 20, new java.math.BigDecimal("1200000")));
+        orders.save(Order.pendingLimit(account, "005930", Order.Side.SELL, 15, 80000,
+                Order.Source.AI, "예약", Instant.parse("2026-10-01T01:00:00Z")));
+        sellRequest(10, "null").andExpect(status().isBadRequest());
+        sellRequest(13, "null").andExpect(status().isBadRequest());
+        assertThat(held.getQuantity()).isEqualTo(20);
+        assertThat(held.getTotalCost()).isEqualByComparingTo("1200000");
+        assertThat(account.getCashBalance()).isEqualTo(1000000);
+        assertThat(orders.count()).isEqualTo(1);
+        assertThat(executions.count()).isZero();
+    }
+
+    @Test
+    void marketSellRejectsMissingAndStaleBookAndNonNullLimit() throws Exception {
+        holdings.save(new Holding(account, "005930", 20, new java.math.BigDecimal("1200000")));
+        sellRequest(1, "null").andExpect(status().isServiceUnavailable());
+        when(stream.latestOrderBook("005930")).thenReturn(java.util.Optional.of(
+                new KiwoomStockStream.OrderBook("005930", java.util.List.of(), java.util.List.of(),
+                        java.time.LocalTime.of(9, 59, 54), Instant.parse("2026-10-01T00:59:54Z"))));
+        sellRequest(1, "null").andExpect(status().isServiceUnavailable());
+        sellRequest(1, "0").andExpect(status().isBadRequest());
+        sellRequest(1, "70000").andExpect(status().isBadRequest());
+        assertThat(orders.count()).isZero();
+        assertThat(executions.count()).isZero();
+        assertThat(account.getCashBalance()).isEqualTo(1000000);
+    }
+
+    @Test
+    void marketSellWithoutHoldingFailsWithoutSaving() throws Exception {
+        sellBook();
+        sellRequest(1, "null").andExpect(status().isBadRequest());
+        assertThat(orders.count()).isZero();
+        assertThat(executions.count()).isZero();
+        assertThat(holdings.count()).isZero();
+        assertThat(account.getCashBalance()).isEqualTo(1000000);
+    }
+
     private Cookie aiCookie(User owner) {
         Instant now = Instant.now();
         JwtClaimsSet claims = JwtClaimsSet.builder()

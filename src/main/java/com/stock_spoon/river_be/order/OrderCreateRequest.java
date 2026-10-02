@@ -13,6 +13,8 @@ public record OrderCreateRequest(
         @JsonProperty("order_type") @NotBlank String orderType,
         @JsonProperty("limit_price") Long limitPrice,
         @NotNull @Min(1) Long quantity,
-        @NotBlank @Size(max = 100000) String reason) {
+        @NotBlank @Size(max = 100000) String reason,
+        @JsonProperty("stock_name") @NotBlank @Size(max = 255) String stockName,
+        java.util.List<@NotNull @jakarta.validation.Valid ReportReasoning> reasoning) {
 
 }

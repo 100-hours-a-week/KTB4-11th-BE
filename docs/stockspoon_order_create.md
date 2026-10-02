@@ -12,11 +12,13 @@ AI가 서명한 JWT에는 `actor: "AI"`가 있어야 한다. JWT `sub`의 사용
 ```json
 {
   "stock_code": "005930",
+  "stock_name": "삼성전자",
   "order_side": "buy",
   "order_type": "limit",
   "limit_price": 70000,
   "quantity": 2,
-  "reason": "목표 가격에 접근해 매수를 결정했어요."
+  "reason": "목표 가격에 접근해 매수를 결정했어요.",
+  "reasoning": [{"label": "가격", "body": "목표 가격에 접근했어요."}]
 }
 ```
 
@@ -66,6 +68,7 @@ HTTP `201 Created`:
   "order_id": 1001,
   "account_id": 11,
   "stock_code": "005930",
+  "stock_name": "삼성전자",
   "order_side": "buy",
   "order_type": "limit",
   "limit_price": 70000,
@@ -99,3 +102,25 @@ KODEX 200(ETF)은 실제 조회로 확인했으며, 우선주의 시장구분 �
 근거: [키움 공식 API 명세](https://github.com/Kiwoom-Securities/Kiwoom-REST-API/blob/main/kiwoom/_data/kiwoom_api_spec.json),
 [한국거래소 주식 호가가격단위](https://regulation.krx.co.kr/contents/RGL/03/03010100/RGL03010100T3.jsp),
 [한국거래소 ETF 호가가격단위](https://regulation.krx.co.kr/contents/RGL/03/03060101/RGL03060101.jsp).
+
+
+## AI 종목명·판단 흐름 계약
+
+주문 생성은 stock_name을 필수 문자열로 받는다(공백 불가, 최대 255 Java UTF-16 코드 단위).
+AI가 제공한 원문을 ai_order_reports.stock_name에 저장하고, 주문 생성 응답과 리포트 상세 조회의
+stock_name으로 그대로 반환한다. 이 이름을 반환하기 위해 외부 종목정보를 조회하지 않는다.
+기존 리포트의 이름은 SQL로 추정해 채우지 않으며, 이름이 NULL이면 기존 상세 응답의
+"[더미] 종목명"을 유지한다.
+
+reason은 기존처럼 필수이며 상세 조회에서는 summary가 된다.
+reasoning은 선택 항목인 순서 있는 [{label, body}] 배열이다. label은 공백 불가·최대 255자,
+body는 공백 불가·최대 16,000자(Java UTF-16 기준)이고 null 항목은 거절한다.
+생략·null·빈 목록은 빈 배열로 저장/반환한다. API 필드명은 thoughts가 아니라 reasoning이다.
+매수·매도, 지정가·시장가 모두 같은 리포트 계약을 사용한다.
+
+reasoning은 ai_report_reasoning 테이블에 report_id와 reasoning_index로 순서를 보존하여
+주문·리포트와 같은 트랜잭션으로 저장한다. 상세 조회에는 reasoning을 그대로 반환한다.
+focused_news·decision_summary를 reason에 JSON 문자열로 저장하는 계약은 추가하지 않았다.
+
+기존 DB에는 새 앱 배포 전에 db/ai_report_reasoning.sql을 1회 적용해야 한다.
+이 SQL은 자동 실행되지 않으며 운영 DB 적용은 별도 배포 작업이다.

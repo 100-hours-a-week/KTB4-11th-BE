@@ -9,6 +9,7 @@ public record OrderCreateResponse(
         @JsonProperty("order_id") long orderId,
         @JsonProperty("account_id") long accountId,
         @JsonProperty("stock_code") String stockCode,
+        @JsonProperty("stock_name") String stockName,
         @JsonProperty("order_side") String orderSide,
         @JsonProperty("order_type") String orderType,
         @JsonProperty("limit_price") Long limitPrice,
@@ -20,7 +21,7 @@ public record OrderCreateResponse(
 
     static OrderCreateResponse from(Order order, List<Execution> executions) {
         return new OrderCreateResponse("success", order.getId(), order.getAccountId(),
-                order.getStockCode(), order.getSide().name().toLowerCase(java.util.Locale.ROOT),
+                order.getStockCode(), order.getReport() == null ? null : order.getReport().getStockName(), order.getSide().name().toLowerCase(java.util.Locale.ROOT),
                 order.getType().name().toLowerCase(java.util.Locale.ROOT), order.getLimitPrice(),
                 order.getQuantity(), order.getStatus().name().toLowerCase(java.util.Locale.ROOT),
                 order.getReservedCash(), order.getCreatedAt(), executions.stream().map(ExecutionItem::from).toList());

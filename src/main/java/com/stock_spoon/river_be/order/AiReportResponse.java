@@ -34,6 +34,7 @@ public record AiReportResponse(
         BigDecimal buyPrice = null;
         BigDecimal realizedPnl = null;
         BigDecimal returnPercent = null;
+        Boolean targetReached = null;
         if (!executions.isEmpty()) {
             long quantity = 0;
             BigDecimal amount = BigDecimal.ZERO;
@@ -54,13 +55,15 @@ public record AiReportResponse(
                 // 저장 손익이 소수2자리이므로 역산 원가는 그 정밀도에 한정된다.
                 var cost = amount.subtract(pnl);
                 if (cost.signum() > 0) {
+                    // 표시 수익률의 반올림으로 10% 미만이 도달 처리되지 않도록 금액으로 비교한다.
+                    targetReached = pnl.multiply(BigDecimal.valueOf(100)).compareTo(cost.multiply(BigDecimal.TEN)) >= 0;
                     buyPrice = cost.divide(BigDecimal.valueOf(quantity), 4, RoundingMode.HALF_UP);
                     returnPercent = pnl.multiply(BigDecimal.valueOf(100)).divide(cost, 4, RoundingMode.HALF_UP);
                 }
             }
         }
         var sell = selling ? new SellResult(holdingDays, buyPrice, realizedPnl, returnPercent,
-                null, null, report.getIsLowerTriggered()) : null;
+                10.0, targetReached, report.getIsLowerTriggered()) : null;
         return new AiReportResponse(order.getId(), order.getSide().name().toLowerCase(Locale.ROOT),
                 order.getStockCode(), report.getStockName(), selling ? null : report.getHoldingWeightAfterTradePercent(),
                 selling ? null : report.getHoldingWeightLimitPercent(), execution,

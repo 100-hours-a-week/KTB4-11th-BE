@@ -221,8 +221,8 @@ class OrderControllerTests {
                 .andExpect(jsonPath("$.holding_weight_limit_percent").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.reasoning").isArray())
                 .andExpect(jsonPath("$.sell_result.holding_days").value(org.hamcrest.Matchers.nullValue()))
-                .andExpect(jsonPath("$.sell_result.target_return_percent").value(org.hamcrest.Matchers.nullValue()))
-                .andExpect(jsonPath("$.sell_result.target_reached").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.sell_result.target_return_percent").value(10.0))
+                .andExpect(jsonPath("$.sell_result.target_reached").value(false))
                 .andExpect(jsonPath("$.sell_result.stop_loss_triggered").value(org.hamcrest.Matchers.nullValue()))
                 .andExpect(jsonPath("$.message").doesNotExist())
                 .andExpect(jsonPath("$.summary").doesNotExist())
@@ -618,6 +618,22 @@ class OrderControllerTests {
         }
     }
 
+
+    @Test
+    void sellTargetUsesTenPercentBeforeRoundingAndKeepsUnknownNull() {
+        var order = orders.save(Order.pendingLimit(account, "000660", Order.Side.SELL, 1, 1100000,
+                Order.Source.AI, "매도", Instant.now()));
+        String[] profits = {"100000", "100001", "99999.99", "-1", null, "1100000"};
+        Boolean[] reached = {true, true, false, false, null, null};
+        for (int i = 0; i < profits.length; i++) {
+            var fill = new Execution(order, 1100000, 1,
+                    profits[i] == null ? null : new java.math.BigDecimal(profits[i]), null, Instant.now());
+            var result = AiReportResponse.from(order, java.util.List.of(fill)).sellResult();
+            assertThat(result.targetReturnPercent()).isEqualTo(10.0);
+            assertThat(result.targetReached()).as("profit=%s", profits[i]).isEqualTo(reached[i]);
+            if (i == 2) assertThat(result.realizedReturnPercent()).isEqualByComparingTo("10.0000");
+        }
+    }
 
     private Order historicalTrade(Order.Side side, long quantity, String time) {
         var instant = Instant.parse(time);

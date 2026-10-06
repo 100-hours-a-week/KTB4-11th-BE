@@ -16,14 +16,68 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 class KiwoomMarketClientTests {
     private MockRestServiceServer server;
     private KiwoomMarketClient client;
+    private KiwoomTokenProvider tokens;
 
     @BeforeEach
     void setup() {
         var builder = RestClient.builder().baseUrl("https://api.kiwoom.com");
         server = MockRestServiceServer.bindTo(builder).build();
-        var tokens = mock(KiwoomTokenProvider.class);
+        tokens = mock(KiwoomTokenProvider.class);
         when(tokens.accessToken()).thenReturn("test-token");
         client = new KiwoomMarketClient(builder.build(), tokens);
+    }
+
+    private void expectCurrentPrice(String token, String response) {
+        server.expect(requestTo("https://api.kiwoom.com/api/dostk/stkinfo"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header("api-id", "ka10001"))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer " + token))
+                .andExpect(content().json("{\"stk_cd\":\"000270\"}"))
+                .andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
+    }
+
+    @Test
+    void invalidTokenIsDiscardedAndSamePriceRequestRetriesOnceWithRefreshedToken() {
+        when(tokens.accessToken()).thenReturn("test-token", "fresh-token");
+        expectCurrentPrice("test-token", "{\"return_code\":3,\"return_msg\":\"인증 실패[8005:Token이 유효하지 않습니다]\"}");
+        expectCurrentPrice("fresh-token", "{\"return_code\":0,\"stk_cd\":\"000270\",\"cur_prc\":\"112300\"}");
+        assertThat(client.currentPrice("000270")).isEqualTo(112300);
+        var ordered = inOrder(tokens);
+        ordered.verify(tokens).accessToken();
+        ordered.verify(tokens).invalidate("test-token");
+        ordered.verify(tokens).accessToken();
+        server.verify();
+    }
+
+    @Test
+    void second8005DoesNotTriggerThirdRequestOrAnotherInvalidation() {
+        when(tokens.accessToken()).thenReturn("test-token", "fresh-token");
+        expectCurrentPrice("test-token", "{\"return_code\":8005}");
+        expectCurrentPrice("fresh-token", "{\"return_code\":3,\"return_msg\":\"[8005:Token이 유효하지 않습니다]\"}");
+        assertThatThrownBy(() -> client.currentPrice("000270")).isInstanceOf(IllegalStateException.class);
+        verify(tokens).invalidate("test-token");
+        verify(tokens, times(2)).accessToken();
+        verifyNoMoreInteractions(tokens);
+        server.verify();
+    }
+
+    @Test
+    void otherProviderErrorsDoNotRefreshOrRetry() {
+        expectCurrentPrice("test-token", "{\"return_code\":3,\"return_msg\":\"[8050:접근 거절]\"}");
+        assertThatThrownBy(() -> client.currentPrice("000270")).isInstanceOf(IllegalStateException.class);
+        verify(tokens).accessToken();
+        verifyNoMoreInteractions(tokens);
+        server.verify();
+    }
+
+    @Test
+    void refreshFailureStopsBeforeSecondPriceRequest() {
+        when(tokens.accessToken()).thenReturn("test-token").thenThrow(new IllegalStateException("발급 실패"));
+        expectCurrentPrice("test-token", "{\"return_code\":3,\"return_msg\":\"[8005:Token이 유효하지 않습니다]\"}");
+        assertThatThrownBy(() -> client.currentPrice("000270"))
+                .isInstanceOf(IllegalStateException.class).hasMessage("발급 실패");
+        verify(tokens).invalidate("test-token");
+        server.verify();
     }
 
     @Test

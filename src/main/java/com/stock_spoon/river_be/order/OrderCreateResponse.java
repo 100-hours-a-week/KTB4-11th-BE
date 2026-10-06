@@ -19,6 +19,7 @@ public record OrderCreateResponse(
         @JsonProperty("created_at") Instant createdAt,
         List<ExecutionItem> executions) {
 
+    // 주문·체결 값을 응답용 record로 옮긴다. JSON 변환은 Controller 반환 이후 Spring이 처리한다.
     static OrderCreateResponse from(Order order, List<Execution> executions) {
         return new OrderCreateResponse("success", order.getId(), order.getAccountId(),
                 order.getStockCode(), order.getReport() == null ? null : order.getReport().getStockName(), order.getSide().name().toLowerCase(java.util.Locale.ROOT),

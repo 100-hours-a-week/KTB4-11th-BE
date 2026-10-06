@@ -7,6 +7,9 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+// HTTP JSON 입력용 DTO이며 DB Entity가 아니다.
+// @JsonProperty는 stock_code 같은 JSON 이름을 stockCode 같은 Java 이름에 연결한다.
+// record는 request.stockCode(), request.quantity()처럼 값을 읽는 접근자를 제공한다.
 public record OrderCreateRequest(
         @JsonProperty("stock_code") @NotBlank @Pattern(regexp = "[0-9]{6}") String stockCode,
         @JsonProperty("order_side") @NotBlank String orderSide,
@@ -20,6 +23,7 @@ public record OrderCreateRequest(
         @JsonProperty("is_lower_triggered")
         @tools.jackson.databind.annotation.JsonDeserialize(using = StrictBoolean.class) Boolean isLowerTriggered) {
 
+    // 단일 필드 제약 외에 매수·매도 방향에 따라 필수값이 달라지는 규칙을 Controller에서 호출한다.
     void validateReportInputs(Order.Side side) {
         if (holdingWeightLimitPercent != null && (!Double.isFinite(holdingWeightLimitPercent)
                 || holdingWeightLimitPercent < 0 || holdingWeightLimitPercent > 100)) {

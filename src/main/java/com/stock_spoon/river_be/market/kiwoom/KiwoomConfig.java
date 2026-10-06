@@ -27,6 +27,8 @@ public class KiwoomConfig {
             @Value("${kiwoom.stream.enabled:false}") boolean enabled,
             org.springframework.context.ApplicationEventPublisher events) {
         var stream = new KiwoomStockStream(tokenProvider, enabled, java.util.List.of());
+        // 현재가 수신을 Spring 이벤트 발행에 연결한다.
+        // KiwoomStockStream → publishEvent(StockPrice) → OrderExecutionListener.onPrice() 순서다.
         stream.setPriceListener(events::publishEvent);
         return stream;
     }

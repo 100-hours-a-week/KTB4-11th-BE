@@ -99,7 +99,7 @@ public class KiwoomTokenProvider {
         return token;
     }
 
-    // WebSocket LOGIN에서 거부된 토큰만 폐기한다. 이미 갱신된 토큰은 유지한다.
+    // REST 8005 또는 WebSocket LOGIN에서 거부된 토큰만 폐기한다. 이미 갱신된 토큰은 유지한다.
     synchronized void invalidate(String rejectedToken) {
         if (token != null && token.equals(rejectedToken)) {
             log.warn("event=kiwoom_token_invalidated");

@@ -56,6 +56,8 @@ public class OrderService {
     }
 
     @Transactional
+    // [예약 진입점] DTO를 내부 메서드에 전달한다. Spring 프록시를 거쳐 들어올 때 트랜잭션이 시작된다.
+    // 아래 private 메서드는 같은 트랜잭션 안에서 실행되고 정상 종료 시 커밋한다.
     public Order reserveLimit(long userId, long accountId, OrderCreateRequest request) {
         return reserveLimit(Long.valueOf(userId), accountId, request.stockCode(),
                 Order.Side.valueOf(request.orderSide().toUpperCase(java.util.Locale.ROOT)),
@@ -95,6 +97,9 @@ public class OrderService {
         if (side == Order.Side.SELL && sellableQuantity(accountId, stockCode) < quantity) {
             throw new OrderException("매도 가능 수량이 부족합니다.");
         }
+        // pendingLimit()은 PENDING 객체를 만들고 Repository.save()가 DB 저장을 연결한다.
+        // 여기의 orders는 OrderRepository이며 Controller의 orders(OrderService)와 타입이 다르다.
+        // 예약금은 주문에 기록한다. 이 단계에서는 실제 현금이나 보유량을 차감하지 않는다.
         return orders.save(Order.pendingLimit(account, stockCode, side, quantity,
                 limitPrice, Order.Source.AI, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered, clock.instant()));
     }

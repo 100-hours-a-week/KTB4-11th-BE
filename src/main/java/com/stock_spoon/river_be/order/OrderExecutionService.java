@@ -223,6 +223,8 @@ public class OrderExecutionService {
     }
 
     @Transactional
+    // [체결 트랜잭션] 계좌 잠금 → 주문 재확인 → 조건 판단 → 현금·보유·체결·상태 변경.
+    // 런타임 예외 시 이 트랜잭션의 변경을 함께 되돌린다. 앞서 커밋된 예약은 별도다.
     public boolean executeLimit(long accountId, long orderId, long currentPrice) {
         if (currentPrice <= 0) throw new IllegalArgumentException("현재가는 양수여야 합니다.");
         var account = accounts.findLockedById(accountId).orElseThrow();
@@ -239,12 +241,14 @@ public class OrderExecutionService {
         if (order.getSide() == Order.Side.BUY ? currentPrice > order.getLimitPrice()
                 : currentPrice < order.getLimitPrice()) return false;
         long quantity = order.getQuantity();
+        // 체결 금액은 지정가가 아니라 조건을 만족한 현재가 × 주문 수량이다.
         long amount = Math.multiplyExact(currentPrice, quantity);
         var cost = BigDecimal.valueOf(amount);
         var holding = holdings.findByAccountIdAndStockCode(accountId, order.getStockCode());
         BigDecimal pnl = null;
         BigDecimal returnPercent = null;
         if (order.getSide() == Order.Side.BUY) {
+            // 조회한 Account의 현금을 변경한다. 관리 상태 Entity이므로 별도 save 없이 변경 감지로 반영한다.
             account.changeCash(-amount);
             if (holding.isPresent()) holding.get().add(quantity, cost);
             else holdings.save(new Holding(account, order.getStockCode(), quantity, cost));
@@ -261,6 +265,8 @@ public class OrderExecutionService {
             if (owned.getQuantity() == quantity) holdings.delete(owned);
             else owned.reduce(quantity, soldCost);
         }
+        // 새 Execution은 얼마에 몇 주 체결됐는지 보존한다.
+        // 기존 자산·주문 수정과 새 체결 기록 저장이 같은 트랜잭션에 속한다.
         executions.save(new Execution(order, currentPrice, quantity, pnl, returnPercent, now));
         if (order.getSide() == Order.Side.BUY) recordBuyWeight(order, account, amount, quantity);
         order.execute();

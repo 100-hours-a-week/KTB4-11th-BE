@@ -18,19 +18,22 @@ public class OrderExecutionListener {
     private final OrderSubscriptionService subscriptions;
     private final KiwoomStockStream stream;
     private final KiwoomMarketClient market;
+    private final OrderBuyPriceService buyPrices;
 
     public OrderExecutionListener(OrderRepository orders, ExecutionRepository executions,
             OrderExecutionService execution, OrderSubscriptionService subscriptions,
-            KiwoomStockStream stream, KiwoomMarketClient market) {
+            KiwoomStockStream stream, KiwoomMarketClient market, OrderBuyPriceService buyPrices) {
         this.orders = orders;
         this.executions = executions;
         this.execution = execution;
         this.subscriptions = subscriptions;
         this.stream = stream;
         this.market = market;
+        this.buyPrices = buyPrices;
     }
 
     /** 저장이 커밋된 뒤 최신 보관 가격 또는 REST 현재가로 이 주문을 먼저 판단한다. */
+    // [체결 진입 A] Controller가 저장 후 직접 호출한다. 현재가 확보 후 attempt()로 이어진다.
     public void orderCreated(Order order) {
         try {
             var latest = stream.latest(order.getStockCode());
@@ -51,6 +54,8 @@ public class OrderExecutionListener {
         }
     }
 
+    // [체결 진입 B] 새 StockPrice 이벤트가 오면 HTTP 요청 없이도 Spring이 onPrice()를 호출한다.
+    // KiwoomConfig의 stream.setPriceListener(events::publishEvent)가 이벤트 발행을 연결한다.
     @EventListener
     public void onPrice(KiwoomStockStream.StockPrice price) {
         boolean executed = false;
@@ -70,7 +75,15 @@ public class OrderExecutionListener {
 
     private boolean attempt(Order order, long price) {
         try {
-            boolean executed = execution.executeLimit(order.getAccountId(), order.getId(), price);
+            // 최초 판단과 후속 시세 처리가 같은 체결 서비스를 재사용한다.
+            // 여기의 execution은 OrderExecutionService이며 별도 서비스 호출로 체결 트랜잭션이 시작된다.
+            boolean executed;
+            if (order.getSide() == Order.Side.BUY && price <= order.getLimitPrice()) {
+                var prices = buyPrices.fetch(order.getAccountId(), order.getStockCode());
+                executed = execution.executeLimit(order.getAccountId(), order.getId(), price, prices);
+            } else {
+                executed = execution.executeLimit(order.getAccountId(), order.getId(), price);
+            }
             if (executed) log.info("event=order_executed orderId={} stockCode={} type=LIMIT side={}",
                     order.getId(), order.getStockCode(), order.getSide());
             return executed;
@@ -82,6 +95,7 @@ public class OrderExecutionListener {
     }
 
     @Transactional(readOnly = true)
+    // DB에서 주문·체결을 다시 읽고 응답 DTO로 옮긴다. Entity를 그대로 HTTP 응답에 노출하지 않는다.
     public OrderCreateResponse response(long accountId, long orderId) {
         var order = orders.findByIdAndAccountId(orderId, accountId).orElseThrow();
         return OrderCreateResponse.from(order, executions.findForOrder(orderId));

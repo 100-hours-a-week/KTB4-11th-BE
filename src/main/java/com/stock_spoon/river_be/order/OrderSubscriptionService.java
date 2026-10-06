@@ -43,6 +43,8 @@ public class OrderSubscriptionService {
         try {
             retain(stockCode).get(timeout.toNanos(), TimeUnit.NANOSECONDS);
             // 별도 OrderService 프록시의 트랜잭션이 커밋된 뒤에 임시 수요를 해제한다.
+            // 위 구독 대기가 성공한 뒤 Controller에서 전달한 람다를 실행한다.
+            // Supplier<Order>의 get()은 DB 조회가 아니라 전달받은 작업을 실행하고 Order를 받는 호출이다.
             Order saved = saveOrder.get();
             if (saved != null) {
                 log.info("event=order_created orderId={} stockCode={} type={} side={} status={}",

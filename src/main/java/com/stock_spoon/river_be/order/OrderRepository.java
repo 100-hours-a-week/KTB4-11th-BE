@@ -7,6 +7,8 @@ import org.springframework.data.repository.query.Param;
 import java.util.Optional;
 import java.util.List;
 
+// Spring Data JPA가 구현을 제공한다. save/findById 등은 JpaRepository에서 상속한다.
+// @Query의 Order와 필드명은 Entity 기준이며 JPA가 테이블·컬럼에 맞는 SQL로 변환한다.
 public interface OrderRepository extends JpaRepository<Order, Long> {
     List<Order> findAllByStatus(Order.Status status);
 

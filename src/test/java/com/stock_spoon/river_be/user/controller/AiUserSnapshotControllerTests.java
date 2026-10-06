@@ -1,9 +1,9 @@
 package com.stock_spoon.river_be.user.controller;
 
-import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.stock_spoon.river_be.account.entity.Account;
@@ -19,8 +19,6 @@ import com.stock_spoon.river_be.user.repository.UserRepository;
 import jakarta.servlet.http.Cookie;
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.time.LocalTime;
-import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -63,9 +61,6 @@ class AiUserSnapshotControllerTests {
         holdings.save(new Holding(account, "005930", 10, new BigDecimal("1000000.00")));
         var order = orders.save(Order.pendingLimit(account, "005930", Order.Side.SELL, 2,
                 250_000, Order.Source.AI, null, Instant.now()));
-        when(stream.latest("005930")).thenReturn(Optional.of(new KiwoomStockStream.StockPrice(
-                "005930", new BigDecimal("200000"), BigDecimal.ZERO, BigDecimal.ZERO,
-                LocalTime.NOON, Instant.parse("2026-09-28T03:00:00Z"))));
 
         mvc.perform(get("/api/v1/users/ai-server").cookie(aiCookie()))
                 .andExpect(status().isOk())
@@ -77,7 +72,7 @@ class AiUserSnapshotControllerTests {
                             "stocks":[{"stock_code":"005930","total_cost":1000000,"quantity":10}],
                             "pending_orders":[{"order_id":%d,"stock_code":"005930",
                               "order_side":"sell","order_status":"pending","order_type":"limit",
-                              "limit_price":250000,"quantity":2,"current_stock_price":200000}]
+                              "limit_price":250000,"quantity":2}]
                           }]},
                           {"user_id":%d,"accounts":[]}
                         ]}
@@ -86,19 +81,16 @@ class AiUserSnapshotControllerTests {
     }
 
     @Test
-    void returns503ForTheEntireRequestWhenAPendingStockPriceIsMissing() throws Exception {
+    void returnsPendingOrdersWithoutCurrentPriceWhenStreamHasNoPrice() throws Exception {
         var user = users.save(new User("사용자"));
         var account = accounts.save(new Account(user, "AI 계좌", 1_000_000));
         orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY, 1, 150_000,
                 Order.Source.AI, null, Instant.now()));
-        when(stream.latest("005930")).thenReturn(Optional.empty());
 
         mvc.perform(get("/api/v1/users/ai-server").cookie(aiCookie()))
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(content().json("""
-                        {"code":"MARKET_DATA_UNAVAILABLE",
-                         "message":"대기 주문 종목의 현재가를 확인할 수 없습니다."}
-                        """, JsonCompareMode.STRICT));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.users[0].accounts[0].pending_orders[0].stock_code").value("005930"))
+                .andExpect(jsonPath("$.users[0].accounts[0].pending_orders[0].current_stock_price").doesNotExist());
     }
 
     @Test

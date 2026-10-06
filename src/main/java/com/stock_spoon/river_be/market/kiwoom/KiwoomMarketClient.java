@@ -133,7 +133,19 @@ public class KiwoomMarketClient {
 
     // ponytail: 단일 서버 직렬 조회. 처리량이 필요하면 검증된 배치 조회와 분산 호출 제한으로 교체한다.
     // 응답 완료 후 간격을 둬 토큰 갱신·요청 초기화에 지연된 요청도 몰아서 출발하지 않게 한다.
-    private synchronized Map<String, Object> query(String apiId, String path, Map<String, String> body, String token) {
+    private Map<String, Object> query(String apiId, String path, Map<String, String> body, String token) {
+        var response = queryOnce(apiId, path, body, token);
+        if ("8005".equals(safeReturnCode(response)) || "8005".equals(safeDetailCode(response))) {
+            // 다른 요청이 이미 갱신한 토큰은 invalidate가 보존한다. 두 번째 응답은 재시도하지 않는다.
+            tokens.invalidate(token);
+            String refreshedToken = tokens.accessToken();
+            log.info("event=kiwoom_query_auth_retry apiId={} detailCode=8005", apiId);
+            response = queryOnce(apiId, path, body, refreshedToken);
+        }
+        return response;
+    }
+
+    private synchronized Map<String, Object> queryOnce(String apiId, String path, Map<String, String> body, String token) {
         long remaining = nextQueryAt - System.nanoTime();
         if (remaining > 0) {
             try {

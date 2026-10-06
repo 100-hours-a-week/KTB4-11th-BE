@@ -34,6 +34,7 @@ public class Order {
     private Long limitPrice;
     @Column(name = "reserved_cash", nullable = false)
     private long reservedCash;
+    // cascade 설정으로 주문에 연결된 AiOrderReport도 주문 저장 시 함께 영속화한다.
     @OneToOne(mappedBy = "order", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private AiOrderReport report;
     @Column(name = "created_at", nullable = false, updatable = false)
@@ -63,6 +64,7 @@ public class Order {
         order.account = account;
         order.stockCode = stockCode;
         order.side = side;
+        // 지정가의 초기 상태를 구성한다. 이 메서드 자체는 DB 저장을 호출하지 않는다.
         order.type = Type.LIMIT;
         order.status = Status.PENDING;
         order.source = source;
@@ -105,6 +107,8 @@ public class Order {
         return order;
     }
 
+    // 주문 상태와 예약 해제를 표현한다. 현금·보유·체결 기록은 OrderExecutionService가 처리한다.
+    // 트랜잭션에서 조회한 관리 상태 Order라면 이 변경은 JPA 변경 감지로 DB에 반영된다.
     public void execute() {
         if (status != Status.PENDING) throw new IllegalStateException("대기 주문만 체결할 수 있습니다.");
         status = Status.EXECUTED;

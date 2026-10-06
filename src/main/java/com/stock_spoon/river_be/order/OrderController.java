@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/accounts/{accountId}/orders")
 public class OrderController {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OrderController.class);
+    private final OrderBuyPriceService buyPrices;
     private final OrderExecutionService marketExecution;
     private final com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream stream;
     private final OrderHistoryService history;
@@ -26,7 +27,8 @@ public class OrderController {
     public OrderController(OrderService orders, OrderMarketValidator market,
             OrderSubscriptionService subscriptions, OrderExecutionListener execution, OrderHistoryService history,
             OrderExecutionService marketExecution,
-            com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream stream) {
+            com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream stream, OrderBuyPriceService buyPrices) {
+        this.buyPrices = buyPrices;
         this.marketExecution = marketExecution;
         this.stream = stream;
         this.history = history;
@@ -101,9 +103,11 @@ public class OrderController {
         orders.assertOrderableAccount(userId, accountId);
         if (marketOrder) {
             market.validateMarket(request.stockCode());
+            var prices = side == Order.Side.BUY ? buyPrices.fetch(accountId, request.stockCode())
+                    : java.util.Map.<String, java.math.BigDecimal>of();
             var order = subscriptions.create(request.stockCode(), () -> {
                 var book = stream.latestOrderBook(request.stockCode()).orElse(null);
-                return marketExecution.executeMarket(userId, accountId, request, book);
+                return marketExecution.executeMarket(userId, accountId, request, book, prices);
             });
             return execution.response(accountId, order.getId());
         }

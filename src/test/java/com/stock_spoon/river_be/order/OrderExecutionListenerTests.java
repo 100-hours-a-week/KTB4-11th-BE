@@ -17,7 +17,7 @@ class OrderExecutionListenerTests {
     private final KiwoomStockStream stream = mock(KiwoomStockStream.class);
     private final KiwoomMarketClient market = mock(KiwoomMarketClient.class);
     private final OrderExecutionListener listener = new OrderExecutionListener(orders,
-            mock(ExecutionRepository.class), execution, subscriptions, stream, market);
+            mock(ExecutionRepository.class), execution, subscriptions, stream, market, mock(OrderBuyPriceService.class));
     private final Instant now = Instant.parse("2026-10-01T01:00:00Z");
 
     private Order order(long id) {

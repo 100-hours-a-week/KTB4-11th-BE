@@ -24,24 +24,16 @@ public class OrderExecutionService {
     private final HoldingRepository holdings;
     private final ExecutionRepository executions;
     private final Clock clock;
-    private final com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream stream;
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OrderExecutionService.class);
 
     @Autowired
     public OrderExecutionService(AccountRepository accounts, OrderRepository orders,
-            HoldingRepository holdings, ExecutionRepository executions,
-            com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream stream) {
-        this(accounts, orders, holdings, executions, Clock.systemUTC(), stream);
+            HoldingRepository holdings, ExecutionRepository executions) {
+        this(accounts, orders, holdings, executions, Clock.systemUTC());
     }
 
     OrderExecutionService(AccountRepository accounts, OrderRepository orders,
             HoldingRepository holdings, ExecutionRepository executions, Clock clock) {
-        this(accounts, orders, holdings, executions, clock, null);
-    }
-
-    OrderExecutionService(AccountRepository accounts, OrderRepository orders,
-            HoldingRepository holdings, ExecutionRepository executions, Clock clock,
-            com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream stream) {
-        this.stream = stream;
         this.accounts = accounts;
         this.orders = orders;
         this.holdings = holdings;
@@ -63,21 +55,27 @@ public class OrderExecutionService {
 
     @Transactional
     public Order executeMarket(long userId, long accountId, OrderCreateRequest request, OrderBook book) {
+        return executeMarket(userId, accountId, request, book, java.util.Map.of());
+    }
+
+    @Transactional
+    public Order executeMarket(long userId, long accountId, OrderCreateRequest request, OrderBook book,
+            java.util.Map<String, BigDecimal> prices) {
         return executeMarket(userId, accountId, request.stockCode(),
                 Order.Side.valueOf(request.orderSide().toUpperCase(java.util.Locale.ROOT)),
                 request.quantity(), request.reason(), book, request.stockName(), request.reasoning(),
-                request.holdingWeightLimitPercent(), request.isLowerTriggered());
+                request.holdingWeightLimitPercent(), request.isLowerTriggered(), prices);
     }
 
     /** 공개 메서드의 트랜잭션 안에서 주문·체결·자산을 전량 반영한다. */
     private Order executeMarket(long userId, long accountId, String stockCode, Order.Side side,
             long quantity, String reason, OrderBook book) {
-        return executeMarket(userId, accountId, stockCode, side, quantity, reason, book, null, java.util.List.of(), null, null);
+        return executeMarket(userId, accountId, stockCode, side, quantity, reason, book, null, java.util.List.of(), null, null, java.util.Map.of());
     }
 
     private Order executeMarket(long userId, long accountId, String stockCode, Order.Side side,
             long quantity, String reason, OrderBook book, String stockName, java.util.List<ReportReasoning> reasoning,
-            Double holdingWeightLimitPercent, Boolean isLowerTriggered) {
+            Double holdingWeightLimitPercent, Boolean isLowerTriggered, java.util.Map<String, BigDecimal> prices) {
         if (stockCode == null || !stockCode.matches("[0-9]{6}") || quantity <= 0
                 || reason == null || reason.isBlank() || reason.length() > 100000) {
             throw new OrderException("주문 입력값을 확인하세요.");
@@ -182,13 +180,13 @@ public class OrderExecutionService {
             }
             executions.save(new Execution(order, fill.price().longValueExact(), fill.quantity(), pnl, returnPercent, now));
         }
-        if (order.getSide() == Order.Side.BUY) recordBuyWeight(order, account, amount, quantity);
+        if (order.getSide() == Order.Side.BUY) recordBuyWeight(order, account, amount, quantity, prices);
         order.execute();
         return order;
     }
 
     private void recordBuyWeight(Order order,
-            com.stock_spoon.river_be.account.entity.Account account, long amount, long quantity) {
+            com.stock_spoon.river_be.account.entity.Account account, long amount, long quantity, java.util.Map<String, BigDecimal> prices) {
         if (order.getReport() == null) return;
         var fillPrice = BigDecimal.valueOf(amount).divide(BigDecimal.valueOf(quantity), java.math.MathContext.DECIMAL128);
         BigDecimal total = BigDecimal.valueOf(account.getCashBalance());
@@ -198,9 +196,12 @@ public class OrderExecutionService {
             if (owned.getStockCode().equals(order.getStockCode())) {
                 price = fillPrice;
             } else {
-                var quote = stream == null ? null : stream.latest(owned.getStockCode()).orElse(null);
-                if (quote == null || quote.currentPrice() == null || quote.currentPrice().signum() <= 0) return;
-                price = quote.currentPrice();
+                price = prices.get(owned.getStockCode());
+                if (price == null || price.signum() <= 0) {
+                    log.warn("event=order_buy_weight_unavailable orderId={} stockCode={} reason=missing_price",
+                            order.getId(), owned.getStockCode());
+                    return;
+                }
             }
             var value = price.multiply(BigDecimal.valueOf(owned.getQuantity()));
             total = total.add(value);
@@ -226,6 +227,12 @@ public class OrderExecutionService {
     // [체결 트랜잭션] 계좌 잠금 → 주문 재확인 → 조건 판단 → 현금·보유·체결·상태 변경.
     // 런타임 예외 시 이 트랜잭션의 변경을 함께 되돌린다. 앞서 커밋된 예약은 별도다.
     public boolean executeLimit(long accountId, long orderId, long currentPrice) {
+        return executeLimit(accountId, orderId, currentPrice, java.util.Map.of());
+    }
+
+    @Transactional
+    public boolean executeLimit(long accountId, long orderId, long currentPrice,
+            java.util.Map<String, BigDecimal> prices) {
         if (currentPrice <= 0) throw new IllegalArgumentException("현재가는 양수여야 합니다.");
         var account = accounts.findLockedById(accountId).orElseThrow();
         var order = orders.findByIdAndAccountId(orderId, accountId).orElseThrow();
@@ -268,7 +275,7 @@ public class OrderExecutionService {
         // 새 Execution은 얼마에 몇 주 체결됐는지 보존한다.
         // 기존 자산·주문 수정과 새 체결 기록 저장이 같은 트랜잭션에 속한다.
         executions.save(new Execution(order, currentPrice, quantity, pnl, returnPercent, now));
-        if (order.getSide() == Order.Side.BUY) recordBuyWeight(order, account, amount, quantity);
+        if (order.getSide() == Order.Side.BUY) recordBuyWeight(order, account, amount, quantity, prices);
         order.execute();
         return true;
     }

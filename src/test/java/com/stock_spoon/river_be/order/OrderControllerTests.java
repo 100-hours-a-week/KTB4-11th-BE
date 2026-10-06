@@ -55,7 +55,7 @@ class OrderControllerTests {
         OrderExecutionService fixedExecution(AccountRepository accounts, OrderRepository orders,
                 HoldingRepository holdings, ExecutionRepository executions, KiwoomStockStream stream) {
             return new OrderExecutionService(accounts, orders, holdings, executions,
-                    java.time.Clock.fixed(Instant.parse("2026-10-01T01:00:00Z"), java.time.ZoneOffset.UTC), stream);
+                    java.time.Clock.fixed(Instant.parse("2026-10-01T01:00:00Z"), java.time.ZoneOffset.UTC));
         }
     }
 
@@ -694,30 +694,38 @@ class OrderControllerTests {
     }
 
     @Test
-    void buyWeightUsesOtherStockPriceAndMissingPriceKeepsOrderSuccessful() throws Exception {
+    void buyWeightUsesRestWithoutOtherStockSubscriptionAndFailureKeepsFill() throws Exception {
         holdings.save(new Holding(account, "000660", 10, new java.math.BigDecimal("50000")));
         account.changeCash(-50000);
         marketBook(Instant.parse("2026-10-01T01:00:00Z"), java.time.LocalTime.of(10, 0));
-        for (boolean available : java.util.List.of(false, true)) {
-            when(stream.latest("000660")).thenReturn(available ? java.util.Optional.of(
-                    new KiwoomStockStream.StockPrice("000660", new java.math.BigDecimal("10000"),
-                            java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO,
-                            java.time.LocalTime.of(10, 0), Instant.parse("2026-10-01T01:00:00Z")))
-                    : java.util.Optional.empty());
-            var result = mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
-                            .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
-                            .content(reportInputBody("buy", "market", ",\"holding_weight_limit_percent\":30")))
-                    .andExpect(status().isCreated()).andReturn();
-            long id = tools.jackson.databind.json.JsonMapper.builder().build()
-                    .readTree(result.getResponse().getContentAsString()).path("order_id").asLong();
-            var report = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
-                            "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), id)
-                            .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
-                    .andExpect(status().isOk()).andReturn();
-            var weight = tools.jackson.databind.json.JsonMapper.builder().build()
-                    .readTree(report.getResponse().getContentAsString()).path("holding_weight_after_trade_percent");
-            if (available) assertThat(weight.asDouble()).isEqualTo(13.3333);
-            else assertThat(weight.isNull()).isTrue();
+        when(stream.latest("005930")).thenReturn(java.util.Optional.of(
+                new KiwoomStockStream.StockPrice("005930", new java.math.BigDecimal("70000"),
+                        java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO,
+                        java.time.LocalTime.of(10, 0), Instant.parse("2026-10-01T01:00:00Z"))));
+        when(stream.latest("000660")).thenReturn(java.util.Optional.empty());
+        int buyCount = 0;
+        for (String type : java.util.List.of("market", "limit")) {
+            for (boolean available : java.util.List.of(false, true)) {
+                org.mockito.Mockito.reset(marketClient);
+                if (available) when(marketClient.currentPrice("000660")).thenReturn(10000L);
+                else when(marketClient.currentPrice("000660")).thenThrow(new IllegalStateException());
+                var result = mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                                .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                                .content(reportInputBody("buy", type, ",\"holding_weight_limit_percent\":30")))
+                        .andExpect(status().isCreated()).andReturn();
+                buyCount++;
+                long id = tools.jackson.databind.json.JsonMapper.builder().build()
+                        .readTree(result.getResponse().getContentAsString()).path("order_id").asLong();
+                entityManager.flush();
+                entityManager.clear();
+                var saved = orders.findById(id).orElseThrow();
+                assertThat(saved.getStatus()).isEqualTo(Order.Status.EXECUTED);
+                Double weight = saved.getReport().getHoldingWeightAfterTradePercent();
+                if (available) assertThat(weight).isEqualTo(buyCount == 2 ? 13.3333 : 26.6667);
+                else assertThat(weight).isNull();
+                org.mockito.Mockito.verify(marketClient).currentPrice("000660");
+                org.mockito.Mockito.verify(marketClient, org.mockito.Mockito.never()).currentPrice("005930");
+            }
         }
     }
 

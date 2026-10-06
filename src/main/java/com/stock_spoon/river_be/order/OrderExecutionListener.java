@@ -18,16 +18,18 @@ public class OrderExecutionListener {
     private final OrderSubscriptionService subscriptions;
     private final KiwoomStockStream stream;
     private final KiwoomMarketClient market;
+    private final OrderBuyPriceService buyPrices;
 
     public OrderExecutionListener(OrderRepository orders, ExecutionRepository executions,
             OrderExecutionService execution, OrderSubscriptionService subscriptions,
-            KiwoomStockStream stream, KiwoomMarketClient market) {
+            KiwoomStockStream stream, KiwoomMarketClient market, OrderBuyPriceService buyPrices) {
         this.orders = orders;
         this.executions = executions;
         this.execution = execution;
         this.subscriptions = subscriptions;
         this.stream = stream;
         this.market = market;
+        this.buyPrices = buyPrices;
     }
 
     /** 저장이 커밋된 뒤 최신 보관 가격 또는 REST 현재가로 이 주문을 먼저 판단한다. */
@@ -75,7 +77,13 @@ public class OrderExecutionListener {
         try {
             // 최초 판단과 후속 시세 처리가 같은 체결 서비스를 재사용한다.
             // 여기의 execution은 OrderExecutionService이며 별도 서비스 호출로 체결 트랜잭션이 시작된다.
-            boolean executed = execution.executeLimit(order.getAccountId(), order.getId(), price);
+            boolean executed;
+            if (order.getSide() == Order.Side.BUY && price <= order.getLimitPrice()) {
+                var prices = buyPrices.fetch(order.getAccountId(), order.getStockCode());
+                executed = execution.executeLimit(order.getAccountId(), order.getId(), price, prices);
+            } else {
+                executed = execution.executeLimit(order.getAccountId(), order.getId(), price);
+            }
             if (executed) log.info("event=order_executed orderId={} stockCode={} type=LIMIT side={}",
                     order.getId(), order.getStockCode(), order.getSide());
             return executed;

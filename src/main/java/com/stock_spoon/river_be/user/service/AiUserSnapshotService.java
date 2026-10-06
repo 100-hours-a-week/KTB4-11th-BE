@@ -24,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** 활성 AI 관리 계좌의 DB 데이터와 유효한 구독의 마지막 현재가를 함께 반환한다. */
 @Service
 public class AiUserSnapshotService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AiUserSnapshotService.class);
     private final UserRepository users;
     private final AccountRepository accounts;
     private final HoldingRepository holdings;
@@ -71,10 +72,12 @@ public class AiUserSnapshotService {
                                 List.copyOf(ordersByAccount.getOrDefault(account.getId(), List.of()))));
             }
         }
-        return users.findAllByOrderByIdAsc().stream()
+        var result = users.findAllByOrderByIdAsc().stream()
                 .map(user -> new UserSnapshot(user.getId(),
                         List.copyOf(accountsByUser.getOrDefault(user.getId(), List.of()))))
                 .toList();
+        log.info("event=ai_snapshot_completed userCount={} accountCount={}", result.size(), managedAccounts.size());
+        return result;
     }
 
 }

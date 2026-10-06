@@ -65,7 +65,8 @@ GET /api/v1/accounts/{account_id}/orders/{order_id}/ai-report
 
 sell_result.stop_loss_triggered는 AI 입력 is_lower_triggered를 저장한 Boolean이다.
 실제 false와 누락을 구분하며 BE가 손익으로 손실 제한 결과를 다시 판단하지 않는다.
-목표 수익률 출처가 없으므로 target_return_percent와 target_reached는 null로 반환한다. 문서 예시값을 상수로 반환하지 않는다.
+매도 목표 수익률은 10%로 고정하여 target_return_percent=10.0을 반환한다.
+target_reached는 저장 실현손익×100 >= 매도 원가×10으로 판단한다. 표시 수익률 반올림 전 금액 기준이며, 손익 누락 또는 원가가 0 이하이면 null이다. 기존 매도 리포트 조회에도 동일 기준을 적용한다.
 
 ## DB 적용 순서
 

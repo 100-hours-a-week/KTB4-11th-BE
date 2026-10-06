@@ -51,9 +51,10 @@ public class KospiIndexService {
     void refresh() {
         try {
             latest.set(client.kospi());
+            log.debug("event=kospi_refresh_completed");
         } catch (RuntimeException error) {
             // Keep the last successful value and never log provider response or credentials.
-            log.warn("키움 코스피 지수 갱신에 실패했습니다.");
+            log.warn("event=kospi_refresh_failed cached={} causeType={}", latest.get() != null, error.getClass().getSimpleName());
         }
     }
 

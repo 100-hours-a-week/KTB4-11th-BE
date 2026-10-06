@@ -35,7 +35,19 @@ class AuthControllerTests {
 
     @BeforeEach
     void setup() {
-        mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
+        mvc = MockMvcBuilders.webAppContextSetup(context)
+                .addFilters(context.getBean(com.stock_spoon.river_be.config.RequestLoggingFilter.class))
+                .apply(springSecurity()).build();
+    }
+
+    @Test
+    void rejectedAuthenticationStillReturnsRequestIdAndClearsContext() throws Exception {
+        mvc.perform(get("/api/v1/users/me").header("X-Request-Id", "untrusted")
+                        .header("Origin", "http://localhost:3000"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string("Access-Control-Expose-Headers", "X-Request-Id"))
+                .andExpect(header().string("X-Request-Id", org.hamcrest.Matchers.matchesPattern("[0-9a-f-]{36}")));
+        assertThat(org.slf4j.MDC.get("requestId")).isNull();
     }
 
     private CsrfCredentials csrf() throws Exception {

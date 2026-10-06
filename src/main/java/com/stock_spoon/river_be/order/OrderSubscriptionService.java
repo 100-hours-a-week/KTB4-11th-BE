@@ -43,11 +43,22 @@ public class OrderSubscriptionService {
         try {
             retain(stockCode).get(timeout.toNanos(), TimeUnit.NANOSECONDS);
             // 별도 OrderService 프록시의 트랜잭션이 커밋된 뒤에 임시 수요를 해제한다.
-            return saveOrder.get();
+            Order saved = saveOrder.get();
+            if (saved != null) {
+                log.info("event=order_created orderId={} stockCode={} type={} side={} status={}",
+                        saved.getId(), saved.getStockCode(), saved.getType(), saved.getSide(), saved.getStatus());
+                if (saved.getStatus() == Order.Status.EXECUTED) {
+                    log.info("event=order_executed orderId={} stockCode={} type={} side={}",
+                            saved.getId(), saved.getStockCode(), saved.getType(), saved.getSide());
+                }
+            }
+            return saved;
         } catch (InterruptedException error) {
+            log.warn("event=order_subscription_failed stockCode={} causeType=InterruptedException", stockCode);
             Thread.currentThread().interrupt();
             throw unavailable();
         } catch (ExecutionException | TimeoutException error) {
+            log.warn("event=order_subscription_failed stockCode={} causeType={}", stockCode, error.getClass().getSimpleName());
             throw unavailable();
         } finally {
             release(stockCode);
@@ -78,7 +89,7 @@ public class OrderSubscriptionService {
             synchronizeSymbols();
         } catch (RuntimeException error) {
             // DB 정리/갱신 실패 시 기존 구독을 보존하고 다음 주기에 재시도한다.
-            log.warn("대기 주문 정리 또는 구독 목록 갱신에 실패했습니다. 다음 주기에 재시도합니다.");
+            log.warn("event=order_subscription_refresh_failed causeType={}", error.getClass().getSimpleName());
         }
     }
 

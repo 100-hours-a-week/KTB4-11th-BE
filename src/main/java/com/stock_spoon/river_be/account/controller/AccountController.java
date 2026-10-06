@@ -27,6 +27,7 @@ import com.stock_spoon.river_be.account.dto.AccountHoldingsResponse;
 @RestController
 @RequestMapping("/api/v1/users/me/accounts")
 public class AccountController {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AccountController.class);
     private final AccountService service;
     private final AccountHoldingsService holdings;
 
@@ -39,14 +40,18 @@ public class AccountController {
     @ResponseStatus(HttpStatus.CREATED)
     public AccountCreateResponse create(@AuthenticationPrincipal Jwt jwt,
             @Valid @RequestBody AccountCreateRequest request) {
-        return service.create(Long.parseLong(jwt.getSubject()), request);
+        var result = service.create(Long.parseLong(jwt.getSubject()), request);
+        log.info("event=account_created");
+        return result;
     }
 
     @PatchMapping("/{accountId}")
     public AccountResponse rename(@AuthenticationPrincipal Jwt jwt,
             @PathVariable long accountId,
             @RequestBody AccountNameUpdateRequest request) {
-        return service.rename(Long.parseLong(jwt.getSubject()), accountId, request);
+        var result = service.rename(Long.parseLong(jwt.getSubject()), accountId, request);
+        log.info("event=account_renamed");
+        return result;
     }
 
     @GetMapping

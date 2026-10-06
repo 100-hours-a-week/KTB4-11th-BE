@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/v1/accounts/{accountId}/orders")
 public class OrderController {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OrderController.class);
     private final OrderExecutionService marketExecution;
     private final com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream stream;
     private final OrderHistoryService history;
@@ -59,6 +60,7 @@ public class OrderController {
             throw new OrderException(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", "인증 정보를 확인하세요.");
         }
         orders.cancel(userId, accountId, orderId);
+        log.info("event=order_cancelled orderId={}", orderId);
     }
 
 

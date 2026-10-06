@@ -28,6 +28,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 @Configuration
 @EnableConfigurationProperties(KakaoProperties.class)
 public class SecurityConfig {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(SecurityConfig.class);
     @Bean
     RestClient kakaoRestClient() {
         var factory = new SimpleClientHttpRequestFactory();
@@ -70,6 +71,7 @@ public class SecurityConfig {
         cors.setAllowedMethods(List.of("GET", "POST", "PATCH", "OPTIONS"));
         cors.setAllowedHeaders(List.of("Content-Type", "X-XSRF-TOKEN"));
         cors.setAllowCredentials(true);
+        cors.setExposedHeaders(List.of("X-Request-Id"));
         var source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/api/**", cors);
         http.cors(config -> config.configurationSource(source))
@@ -117,6 +119,7 @@ public class SecurityConfig {
 
     private void writeError(HttpServletResponse response, int status, String code, String message)
             throws java.io.IOException {
+        log.warn("event=security_rejected status={} code={}", status, code);
         response.setStatus(status);
         response.setContentType("application/json;charset=UTF-8");
         response.getWriter().write("{\"code\":\"" + code + "\",\"message\":\"" + message + "\"}");

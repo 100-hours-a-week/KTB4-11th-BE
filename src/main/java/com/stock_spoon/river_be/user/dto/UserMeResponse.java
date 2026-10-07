@@ -4,5 +4,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 
 public record UserMeResponse(
         String nickname,
-        @JsonProperty("profile_image_url") String profileImageUrl) {
+        @JsonProperty("profile_image_url") String profileImageUrl,
+        @JsonProperty("onboarding_completed") boolean onboardingCompleted) {
 }

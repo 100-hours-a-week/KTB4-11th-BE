@@ -69,7 +69,7 @@ public class SecurityConfig {
                     .toList());
         }
         cors.setAllowedMethods(List.of("GET", "POST", "PATCH", "OPTIONS"));
-        cors.setAllowedHeaders(List.of("Content-Type", "X-XSRF-TOKEN"));
+        cors.setAllowedHeaders(List.of("Content-Type", "X-XSRF-TOKEN", "ngrok-skip-browser-warning"));
         cors.setAllowCredentials(true);
         cors.setExposedHeaders(List.of("X-Request-Id"));
         var source = new UrlBasedCorsConfigurationSource();

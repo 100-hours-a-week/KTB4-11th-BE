@@ -43,6 +43,10 @@ class AccountControllerTests {
     void onboardingCreatesTheDefaultAccountAndCompletesOnboarding() throws Exception {
         User user = users.save(new User("계좌사용자"));
 
+        mvc.perform(get("/api/v1/users/me").cookie(authCookie(user)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.onboarding_completed").value(false));
+
         onboard(user, 10_000_000)
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.account_name").value("기본 계좌"))
@@ -50,6 +54,10 @@ class AccountControllerTests {
                 .andExpect(jsonPath("$.cash_balance").value(10_000_000))
                 .andExpect(jsonPath("$.is_ai_managed").value(true));
 
+        users.flush();
+        mvc.perform(get("/api/v1/users/me").cookie(authCookie(user)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.onboarding_completed").value(true));
         assertThat(users.findById(user.getId()).orElseThrow().isOnboardingCompleted()).isTrue();
         assertThat(accounts.findAll()).singleElement().satisfies(account -> {
             assertThat(account.isActive()).isTrue();
@@ -278,7 +286,7 @@ class AccountControllerTests {
     void onboardingRequiresLogin() throws Exception {
         CsrfCredentials csrf = csrf();
 
-        mvc.perform(post("/api/v1/users/me/onboarding")
+        mvc.perform(post("/api/v1/users/me")
                         .cookie(csrf.cookie())
                         .header("X-XSRF-TOKEN", csrf.token())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -322,7 +330,7 @@ class AccountControllerTests {
     private org.springframework.test.web.servlet.ResultActions onboard(User user, long initialCapital)
             throws Exception {
         CsrfCredentials csrf = csrf();
-        return mvc.perform(post("/api/v1/users/me/onboarding")
+        return mvc.perform(post("/api/v1/users/me")
                 .cookie(authCookie(user), csrf.cookie())
                 .header("X-XSRF-TOKEN", csrf.token())
                 .contentType(MediaType.APPLICATION_JSON)

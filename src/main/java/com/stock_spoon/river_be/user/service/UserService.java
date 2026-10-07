@@ -17,6 +17,6 @@ public class UserService {
     @Transactional(readOnly = true)
     public UserMeResponse getMe(long userId) {
         var user = repository.findById(userId).orElseThrow(UserNotFoundException::new);
-        return new UserMeResponse(user.getNickname(), user.getProfileImageUrl());
+        return new UserMeResponse(user.getNickname(), user.getProfileImageUrl(), user.isOnboardingCompleted());
     }
 }

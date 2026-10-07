@@ -23,5 +23,6 @@ public record AiUserSnapshotResponse(List<UserSnapshot> users) {
             @JsonProperty("order_side") String side,
             @JsonProperty("order_status") String status,
             @JsonProperty("order_type") String type,
-            @JsonProperty("limit_price") Long limitPrice, long quantity) {}
+            @JsonProperty("limit_price") Long limitPrice, long quantity,
+            @JsonProperty("current_stock_price") BigDecimal currentStockPrice) {}
 }

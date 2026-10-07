@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/v1/users/me/onboarding")
+@RequestMapping("/api/v1/users/me")
 public class OnboardingController {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OnboardingController.class);
     private final AccountService service;

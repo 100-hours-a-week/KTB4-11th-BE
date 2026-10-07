@@ -58,10 +58,12 @@ class SecurityJwtTests {
             mvc.perform(options("/api/v1/auth/login")
                             .header("Origin", origin)
                             .header("Access-Control-Request-Method", "POST")
-                            .header("Access-Control-Request-Headers", "Content-Type,X-XSRF-TOKEN"))
+                            .header("Access-Control-Request-Headers", "Content-Type,X-XSRF-TOKEN,ngrok-skip-browser-warning"))
                     .andExpect(status().isOk())
                     .andExpect(header().string("Access-Control-Allow-Origin", origin))
-                    .andExpect(header().string("Access-Control-Allow-Credentials", "true"));
+                    .andExpect(header().string("Access-Control-Allow-Credentials", "true"))
+                    .andExpect(header().string("Access-Control-Allow-Headers",
+                            org.hamcrest.Matchers.containsString("ngrok-skip-browser-warning")));
             mvc.perform(get("/api/v1/auth/csrf").header("Origin", origin))
                     .andExpect(status().isOk())
                     .andExpect(header().string("Access-Control-Allow-Origin", origin));

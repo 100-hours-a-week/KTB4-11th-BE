@@ -26,7 +26,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-/** 서버 내부 시세 구독. 키움 원문, 토큰, 인증 정보는 로그에 기록하지 않는다. */
+/** 서버 내부 시세 구독. 전체 키움 메시지·인증 정보는 기록하지 않고, 숫자 변환 실패값만 제한적으로 기록한다. */
 public class KiwoomStockStream {
     private static final Logger log = LoggerFactory.getLogger(KiwoomStockStream.class);
     private static final URI URL = URI.create("wss://api.kiwoom.com:10000/api/dostk/websocket");
@@ -277,11 +277,45 @@ public class KiwoomStockStream {
         }
     }
 
-    private static List<QuoteLevel> levels(JsonNode values, int priceStart, int quantityStart) {
+    private static BigDecimal parseDecimal(String code, String type, JsonNode values, int field, String name) {
+        JsonNode value = values.path(Integer.toString(field));
+        try {
+            return new BigDecimal(value.asText());
+        } catch (NumberFormatException error) {
+            logNumberFailure(code, type, field, name, value, "BigDecimal", error);
+            throw error;
+        }
+    }
+
+    private static long parseQuantity(String code, JsonNode values, int field, String name) {
+        JsonNode value = values.path(Integer.toString(field));
+        try {
+            return Long.parseLong(value.asText());
+        } catch (NumberFormatException error) {
+            logNumberFailure(code, "0D", field, name, value, "long", error);
+            throw error;
+        }
+    }
+
+    private static void logNumberFailure(String code, String type, int field, String name,
+            JsonNode value, String targetType, NumberFormatException error) {
+        String raw = value.asText();
+        boolean truncated = raw.length() > 80;
+        // 숫자 필드만 제한적으로 기록하고 제어문자를 이스케이프해 로그 줄바꿈을 방지한다.
+        String escaped = JSON.writeValueAsString(raw.substring(0, Math.min(raw.length(), 80)));
+        String valueState = value.isMissingNode() ? "missing" : value.isNull() ? "null" : "present";
+        String side = "0D".equals(type) ? (field < 51 || field >= 61 && field < 71 ? "ask" : "bid") : "none";
+        int level = "0D".equals(type) ? (field - 41) % 10 + 1 : 0;
+        log.warn("event=kiwoom_stream_number_parse_failed stockCode={} messageType={} field={} fieldName={} "
+                        + "side={} level={} valueState={} rawValue={} rawValueTruncated={} targetType={} causeType={}",
+                code, type, field, name, side, level, valueState, escaped, truncated, targetType,
+                error.getClass().getSimpleName());
+    }
+    private static List<QuoteLevel> levels(String code, JsonNode values, int priceStart, int quantityStart) {
         var result = new ArrayList<QuoteLevel>(10);
         for (int i = 0; i < 10; i++) {
-            BigDecimal price = new BigDecimal(values.path(Integer.toString(priceStart + i)).asText()).abs();
-            long quantity = Long.parseLong(values.path(Integer.toString(quantityStart + i)).asText());
+            BigDecimal price = parseDecimal(code, "0D", values, priceStart + i, "price").abs();
+            long quantity = parseQuantity(code, values, quantityStart + i, "quantity");
             // 0원/0주는 해당 단계에 주문이 없다는 뜻이다. 누락/비정상 값은 0으로 추정하지 않는다.
             if (quantity < 0 || (price.signum() == 0 && quantity > 0)) {
                 throw new IllegalArgumentException();
@@ -422,7 +456,7 @@ public class KiwoomStockStream {
                         }
                         JsonNode values = entry.path("values");
                         if ("0D".equals(type)) {
-                            books.put(code, new OrderBook(code, levels(values, 41, 61), levels(values, 51, 71),
+                            books.put(code, new OrderBook(code, levels(code, values, 41, 61), levels(code, values, 51, 71),
                                     LocalTime.parse(values.path("21").asText(), TIME), clock.instant()));
                             continue;
                         }
@@ -430,13 +464,13 @@ public class KiwoomStockStream {
                             continue;
                         }
                         // 가격의 +/-는 방향 표기다. 가격은 양수, 전일대비/등락률 부호는 유지한다.
-                        BigDecimal price = new BigDecimal(values.path("10").asText()).abs();
+                        BigDecimal price = parseDecimal(code, type, values, 10, "currentPrice").abs();
                         if (price.signum() <= 0) {
                             throw new IllegalArgumentException();
                         }
                         var received = new StockPrice(code, price,
-                                new BigDecimal(values.path("11").asText()),
-                                new BigDecimal(values.path("12").asText()),
+                                parseDecimal(code, type, values, 11, "change"),
+                                parseDecimal(code, type, values, 12, "changeRate"),
                                 LocalTime.parse(values.path("20").asText(), TIME), clock.instant());
                         prices.put(code, received);
                         receivedPrices.add(received);

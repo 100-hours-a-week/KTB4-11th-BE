@@ -6,7 +6,12 @@ import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
 
-public record OrderHistoryResponse(@JsonProperty("account_id") long accountId, List<Item> orders) {
+public record OrderHistoryResponse(@JsonProperty("account_id") long accountId, List<Item> orders,
+        @JsonInclude(JsonInclude.Include.NON_NULL) Pagination pagination) {
+    public record Pagination(int page, int limit,
+            @JsonProperty("total_elements") long totalElements,
+            @JsonProperty("total_pages") long totalPages,
+            @JsonProperty("has_next") boolean hasNext) {}
     public record Item(
             @JsonProperty("order_id") long orderId,
             @JsonProperty("stock_code") String stockCode,
@@ -40,7 +45,7 @@ public record OrderHistoryResponse(@JsonProperty("account_id") long accountId, L
             @JsonProperty("realized_return_percent") BigDecimal realizedReturnPercent,
             @JsonProperty("created_at") OffsetDateTime createdAt) {}
     public record ExecutionSummary(long quantity,
-            @JsonProperty("average_price") long averagePrice,
+            @JsonProperty("average_price") BigDecimal averagePrice,
             @JsonProperty("total_amount") long totalAmount,
             @JsonProperty("executed_at") OffsetDateTime executedAt,
             @JsonProperty("realized_pnl") BigDecimal realizedPnl,

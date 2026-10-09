@@ -1,5 +1,11 @@
 # 스톡스푼 v1 계좌 구현 흐름
 
+## 현재 임시 응답값 확인 (2026-10-08)
+
+로컬 dev `2bf90b2`의 DTO를 정적으로 확인했다. 계좌 목록과 상세의 `is_duel_account`는 항상 false이고, 상세의 `executed_trade_count`는 항상 0이다. 실제 대결 상태·체결 횟수를 조회한 결과가 아니다. 반환 위치는 AccountListResponse.from과 AccountDetailResponse.from이다.
+
+반면 available_cash, holdings_market_value, total_assets, return_percent는 DB와 실제 시세에 기반한 계산값이다. 보유종목의 업종 미분류는 누락 대체값이며, 주문 내역의 더미 reason.summary와 AI 리포트 상세의 실제 reason은 별개다. 운영 DB·배포 버전·외부 연동은 이번 확인 범위에 포함하지 않았다.
+
 > DB 관련 H2 설명은 계좌 기능 개발 당시 상태다. 현재 실행 DB와 전환 절차는 [MySQL 전환 기록](stockspoon_mysql_setup.md)을 참고한다.
 
 > 기준: `feat/5-account`의 현재 코드. 이 문서는 계좌 개발 과정에서 결정한 내용과 실제 구현 상태를 함께 기록한다. 계좌·보유종목 정책 정의서는 정책 참고 자료이며, 구현 여부는 아래에서 별도로 표시한다.

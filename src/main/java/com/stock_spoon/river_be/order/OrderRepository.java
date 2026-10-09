@@ -9,6 +9,8 @@ import java.util.Optional;
 // Spring Data JPA가 구현을 제공한다. save/findById 등은 JpaRepository에서 상속한다.
 // @Query의 Order와 필드명은 Entity 기준이며 JPA가 테이블·컬럼에 맞는 SQL로 변환한다.
 public interface OrderRepository extends JpaRepository<Order, Long> {
+    @Query("select count(o) from Order o where o.account.id = :accountId and o.status = :status")
+    long countByAccountIdAndStatus(@Param("accountId") long accountId, @Param("status") Order.Status status);
     // 체결 행이 아닌 주문을 묶어서 페이지를 나눈다. 체결 누락 주문도 남겨 서비스에서 검증한다.
     @Query("""
             select o from Order o left join Execution e on e.order = o

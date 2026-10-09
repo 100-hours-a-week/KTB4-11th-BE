@@ -217,6 +217,19 @@ class AccountControllerTests {
     }
 
     @Test
+    void accountDetailReturnsCompletedOrderCount() throws Exception {
+        User user = users.save(new User("거래 횟수 사용자"));
+        var account = accounts.save(new com.stock_spoon.river_be.account.entity.Account(user, "집계 계좌", 1000000));
+        var completed = orders.reserveLimit(account.getId(), "005930",
+                com.stock_spoon.river_be.order.Order.Side.BUY, 1, 100, null);
+        completed.execute();
+        orders.reserveLimit(account.getId(), "005930",
+                com.stock_spoon.river_be.order.Order.Side.BUY, 1, 100, null);
+        mvc.perform(get("/api/v1/users/me/accounts/{accountId}", account.getId()).cookie(authCookie(user)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.executed_trade_count").value(1));
+    }
+    @Test
     void accountDetailReturnsTheUsersActiveAccount() throws Exception {
         User user = users.save(new User("계좌사용자"));
         long accountId = accountId(onboard(user, 10_000_000)

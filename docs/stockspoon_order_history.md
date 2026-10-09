@@ -1,121 +1,109 @@
-# 체결 완료 AI 주문 내역 조회 (v1)
+# 체결 완료 AI 주문 내역 조회
 
-## 요청과 응답 계약
+## API 계약
 
-- `GET /api/v1/accounts/{account_id}/orders`, 기존 로그인 쿠키 인증.
-- 선택 쿼리 `limit`: 생략하면 전체, 양의 정수이면 최대 해당 개수. 보유 종목 조회의 limit와 같은 입력 규칙이다. 0, 음수, 소수, 문자열, 빈 값, int 범위 초과는 400 `INVALID_ORDER_QUERY`.
-- 본인 소유 활성 계좌만 조회한다. 존재하지 않거나 다른 사용자 소유이거나 비활성 계좌이면 404 `ACCOUNT_NOT_FOUND`.
-- v1에서는 AI 주문 중 체결 완료 주문만 반환한다. 매수/매도 필터링은 프론트에서 수행한다.
-- 체결시각 내림차순, 같은 시각이면 주문 ID 내림차순. 정렬 후 limit를 적용한다.
-- 결과가 없으면 `{"account_id":123,"orders":[]}`.
+`GET /api/v1/accounts/{account_id}/orders` — 기존 로그인 쿠키 인증.
+본인 소유 활성 계좌의 `AI` / `EXECUTED` 주문만 반환한다. 없는 계좌, 타인 계좌, 비활성 계좌는 404 `ACCOUNT_NOT_FOUND`.
 
-응답 필드명과 구조의 기준은 [API 문서의 주문 내역 조회](https://docs.google.com/spreadsheets/d/1x2RqgSykrsg1HIUVcOl_iW0Jb47wEJDRtrIyESRVHeE/edit?gid=2138787152#gid=2138787152)이다.
+| 쿼리 | 생략 시 | 허용 값 |
+|---|---|---|
+| page | 기존 전체/limit 조회, pagination 필드 생략 | 0 이상 int, 0이 첫 페이지 |
+| limit | page 있으면 10, 없으면 전체 | 페이지 조회 1~100, 기존 조회 양의 int |
+| order_side | 전체 매수·매도 | buy 또는 sell |
+
+빈 값, 음수, 소수, 문자, int 범위 초과 및 지원하지 않는 order_side는 400 `INVALID_ORDER_QUERY`.
+`order_side=all` 대신 전체 탭은 order_side를 생략한다. page 없는 요청에서도 order_side 필터는 적용된다.
+
+```http
+# 홈: 최신 체결 주문 최대 3개, 기존 응답 유지
+GET /api/v1/accounts/2/orders?limit=3
+
+# 기존 전체 조회
+GET /api/v1/accounts/2/orders
+
+# 전체 첫 페이지
+GET /api/v1/accounts/2/orders?page=0&limit=10
+
+# 매수 두 번째 페이지
+GET /api/v1/accounts/2/orders?order_side=buy&page=1&limit=10
+
+# 매도 첫 페이지, 기본 10개
+GET /api/v1/accounts/2/orders?order_side=sell&page=0
+```
+
+## 응답
+
+기존 요청은 `account_id`, `orders`만 반환한다. page가 있는 요청에는 아래 pagination을 추가한다.
+주문과 체결의 기존 필드명 및 null은 유지한다. average_price는 복수 체결 평균을 표현하기 위해 소수 4자리 HALF_UP의 JSON 숫자가 된다(예: 110.5000).
 
 ```json
 {
-  "account_id": 123,
-  "orders": [{
-    "order_id": 1002,
-    "stock_code": "005930",
-    "stock_name": "삼성전자",
-    "order_source": "AI",
-    "order_side": "buy",
-    "order_type": "limit",
-    "order_status": "executed",
-    "quantity": 2,
-    "limit_price": 70000,
-    "reserved_cash": 0,
-    "created_at": "2026-09-01T09:00:00+09:00",
-    "canceled_at": null,
-    "reason": {"summary": "[더미] AI 판단에 따라 매수했어요."},
-    "executions": [{
-      "execution_id": 2001,
-      "execution_price": 69500,
-      "execution_quantity": 2,
-      "realized_pnl": null,
-      "realized_return_percent": null,
-      "created_at": "2026-09-01T09:01:00+09:00"
-    }],
-    "execution_summary": {
-      "quantity": 2,
-      "average_price": 69500,
-      "total_amount": 139000,
-      "executed_at": "2026-09-01T09:01:00+09:00",
-      "realized_pnl": null,
-      "realized_return_percent": null
-    },
-    "can_cancel": false
-  }]
+  "account_id": 2,
+  "orders": [],
+  "pagination": {
+    "page": 3,
+    "limit": 10,
+    "total_elements": 23,
+    "total_pages": 3,
+    "has_next": false
+  }
 }
 ```
 
-## 데이터 근거
+위는 범위 밖 페이지 예시다. 전체 개수는 선택 계좌의 AI/EXECUTED/매수·매도 필터에 맞는 **주문 수**다.
+주문별 마지막 체결시각 내림차순, 동률이면 주문 ID 내림차순이다. 하나의 주문이 여러 번 체결되어도 카드/페이지 항목은 한 건이다.
+빈 결과는 orders=[], total_elements=0, total_pages=0, has_next=false다. 범위 밖 page는 전체 개수를 유지하면서 빈 배열을 반환한다.
+JPA offset은 int 범위만 지원하므로 실제 데이터 범위 안이면서 offset이 int를 넘는 요청은 400이다.
+새 체결이 추가되면 이후 페이지의 위치가 이동할 수 있다. 페이지 간 고정 스냅샷을 보장하지 않는다.
 
-|필드|출처와 처리|
+## 데이터와 집계
+
+| 필드 | 출처 및 처리 |
 |---|---|
-|주문 ID·종목 코드·매수/매도·유형·수량·지정가·예약금·생성시각|기존 Order 저장값|
-|stock_name|기존 KiwoomMarketClient.stockDetails. 반환 대상의 동일 종목은 요청당 한 번 조회|
-|order_status|체결 완료 주문만 조회하므로 executed. 목록 API 문서 필드 유지|
-|canceled_at|Order.cancelledAt를 문서 표기 canceled_at로 직렬화. 체결 주문에서는 null|
-|can_cancel|체결 완료 주문이므로 false|
-|executions|기존 Execution 저장값. v1은 주문당 1건이지만 문서의 배열 구조 유지|
-|execution_summary|단일 체결 수량·가격·시각·손익. 총액은 체결가격 × 체결수량|
-|실현손익·수익률|저장값 그대로. 매수는 null, 매도는 저장된 소수 정밀도를 유지|
-|시간|저장 Instant를 +09:00 OffsetDateTime으로 반환|
-|reason.summary|승인된 더미. 매수는 `[더미] AI 판단에 따라 매수했어요.`, 매도는 `[더미] AI 판단에 따라 매도했어요.`|
+| 주문 필드 | Order 저장값. order_status=executed, can_cancel=false |
+| stock_name | KiwoomMarketClient.stockDetails. 반환 대상의 같은 종목은 요청당 한 번 조회 |
+| executions | 해당 주문의 모든 Execution, 체결시각/체결 ID 오름차순 |
+| 요약 quantity | 모든 체결 수량 합계 |
+| 요약 total_amount | 모든 체결 가격 × 수량 합계 |
+| 요약 average_price | total_amount / quantity, 소수 4자리 HALF_UP |
+| 요약 executed_at | 주문의 마지막 체결 시각, +09:00 |
+| 매수 요약 손익·수익률 | null |
+| 단일 매도 요약 손익·수익률 | 기존 저장값 유지 |
+| 복수 매도 요약 손익 | 모든 체결의 실현손익 합계. 하나라도 누락되면 null |
+| 복수 매도 요약 수익률 | 합산 손익 / (합산 금액 - 합산 손익) × 100, 소수 4자리 HALF_UP. 손익 누락 또는 원가가 양수가 아니면 null |
+| reason.summary | 기존 더미 유지: [더미] AI 판단에 따라 매수했어요. / 매도했어요. |
 
-리포트 상세 응답의 필드 제거 결정과 목록 API 계약은 별개다. 목록에서는 API 문서의 order_status를 유지하며, report_id와 execution_count는 추가하지 않는다.
+복수 매도의 원가 역산은 기존 AI 리포트 계산과 같다. 저장 손익의 소수 2자리 정밀도에 한정된다.
+기존 Google Sheets API 문서에는 새 쿼리와 pagination이 아직 반영되지 않았으며 이 문서는 현재 구현의 연동 계약이다.
 
-## 구현 단계와 이유
+## 구현 흐름과 오류 처리
 
-1. 승인된 dev 병합으로 기존 보유 종목 조회와 stockDetails 구현을 확보했다. 같은 외부 연동을 재사용하기 위한 단계이며 신규 클라이언트나 의존성을 만들지 않았다.
-2. 실제 로그인·DB·MVC를 사용하는 OrderHistoryTests를 먼저 작성했다. GET이 없을 때 6개 모두 실패하여 새 동작을 검증하는 테스트임을 확인했다.
-3. 기존 주문 컨트롤러에 GET을 추가하고 전용 응답 DTO로 문서의 필드명, 배열, null, 중첩 객체를 명시했다. 엔티티 직접 직렬화를 피한다.
-4. 기존 계좌 소유권 조회로 접근을 확인한 뒤 EXECUTED 주문 중 AI 주문을 선택한다. 다른 계좌·대기·취소 주문은 대상에서 제외한다.
-5. 대상 주문의 체결을 IN 쿼리로 한 번에 읽는다. 부분 체결 미지원 정책에 따라 모든 대상 주문의 체결이 정확히 1건인지 검증한다. 0건 또는 여러 건이면 limit 적용 전 요청 전체를 500 INVALID_ORDER_DATA로 실패시킨다.
-6. DB 트랜잭션 안에서 응답에 필요한 값만 복사한다. 트랜잭션 종료 후 체결시각/ID 순으로 정렬하여 limit를 적용한다. 외부 요청 중 엔티티 지연 로딩이나 DB 트랜잭션 유지를 피하기 위해 기존 보유조회 구조를 따른다.
-7. 선택된 종목명만 외부에서 조회한다. 외부 조회 실패는 더미로 숨기지 않고 503 ORDER_DATA_UNAVAILABLE로 반환한다.
-8. 시작·DB 후보 수는 debug, 잘못된 입력·접근은 warn, 데이터 오류·외부 실패는 error, 응답 개수·소요시간은 info로 기록한다. 토큰, 근거 원문, 금액, 외부 응답 원문은 로그에 넣지 않는다.
+1. OrderController가 limit/page/order_side를 받아 서비스에 전달한다.
+2. 서비스에서 입력을 검증한 후 읽기 전용 트랜잭션 안에서 계좌 소유권·활성 상태를 확인한다.
+3. 페이지 요청은 같은 필터 조건으로 전체 주문 수를 조회한다. offset이 전체 범위 밖이면 빈 배열로 끝낸다.
+4. OrderRepository.findHistory가 LEFT JOIN / GROUP BY로 주문별 마지막 체결 시각을 정렬하고 DB에서 페이지를 제한한다. countHistory는 주문만 세므로 복수 체결로 개수가 늘어나지 않는다.
+5. 선택된 주문 ID의 체결을 ExecutionRepository.findForOrders로 일괄 조회하고 DTO로 복사한다. 체결이 없는 EXECUTED 주문은 500 INVALID_ORDER_DATA다. 페이지 요청은 해당 페이지의 주문만 검증하며, page 없는 요청은 기존처럼 모든 필터 후보를 검증한 뒤 limit을 적용한다.
+6. 트랜잭션 밖에서 반환할 종목명만 조회한다. 외부 실패는 503 ORDER_DATA_UNAVAILABLE이며 일부 성공 결과로 숨기지 않는다.
+7. page 요청에만 pagination을 붙여 반환한다.
 
-## 검증과 개선 사항
+토큰·근거 원문·외부 응답 원문은 로그에 기록하지 않는다.
 
-OrderHistoryTests 6개가 정렬과 limit, 타 상태/계좌 제외, 정확한 JSON 필드 집합, 손익 정밀도와 null, 잘못된 limit, 인증과 접근권한, 0/복수 체결, 외부 실패를 검증한다. 실행은 `./gradlew test --tests '*OrderHistoryTests'` 및 전체 `./gradlew build`.
+## FE 변경 안내
 
-- 더미인 필드는 reason.summary 하나다. AI의 긴 reason 원문을 임의로 축약하지 않는다. 요약 수신/생성 정책이 확정되면 별도 요약 데이터로 대체한다. 주문과 1:1 리포트 및 상세 조회 원문은 변경하지 않았다.
-- 현재 전체 후보를 읽고 검증·정렬한다. 이력이 커지면 DB 체결시각 정렬과 페이지 조회가 필요하다. 변경 시 전체 후보 오류 처리 정책과도 함께 합의해야 한다.
-- 종목명은 요청 시점 외부 정보다. 주문 시점 종목명 보존이 필요하면 스냅샷 저장 정책을 별도로 확정해야 한다.
-- 검증은 H2와 모의 키움 응답을 이용한다. 실제 키움 연결과 운영 MySQL을 사용한 검증은 포함하지 않는다.
+- 전체 보기 진입: page=0으로 호출하고 orders 표시.
+- 전체/매수/매도 탭 변경: page=0으로 초기화하고 order_side를 바꿔 재호출. FE가 현재 페이지 배열에서 다시 필터링하지 않는다.
+- 페이지 이동: 선택한 order_side와 limit을 유지하고 page만 변경한다.
+- total_pages로 번호 버튼, has_next로 다음 버튼을 제어한다. 화면 페이지 번호는 API page + 1이다.
+- 빠르게 탭/페이지를 전환할 때 이전 요청 응답이 새 목록을 덮어쓰지 않도록 취소하거나 최신 요청만 반영한다.
+- 홈의 기존 limit=3 요청은 유지할 수 있다. 판단 근거 보기는 기존 order_id를 그대로 사용한다.
 
-검증 결과 (2026-10-01): 신규 통합 테스트 6개 통과, 전체 Gradle build 및 SpotBugs 통과. 별도 코드 리뷰에서 구체적 정확성·보안 결함은 발견되지 않았다. 테스트 클래스가 트랜잭션을 사용하므로 외부 호출의 트랜잭션 경계는 테스트로 입증하지 못하며 구현 구조를 확인했다.
+## 검증
 
-## 요청 처리 순서: 코드를 따라 읽는 방법
+OrderHistoryTests는 기존 JSON 구조/홈 limit/정렬/인증/접근권한/외부 실패와 페이지 구간, 필터별 개수, 복수 체결, 평균가격 정밀도, 누락 손익, 빈 페이지, 잘못된 입력을 검증한다.
 
-진입 경로: 인증 처리 → OrderController.list → OrderHistoryService.list → 응답 DTO 직렬화.
+```powershell
+.\gradlew.bat test --tests '*OrderHistoryTests' --no-daemon
+.\gradlew.bat test spotbugsMain --no-daemon
+```
 
-1. 기존 Spring Security가 로그인 쿠키를 검증한다. 인증되지 않으면 401로 종료한다.
-2. OrderController.list가 JWT subject를 사용자 ID로 변환한다. 숫자로 변환할 수 없으면 401 INVALID_TOKEN으로 종료한다. accountId와 선택 limit를 서비스로 전달한다.
-3. OrderHistoryService.list의 parseLimit가 입력을 검사한다. 생략하면 Integer.MAX_VALUE, 유효한 양의 정수면 그 수를 사용한다. 실패하면 warn 로그와 400 INVALID_ORDER_QUERY로 종료한다.
-4. read.execute가 읽기 전용 DB 트랜잭션을 연다. AccountRepository.findByIdAndUserIdAndActiveTrue로 본인 소유 활성 계좌를 확인한다. 실패하면 warn 로그와 404 ACCOUNT_NOT_FOUND로 종료한다.
-5. OrderRepository.findAllByAccountIdAndStatus로 EXECUTED 주문을 읽고 Source.AI만 남긴다. 후보가 없으면 빈 목록으로 트랜잭션을 마친다.
-6. ExecutionRepository.findForOrders가 후보 주문 ID 전체의 체결을 한 번에 조회한다. 주문 ID별로 묶은 뒤 각 주문의 체결 수가 정확히 1건인지 확인한다. 0건이나 여러 건이면 error 로그와 500 INVALID_ORDER_DATA로 종료한다. 아직 limit는 적용하지 않는다.
-7. snapshot이 Order와 Execution의 저장값을 Item, ExecutionItem, ExecutionSummary로 복사한다. 단일 체결이므로 평균가격은 체결가격, 총액은 체결가격 × 체결수량이다. 손익은 저장값을 사용하고 시간은 +09:00으로 변환한다. reason.summary에 승인된 매수/매도 더미를 넣는다. AI 리포트 원문은 조회하거나 수정하지 않는다.
-8. read.execute가 종료된 후 DB 후보 수를 debug로 기록한다. 체결시각 내림차순, 동률이면 orderId 내림차순으로 정렬하고 limit를 적용한다.
-9. 반환할 주문의 stockCode별로 KiwoomMarketClient.stockDetails를 호출한다. 요청 안에서 HashMap에 종목명을 보관하여 같은 종목을 한 번만 호출한다. 실패하면 예외 종류만 error로 기록하고 503 ORDER_DATA_UNAVAILABLE로 종료한다.
-10. withStockName으로 종목명이 채워진 Item을 만든다. 완료 개수와 소요시간을 info로 기록하고 OrderHistoryResponse를 반환한다. Spring이 DTO의 JsonProperty에 따라 account_id/orders와 문서의 하위 필드들을 JSON으로 직렬화한다.
-
-읽을 파일: src/main/java/com/stock_spoon/river_be/order/OrderController.java, OrderHistoryService.java, OrderHistoryResponse.java, OrderRepository.java, ExecutionRepository.java. 검증 파일: src/test/java/com/stock_spoon/river_be/order/OrderHistoryTests.java.
-
-## 대표 시나리오
-
-|상황|처리 경로와 결과|
-|---|---|
-|최근 주문 3개 조회|limit=3 검증 → 계좌 확인 → 모든 체결 완료 AI 주문 검증 → 체결시각/ID 정렬 → 상위 3개 종목명 조회 → 200|
-|limit 없이 조회|같은 절차로 전체 체결 완료 AI 주문 반환|
-|같은 종목의 매수·매도 주문이 여러 개|각 주문은 별도 카드 데이터. 종목명 외부 호출은 요청당 한 번. 매도 손익은 저장값, 매수 손익은 null|
-|체결 완료 주문이 없음|계좌 확인 후 orders=[]로 200. 외부 종목 조회 없음|
-|대기·취소 주문이 함께 있음|대기·취소 주문은 후보에서 제외. 반환하지 않음|
-|다른 계좌 또는 비활성 계좌|소유권/활성 검사에서 404. 주문·외부 종목 조회 진행하지 않음|
-|잘못된 limit|계좌 조회 전에 400 INVALID_ORDER_QUERY|
-|체결 완료 주문인데 체결이 0건/복수 건|limit와 관계없이 해당 계좌의 후보 검증에서 전체 요청을 500 INVALID_ORDER_DATA로 종료|
-|반환 대상 종목의 외부 정보 조회 실패|DB 읽기는 종료된 상태. 전체 요청을 503 ORDER_DATA_UNAVAILABLE로 종료|
-|사용자가 매수/매도 탭 선택|서버는 양쪽을 반환. 프론트가 order_side로 필터링|
+자동 검증은 H2와 모의 키움 응답을 사용한다. 실제 FE 브라우저, 운영 MySQL, 실제 키움 호출은 검증 범위에 포함하지 않는다.

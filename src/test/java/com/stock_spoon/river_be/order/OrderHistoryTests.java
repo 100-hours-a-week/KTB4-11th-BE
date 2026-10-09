@@ -53,7 +53,7 @@ class OrderHistoryTests {
 
     private Order pending(Account owner, Order.Side side, String created) {
         return orders.save(Order.pendingLimit(owner, "005930", side, 2, 70000,
-                Order.Source.AI, "실제 근거 원문", Instant.parse(created)));
+                Order.Source.AI, side == Order.Side.BUY ? "매수 실제 근거 원문" : "매도 실제 근거 원문", Instant.parse(created)));
     }
 
     private Order executed(String created, String at, Order.Side side) {
@@ -92,6 +92,8 @@ class OrderHistoryTests {
     @Test void matchesDocumentShapeAndPreservesSellPrecisionAndBuyNulls() throws Exception {
         executed("2026-09-01T00:00:00Z", "2026-09-01T01:00:00Z", Order.Side.BUY);
         executed("2026-09-02T00:00:00Z", "2026-09-02T01:00:00Z", Order.Side.SELL);
+        em.flush();
+        em.clear();
         String body = list("").andExpect(status().isOk())
                 .andExpect(jsonPath("$.orders[0].stock_name").value("삼성전자"))
                 .andExpect(jsonPath("$.orders[0].created_at").value("2026-09-02T09:00:00+09:00"))
@@ -99,8 +101,8 @@ class OrderHistoryTests {
                 .andExpect(jsonPath("$.orders[0].reserved_cash").value(0))
                 .andExpect(jsonPath("$.orders[0].canceled_at").isEmpty())
                 .andExpect(jsonPath("$.orders[0].can_cancel").value(false))
-                .andExpect(jsonPath("$.orders[0].reason.summary").value("[더미] AI 판단에 따라 매도했어요."))
-                .andExpect(jsonPath("$.orders[1].reason.summary").value("[더미] AI 판단에 따라 매수했어요."))
+                .andExpect(jsonPath("$.orders[0].reason.summary").value("매도 실제 근거 원문"))
+                .andExpect(jsonPath("$.orders[1].reason.summary").value("매수 실제 근거 원문"))
                 .andExpect(jsonPath("$.orders[0].executions.length()").value(1))
                 .andExpect(jsonPath("$.orders[0].execution_summary.total_amount").value(139000))
                 .andExpect(jsonPath("$.orders[0].execution_summary.realized_pnl").value(1000.12))
@@ -121,6 +123,26 @@ class OrderHistoryTests {
                 "execution_price", "execution_quantity", "realized_pnl", "realized_return_percent", "created_at");
     }
 
+    @Test void returnsExplicitNullSummaryWhenReportIsMissingForBuyAndSell() throws Exception {
+        for (var side : Order.Side.values()) {
+            var order = orders.save(Order.pendingLimit(account, "005930", side, 2, 70000,
+                    Order.Source.AI, null, Instant.parse("2026-09-01T00:00:00Z")));
+            executions.save(new Execution(order, 69500, 2,
+                    side == Order.Side.SELL ? BigDecimal.ZERO : null,
+                    side == Order.Side.SELL ? BigDecimal.ZERO : null, Instant.parse("2026-09-01T01:00:00Z")));
+            order.execute();
+        }
+        em.flush();
+        em.clear();
+        String body = list("").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders.length()").value(2))
+                .andReturn().getResponse().getContentAsString();
+        var tree = JsonMapper.builder().build().readTree(body);
+        for (var item : tree.path("orders")) {
+            assertThat(item.path("reason").propertyNames()).containsExactly("summary");
+            assertThat(item.path("reason").path("summary").isNull()).isTrue();
+        }
+    }
     @Test void rejectsBadLimitAndReturnsEmptyWithoutExternalCalls() throws Exception {
         list("").andExpect(status().isOk()).andExpect(jsonPath("$.orders").isEmpty());
         for (String value : List.of("0", "-1", "abc", "1.5", "2147483648", "")) {
@@ -147,16 +169,134 @@ class OrderHistoryTests {
         verifyNoInteractions(market);
     }
 
-    @Test void rejectsZeroOrMultipleExecutionsEvenWithLimit() throws Exception {
+    @Test void rejectsZeroExecutionsEvenWithLimit() throws Exception {
         var invalid = pending(account, Order.Side.BUY, "2026-09-01T00:00:00Z");
         invalid.execute();
         list("?limit=3").andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.code").value("INVALID_ORDER_DATA"));
-        executions.save(new Execution(invalid, 69000, 1, null, null, Instant.now()));
-        executions.save(new Execution(invalid, 69000, 1, null, null, Instant.now()));
-        list("?limit=3").andExpect(status().isInternalServerError())
-                .andExpect(jsonPath("$.code").value("INVALID_ORDER_DATA"));
         verifyNoInteractions(market);
+    }
+
+    @Test void pagesAfterSideFilterAndCountsOrdersRatherThanFills() throws Exception {
+        var oldest = executed("2026-09-01T00:00:00Z", "2026-09-01T01:00:00Z", Order.Side.BUY);
+        var tie1 = executed("2026-09-02T00:00:00Z", "2026-09-03T01:00:00Z", Order.Side.BUY);
+        var tie2 = executed("2026-09-02T00:00:00Z", "2026-09-03T01:00:00Z", Order.Side.BUY);
+        executed("2026-09-04T00:00:00Z", "2026-09-04T01:00:00Z", Order.Side.SELL);
+        pending(account, Order.Side.BUY, "2026-09-05T00:00:00Z");
+        var manual = orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY, 2, 70000,
+                Order.Source.USER, null, Instant.parse("2026-09-05T00:00:00Z")));
+        executions.save(new Execution(manual, 69500, 2, null, null, Instant.parse("2026-09-05T01:00:00Z")));
+        manual.execute();
+        list("?page=0&limit=2&order_side=buy").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders.length()").value(2))
+                .andExpect(jsonPath("$.orders[0].order_id").value(tie2.getId()))
+                .andExpect(jsonPath("$.orders[1].order_id").value(tie1.getId()))
+                .andExpect(jsonPath("$.pagination.total_elements").value(3))
+                .andExpect(jsonPath("$.pagination.total_pages").value(2))
+                .andExpect(jsonPath("$.pagination.has_next").value(true));
+        list("?page=1&limit=2&order_side=buy").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders.length()").value(1))
+                .andExpect(jsonPath("$.orders[0].order_id").value(oldest.getId()))
+                .andExpect(jsonPath("$.pagination.page").value(1))
+                .andExpect(jsonPath("$.pagination.has_next").value(false));
+        list("?order_side=sell&limit=3").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders.length()").value(1))
+                .andExpect(jsonPath("$.orders[0].order_side").value("sell"))
+                .andExpect(jsonPath("$.pagination").doesNotExist());
+        list("?page=0&limit=10").andExpect(status().isOk())
+                .andExpect(jsonPath("$.pagination.total_elements").value(4));
+    }
+
+    @Test void aggregatesMultipleExecutionsAndSortsByLastFill() throws Exception {
+        executed("2026-09-02T00:00:00Z", "2026-09-02T01:00:00Z", Order.Side.BUY);
+        var sell = pending(account, Order.Side.SELL, "2026-09-01T00:00:00Z");
+        executions.save(new Execution(sell, 100, 1, new BigDecimal("10"), new BigDecimal("11.1111"),
+                Instant.parse("2026-09-01T01:00:00Z")));
+        executions.save(new Execution(sell, 121, 1, new BigDecimal("21"), new BigDecimal("21"),
+                Instant.parse("2026-09-03T01:00:00Z")));
+        sell.execute();
+        list("?page=0&limit=1").andExpect(status().isOk())
+                .andExpect(jsonPath("$.pagination.total_elements").value(2))
+                .andExpect(jsonPath("$.orders[0].order_id").value(sell.getId()))
+                .andExpect(jsonPath("$.orders[0].executions.length()").value(2))
+                .andExpect(jsonPath("$.orders[0].execution_summary.quantity").value(2))
+                .andExpect(jsonPath("$.orders[0].execution_summary.total_amount").value(221))
+                .andExpect(jsonPath("$.orders[0].execution_summary.average_price").value(110.5))
+                .andExpect(jsonPath("$.orders[0].execution_summary.realized_pnl").value(31))
+                .andExpect(jsonPath("$.orders[0].execution_summary.realized_return_percent").value(16.3158))
+                .andExpect(jsonPath("$.orders[0].execution_summary.executed_at").value("2026-09-03T10:00:00+09:00"));
+        list("?limit=3").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders[0].executions.length()").value(2))
+                .andExpect(jsonPath("$.pagination").doesNotExist());
+    }
+
+    @Test void validatesPageQueriesAndReturnsEmptyPagesWithoutMarketCalls() throws Exception {
+        for (String query : List.of("page=-1", "page=abc", "page=", "page=1.5", "page=2147483648",
+                "page=0&limit=101", "page=0&limit=0", "page=0&limit=abc", "order_side=all", "order_side=")) {
+            list("?" + query).andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_ORDER_QUERY"));
+        }
+        list("?page=0").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders").isEmpty())
+                .andExpect(jsonPath("$.pagination.limit").value(10))
+                .andExpect(jsonPath("$.pagination.total_pages").value(0))
+                .andExpect(jsonPath("$.pagination.has_next").value(false));
+        verifyNoInteractions(market);
+        executed("2026-09-01T00:00:00Z", "2026-09-01T01:00:00Z", Order.Side.BUY);
+        list("?page=2147483647&limit=100").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders").isEmpty())
+                .andExpect(jsonPath("$.pagination.total_elements").value(1));
+        list("?page=0&order_side=sell").andExpect(status().isOk())
+                .andExpect(jsonPath("$.pagination.total_elements").value(0));
+        verifyNoInteractions(market);
+    }
+
+    @Test void defaultPageReturnsTenAndBuySummaryPreservesNullsAndFractionalAverage() throws Exception {
+        for (int index = 0; index < 11; index++) {
+            executed("2026-09-01T00:00:00Z", "2026-09-01T01:00:00Z", Order.Side.BUY);
+        }
+        list("?page=0").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders.length()").value(10))
+                .andExpect(jsonPath("$.pagination.total_elements").value(11))
+                .andExpect(jsonPath("$.pagination.total_pages").value(2));
+        var buy = pending(account, Order.Side.BUY, "2026-09-02T00:00:00Z");
+        executions.save(new Execution(buy, 100, 1, null, null, Instant.parse("2026-09-02T01:00:00Z")));
+        executions.save(new Execution(buy, 101, 1, null, null, Instant.parse("2026-09-02T01:00:01Z")));
+        buy.execute();
+        list("?page=0&limit=1&order_side=buy").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders[0].executions.length()").value(2))
+                .andExpect(jsonPath("$.orders[0].execution_summary.average_price").value(100.5))
+                .andExpect(jsonPath("$.orders[0].execution_summary.realized_pnl").isEmpty())
+                .andExpect(jsonPath("$.orders[0].execution_summary.realized_return_percent").isEmpty());
+    }
+
+    @Test void doesNotPresentPartialSellPnlAsCompleteSummary() throws Exception {
+        var sell = pending(account, Order.Side.SELL, "2026-09-01T00:00:00Z");
+        executions.save(new Execution(sell, 100, 1, new BigDecimal("10"), new BigDecimal("11.1111"),
+                Instant.parse("2026-09-01T01:00:00Z")));
+        executions.save(new Execution(sell, 121, 1, null, null, Instant.parse("2026-09-01T01:00:01Z")));
+        sell.execute();
+        list("?page=0&order_side=sell").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders[0].execution_summary.total_amount").value(221))
+                .andExpect(jsonPath("$.orders[0].execution_summary.realized_pnl").isEmpty())
+                .andExpect(jsonPath("$.orders[0].execution_summary.realized_return_percent").isEmpty());
+    }
+
+    @Test void pagedQueriesCheckOwnershipAndOnlyResolveSelectedStockNames() throws Exception {
+        executed("2026-09-01T00:00:00Z", "2026-09-01T01:00:00Z", Order.Side.BUY);
+        var latest = orders.save(Order.pendingLimit(account, "000660", Order.Side.BUY, 2, 100,
+                Order.Source.AI, null, Instant.parse("2026-09-02T00:00:00Z")));
+        executions.save(new Execution(latest, 100, 2, null, null, Instant.parse("2026-09-02T01:00:00Z")));
+        latest.execute();
+        var other = users.save(new User("페이지 타인"));
+        mvc.perform(get("/api/v1/accounts/{id}/orders?page=0", account.getId())
+                .cookie(new Cookie("access_token", tokens.issue(other.getId()).accessToken())))
+                .andExpect(status().isNotFound());
+        verifyNoInteractions(market);
+        list("?page=0&limit=1").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders[0].stock_code").value("000660"));
+        verify(market).stockDetails("000660");
+        verify(market, never()).stockDetails("005930");
     }
 
     @Test void mapsStockInfoFailureTo503() throws Exception {

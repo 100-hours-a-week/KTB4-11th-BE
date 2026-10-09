@@ -365,6 +365,73 @@ class KiwoomStockStreamTests {
         verify(sockets.getLast(), never()).abort();
     }
 
+    @Test
+    void logsNumericFailureContextAndPreservesDisconnectBehavior() {
+        var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(KiwoomStockStream.class);
+        var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            for (String field : List.of("10", "11", "12")) {
+                for (String value : List.of("missing", "null", "empty", "space", "comma")) {
+                    subscribe();
+                    receive(book("005930", "70100", "12"));
+                    var values = new java.util.HashMap<String, Object>();
+                    values.put("10", "70000"); values.put("11", "0");
+                    values.put("12", "0"); values.put("20", "100000");
+                    switch (value) {
+                        case "missing" -> values.remove(field);
+                        case "null" -> values.put(field, null);
+                        case "empty" -> values.put(field, "");
+                        case "space" -> values.put(field, " 4.9 ");
+                        case "comma" -> values.put(field, "70,000");
+                    }
+                    appender.list.clear();
+                    receive(JsonMapper.builder().build().writeValueAsString(java.util.Map.of("trnm", "REAL",
+                            "data", List.of(java.util.Map.of("item", "005930", "type", "0B", "values", values)))));
+                    var messages = appender.list.stream().map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage).toList();
+                    assertThat(messages).anySatisfy(message -> {
+                        assertThat(message).contains("event=kiwoom_stream_number_parse_failed", "stockCode=005930",
+                                "messageType=0B", "field=" + field + " ", "targetType=BigDecimal",
+                                "valueState=" + (value.equals("missing") || value.equals("null") ? value : "present"));
+                        if (value.equals("empty")) assertThat(message).contains("rawValue=\"\"");
+                        if (value.equals("space")) assertThat(message).contains("rawValue=\" 4.9 \"");
+                    });
+                    assertThat(stream.state()).isEqualTo(KiwoomStockStream.State.DISCONNECTED);
+                    assertThat(stream.latestOrderBook("005930")).isEmpty();
+                }
+            }
+            for (int field : List.of(43, 53, 63, 73)) {
+                for (String invalid : field < 61 ? List.of("bad") : List.of("1.5", "9223372036854775808")) {
+                    subscribe();
+                    String packet = book("005930", "70100", "12")
+                            .replace("\"" + field + "\":\"0\"", "\"" + field + "\":\"" + invalid + "\"");
+                    appender.list.clear();
+                    receive(packet);
+                    assertThat(appender.list.stream().map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage).toList())
+                            .anySatisfy(message -> assertThat(message).contains("event=kiwoom_stream_number_parse_failed",
+                                    "messageType=0D", "field=" + field + " ", "level=3",
+                                    "side=" + (field == 43 || field == 63 ? "ask" : "bid"),
+                                    "targetType=" + (field < 61 ? "BigDecimal" : "long")));
+                    assertThat(stream.state()).isEqualTo(KiwoomStockStream.State.DISCONNECTED);
+                }
+            }
+            subscribe();
+            appender.list.clear();
+            String raw = "bad\r\n" + "x".repeat(100);
+            var values = java.util.Map.of("10", raw, "11", "0", "12", "0", "20", "100000");
+            receive(JsonMapper.builder().build().writeValueAsString(java.util.Map.of("trnm", "REAL", "token", "secret-token",
+                    "data", List.of(java.util.Map.of("item", "005930", "type", "0B", "values", values)))));
+            assertThat(appender.list.stream().map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage).toList())
+                    .anySatisfy(message -> {
+                        assertThat(message).contains("event=kiwoom_stream_number_parse_failed", "rawValue=\"bad\\r\\n", "rawValueTruncated=true");
+                        assertThat(message).doesNotContain("\r", "\n", "secret-token", "x".repeat(81));
+                    });
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+    }
     private String book(String code, String ask, String quantity) {
         var values = new java.util.HashMap<String, String>();
         for (int field = 41; field <= 80; field++) {

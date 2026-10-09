@@ -16,8 +16,8 @@ public record AccountDetailResponse(
         @JsonProperty("return_percent") double returnPercent,
         @JsonProperty("executed_trade_count") long executedTradeCount) {
 
-    public static AccountDetailResponse from(Account account, long availableCash, long holdingsMarketValue) {
-        // ponytail: 대결·체결 횟수는 임시값. 해당 기능 연동 시 실제 값으로 교체한다.
+    public static AccountDetailResponse from(Account account, long availableCash, long holdingsMarketValue, long executedTradeCount) {
+        // ponytail: 대결 계좌 상태는 임시값. 대결 계좌 연동 시 교체한다.
         long totalAssets = Math.addExact(account.getCashBalance(), holdingsMarketValue);
         double returnPercent = java.math.BigDecimal.valueOf(totalAssets)
                 .subtract(java.math.BigDecimal.valueOf(account.getInitialCapital()))
@@ -26,6 +26,6 @@ public record AccountDetailResponse(
                 .doubleValue();
         return new AccountDetailResponse("success", account.getId(), account.getName(), false,
                 account.getInitialCapital(), account.getCashBalance(), availableCash,
-                holdingsMarketValue, totalAssets, returnPercent, 0);
+                holdingsMarketValue, totalAssets, returnPercent, executedTradeCount);
     }
 }

@@ -23,6 +23,8 @@ class AccountAssetsTests {
     @Autowired AccountRepository accounts;
     @Autowired UserRepository users;
     @Autowired HoldingRepository holdings;
+    @Autowired OrderRepository orders;
+    @Autowired ExecutionRepository executions;
     @MockitoBean KiwoomMarketClient market;
 
     @Test void evaluatesEveryHoldingAndSeparatesAccounts() {
@@ -53,6 +55,7 @@ class AccountAssetsTests {
         var account = accounts.save(new Account(user, "계좌", 1000000));
         account.changeCash(-123456);
         var detail = service.get(user.getId(), account.getId());
+        assertThat(detail.executedTradeCount()).isZero();
         assertThat(detail.holdingsMarketValue()).isZero();
         assertThat(detail.totalAssets()).isEqualTo(876544);
         assertThat(detail.returnPercent()).isEqualTo(-12.3456);
@@ -67,6 +70,32 @@ class AccountAssetsTests {
         assertThatThrownBy(() -> service.get(user.getId(), account.getId()))
                 .isInstanceOfSatisfying(AccountException.class, error -> { assertThat(error.status()).isEqualTo(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE); assertThat(error.code()).isEqualTo("HOLDINGS_DATA_UNAVAILABLE"); });
         assertThatThrownBy(() -> service.list(user.getId())).isInstanceOfSatisfying(AccountException.class, error -> { assertThat(error.status()).isEqualTo(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE); assertThat(error.code()).isEqualTo("HOLDINGS_DATA_UNAVAILABLE"); });
+    }
+    @Test void countsCompletedOrdersAcrossSidesAndSourcesButNotFillsOrOtherAccounts() {
+        var user = users.save(new User("거래 집계"));
+        var account = accounts.save(new Account(user, "집계 계좌", 1000000));
+        var other = accounts.save(new Account(user, "다른 계좌", 1000000));
+        var now = java.time.Instant.parse("2026-10-09T00:00:00Z");
+        var buy = orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY, 2, 100,
+                Order.Source.AI, "매수 근거", now));
+        buy.execute();
+        executions.save(new Execution(buy, 100, 1, null, null, now));
+        executions.save(new Execution(buy, 100, 1, null, null, now.plusSeconds(1)));
+        var sell = orders.save(Order.pendingLimit(account, "005930", Order.Side.SELL, 1, 100,
+                Order.Source.USER, null, now));
+        sell.execute();
+        executions.save(new Execution(sell, 100, 1, BigDecimal.ZERO, BigDecimal.ZERO, now));
+        orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY, 1, 100,
+                Order.Source.AI, "대기 근거", now));
+        var cancelled = orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY, 1, 100,
+                Order.Source.USER, null, now));
+        cancelled.cancel(now);
+        var otherOrder = orders.save(Order.pendingLimit(other, "005930", Order.Side.BUY, 1, 100,
+                Order.Source.USER, null, now));
+        otherOrder.execute();
+        assertThat(service.get(user.getId(), account.getId()).executedTradeCount()).isEqualTo(2);
+        assertThat(service.get(user.getId(), other.getId()).executedTradeCount()).isEqualTo(1);
+        verifyNoInteractions(market);
     }
     @Test void foreignAccountCannotTriggerMarketLookup() {
         var owner = users.save(new User("소유자"));

@@ -42,14 +42,16 @@ public class OrderController {
 
     @org.springframework.web.bind.annotation.GetMapping
     public OrderHistoryResponse list(@AuthenticationPrincipal Jwt jwt, @PathVariable long accountId,
-            @org.springframework.web.bind.annotation.RequestParam(required = false) String limit) {
+            @org.springframework.web.bind.annotation.RequestParam(required = false) String limit,
+            @org.springframework.web.bind.annotation.RequestParam(required = false) String page,
+            @org.springframework.web.bind.annotation.RequestParam(name = "order_side", required = false) String orderSide) {
         long userId;
         try {
             userId = Long.parseLong(jwt.getSubject());
         } catch (NumberFormatException error) {
             throw new OrderException(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", "인증 정보를 확인하세요.");
         }
-        return history.list(userId, accountId, limit);
+        return history.list(userId, accountId, limit, page, orderSide);
     }
 
 

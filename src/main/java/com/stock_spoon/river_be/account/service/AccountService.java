@@ -22,6 +22,8 @@ import com.stock_spoon.river_be.account.exception.AccountException;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import com.stock_spoon.river_be.user.repository.UserRepository;
 import com.stock_spoon.river_be.order.OrderService;
+import com.stock_spoon.river_be.order.Order;
+import com.stock_spoon.river_be.order.OrderRepository;
 
 @Service
 public class AccountService {
@@ -32,17 +34,19 @@ public class AccountService {
     private final AccountRepository accountRepository;
     private final UserRepository userRepository;
     private final OrderService orderService;
+    private final OrderRepository orders;
     private final HoldingRepository holdings;
     private final KiwoomMarketClient market;
     private final TransactionTemplate read;
 
     public AccountService(AccountRepository accountRepository, UserRepository userRepository,
-            OrderService orderService, HoldingRepository holdings,
+            OrderService orderService, OrderRepository orders, HoldingRepository holdings,
             KiwoomMarketClient market,
             PlatformTransactionManager transactions) {
         this.accountRepository = accountRepository;
         this.userRepository = userRepository;
         this.orderService = orderService;
+        this.orders = orders;
         this.holdings = holdings;
         this.market = market;
         this.read = new TransactionTemplate(transactions);
@@ -130,7 +134,7 @@ public class AccountService {
         var values = evaluate(snapshot);
         log.info("event=account_valuation_completed accountCount={} holdingCount={}", snapshot.accounts().size(), snapshot.holdings().size());
         return AccountDetailResponse.from(snapshot.accounts().getFirst(), snapshot.availableCash(),
-                values.getOrDefault(accountId, 0L));
+                values.getOrDefault(accountId, 0L), snapshot.executedTradeCount());
     }
 
     private Snapshot snapshot(List<Account> accounts, boolean includeAvailableCash) {
@@ -138,7 +142,9 @@ public class AccountService {
                 accounts.stream().map(Account::getId).toList()).stream()
                 .map(h -> new Owned(h.getAccountId(), h.getStockCode(), h.getQuantity())).toList();
         long available = includeAvailableCash ? orderService.availableCash(accounts.getFirst().getId()) : 0;
-        return new Snapshot(List.copyOf(accounts), owned, available);
+        long executedCount = includeAvailableCash
+                ? orders.countByAccountIdAndStatus(accounts.getFirst().getId(), Order.Status.EXECUTED) : 0;
+        return new Snapshot(List.copyOf(accounts), owned, available, executedCount);
     }
 
     private Map<Long, Long> evaluate(Snapshot snapshot) {
@@ -163,7 +169,7 @@ public class AccountService {
     }
 
     private record Owned(long accountId, String code, long quantity) {}
-    private record Snapshot(List<Account> accounts, List<Owned> holdings, long availableCash) {}
+    private record Snapshot(List<Account> accounts, List<Owned> holdings, long availableCash, long executedTradeCount) {}
     private String nextDefaultName(long userId) {
         int number = 1;
         while (accountRepository.existsByUserIdAndNameIgnoreCaseAndActiveTrue(

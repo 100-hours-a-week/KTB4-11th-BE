@@ -1,6 +1,7 @@
 package com.stock_spoon.river_be.order;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -29,6 +30,7 @@ public record OrderHistoryResponse(@JsonProperty("account_id") long accountId, L
                     executionSummary, canCancel);
         }
     }
+    @JsonInclude(JsonInclude.Include.ALWAYS)
     public record Reason(String summary) {}
     public record ExecutionItem(
             @JsonProperty("execution_id") long executionId,

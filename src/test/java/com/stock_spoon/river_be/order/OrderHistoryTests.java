@@ -53,7 +53,7 @@ class OrderHistoryTests {
 
     private Order pending(Account owner, Order.Side side, String created) {
         return orders.save(Order.pendingLimit(owner, "005930", side, 2, 70000,
-                Order.Source.AI, "실제 근거 원문", Instant.parse(created)));
+                Order.Source.AI, side == Order.Side.BUY ? "매수 실제 근거 원문" : "매도 실제 근거 원문", Instant.parse(created)));
     }
 
     private Order executed(String created, String at, Order.Side side) {
@@ -92,6 +92,8 @@ class OrderHistoryTests {
     @Test void matchesDocumentShapeAndPreservesSellPrecisionAndBuyNulls() throws Exception {
         executed("2026-09-01T00:00:00Z", "2026-09-01T01:00:00Z", Order.Side.BUY);
         executed("2026-09-02T00:00:00Z", "2026-09-02T01:00:00Z", Order.Side.SELL);
+        em.flush();
+        em.clear();
         String body = list("").andExpect(status().isOk())
                 .andExpect(jsonPath("$.orders[0].stock_name").value("삼성전자"))
                 .andExpect(jsonPath("$.orders[0].created_at").value("2026-09-02T09:00:00+09:00"))
@@ -99,8 +101,8 @@ class OrderHistoryTests {
                 .andExpect(jsonPath("$.orders[0].reserved_cash").value(0))
                 .andExpect(jsonPath("$.orders[0].canceled_at").isEmpty())
                 .andExpect(jsonPath("$.orders[0].can_cancel").value(false))
-                .andExpect(jsonPath("$.orders[0].reason.summary").value("[더미] AI 판단에 따라 매도했어요."))
-                .andExpect(jsonPath("$.orders[1].reason.summary").value("[더미] AI 판단에 따라 매수했어요."))
+                .andExpect(jsonPath("$.orders[0].reason.summary").value("매도 실제 근거 원문"))
+                .andExpect(jsonPath("$.orders[1].reason.summary").value("매수 실제 근거 원문"))
                 .andExpect(jsonPath("$.orders[0].executions.length()").value(1))
                 .andExpect(jsonPath("$.orders[0].execution_summary.total_amount").value(139000))
                 .andExpect(jsonPath("$.orders[0].execution_summary.realized_pnl").value(1000.12))
@@ -121,6 +123,26 @@ class OrderHistoryTests {
                 "execution_price", "execution_quantity", "realized_pnl", "realized_return_percent", "created_at");
     }
 
+    @Test void returnsExplicitNullSummaryWhenReportIsMissingForBuyAndSell() throws Exception {
+        for (var side : Order.Side.values()) {
+            var order = orders.save(Order.pendingLimit(account, "005930", side, 2, 70000,
+                    Order.Source.AI, null, Instant.parse("2026-09-01T00:00:00Z")));
+            executions.save(new Execution(order, 69500, 2,
+                    side == Order.Side.SELL ? BigDecimal.ZERO : null,
+                    side == Order.Side.SELL ? BigDecimal.ZERO : null, Instant.parse("2026-09-01T01:00:00Z")));
+            order.execute();
+        }
+        em.flush();
+        em.clear();
+        String body = list("").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders.length()").value(2))
+                .andReturn().getResponse().getContentAsString();
+        var tree = JsonMapper.builder().build().readTree(body);
+        for (var item : tree.path("orders")) {
+            assertThat(item.path("reason").propertyNames()).containsExactly("summary");
+            assertThat(item.path("reason").path("summary").isNull()).isTrue();
+        }
+    }
     @Test void rejectsBadLimitAndReturnsEmptyWithoutExternalCalls() throws Exception {
         list("").andExpect(status().isOk()).andExpect(jsonPath("$.orders").isEmpty());
         for (String value : List.of("0", "-1", "abc", "1.5", "2147483648", "")) {

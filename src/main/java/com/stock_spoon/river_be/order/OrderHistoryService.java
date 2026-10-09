@@ -126,8 +126,8 @@ public class OrderHistoryService {
         }
         var average = BigDecimal.valueOf(amount).divide(BigDecimal.valueOf(quantity), 4, RoundingMode.HALF_UP);
         var summary = new OrderHistoryResponse.ExecutionSummary(quantity, average, amount, date(last), realized, rate);
-        String reason = order.getSide() == Order.Side.BUY
-                ? "[더미] AI 판단에 따라 매수했어요." : "[더미] AI 판단에 따라 매도했어요.";
+        var report = order.getReport();
+        String reason = report == null ? null : report.getReason();
         return new OrderHistoryResponse.Item(order.getId(), order.getStockCode(), null, order.getSource().name(),
                 order.getSide().name().toLowerCase(Locale.ROOT), order.getType().name().toLowerCase(Locale.ROOT),
                 "executed", order.getQuantity(), order.getLimitPrice(), order.getReservedCash(),

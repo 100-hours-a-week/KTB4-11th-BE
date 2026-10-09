@@ -35,6 +35,7 @@ public record OrderHistoryResponse(@JsonProperty("account_id") long accountId, L
                     executionSummary, canCancel);
         }
     }
+    @JsonInclude(JsonInclude.Include.ALWAYS)
     public record Reason(String summary) {}
     public record ExecutionItem(
             @JsonProperty("execution_id") long executionId,

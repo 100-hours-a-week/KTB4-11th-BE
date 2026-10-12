@@ -3,7 +3,7 @@ package com.stock_spoon.river_be.account.service;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
-import com.stock_spoon.river_be.order.HoldingRepository;
+import com.stock_spoon.river_be.holding.repository.HoldingRepository;
 import com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -21,9 +21,9 @@ import com.stock_spoon.river_be.account.entity.Account;
 import com.stock_spoon.river_be.account.exception.AccountException;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import com.stock_spoon.river_be.user.repository.UserRepository;
-import com.stock_spoon.river_be.order.OrderService;
-import com.stock_spoon.river_be.order.Order;
-import com.stock_spoon.river_be.order.OrderRepository;
+import com.stock_spoon.river_be.order.service.OrderService;
+import com.stock_spoon.river_be.order.entity.Order;
+import com.stock_spoon.river_be.order.repository.OrderRepository;
 
 @Service
 public class AccountService {

@@ -1,5 +1,16 @@
 package com.stock_spoon.river_be.market;
 
+import com.stock_spoon.river_be.execution.entity.Execution;
+import com.stock_spoon.river_be.execution.repository.ExecutionRepository;
+import com.stock_spoon.river_be.execution.service.OrderExecutionService;
+import com.stock_spoon.river_be.holding.entity.Holding;
+import com.stock_spoon.river_be.holding.repository.HoldingRepository;
+import com.stock_spoon.river_be.order.entity.Order;
+import com.stock_spoon.river_be.order.exception.OrderException;
+import com.stock_spoon.river_be.order.repository.OrderRepository;
+import com.stock_spoon.river_be.order.service.OrderService;
+import com.stock_spoon.river_be.order.service.OrderSubscriptionService;
+
 import com.stock_spoon.river_be.RiverBeApplication;
 import com.stock_spoon.river_be.market.kiwoom.*;
 import java.io.*;
@@ -56,29 +67,29 @@ public class MultiProcessRedisNode {
                         case "owner" -> reply(Boolean.toString(heartbeat.ownsLease()));
                         case "create" -> {
                             try {
-                                context.getBean(com.stock_spoon.river_be.order.OrderSubscriptionService.class)
+                                context.getBean(com.stock_spoon.river_be.order.service.OrderSubscriptionService.class)
                                         .create("TST009", () -> { throw new AssertionError("장애 중 주문 저장 실행됨"); });
                                 reply("unexpected-success");
-                            } catch (com.stock_spoon.river_be.order.OrderException failure) {
+                            } catch (com.stock_spoon.river_be.order.exception.OrderException failure) {
                                 reply(Integer.toString(failure.status().value()));
                             }
                         }
                         case "state" -> {
-                            var orders = context.getBean(com.stock_spoon.river_be.order.OrderRepository.class);
-                            var executions = context.getBean(com.stock_spoon.river_be.order.ExecutionRepository.class);
+                            var orders = context.getBean(com.stock_spoon.river_be.order.repository.OrderRepository.class);
+                            var executions = context.getBean(com.stock_spoon.river_be.execution.repository.ExecutionRepository.class);
                             var accounts = context.getBean(com.stock_spoon.river_be.account.repository.AccountRepository.class);
                             long pending = orders.findAll().stream().filter(order -> order.getStatus()
-                                    == com.stock_spoon.river_be.order.Order.Status.PENDING).count();
+                                    == com.stock_spoon.river_be.order.entity.Order.Status.PENDING).count();
                             reply(pending + ":" + executions.count() + ":" + accounts.findAll().getFirst().getCashBalance());
                         }
                         case "cancel-extra" -> {
                             var account = context.getBean(com.stock_spoon.river_be.account.repository.AccountRepository.class)
                                     .findAll().getFirst();
-                            var orders = context.getBean(com.stock_spoon.river_be.order.OrderRepository.class);
-                            var extra = orders.save(com.stock_spoon.river_be.order.Order.pendingLimit(account, "TST009",
-                                    com.stock_spoon.river_be.order.Order.Side.BUY, 1, 120000,
-                                    com.stock_spoon.river_be.order.Order.Source.AI, null, Instant.now().minusSeconds(1)));
-                            var cancelled = context.getBean(com.stock_spoon.river_be.order.OrderService.class)
+                            var orders = context.getBean(com.stock_spoon.river_be.order.repository.OrderRepository.class);
+                            var extra = orders.save(com.stock_spoon.river_be.order.entity.Order.pendingLimit(account, "TST009",
+                                    com.stock_spoon.river_be.order.entity.Order.Side.BUY, 1, 120000,
+                                    com.stock_spoon.river_be.order.entity.Order.Source.AI, null, Instant.now().minusSeconds(1)));
+                            var cancelled = context.getBean(com.stock_spoon.river_be.order.service.OrderService.class)
                                     .cancel(account.getId(), extra.getId());
                             reply(cancelled.getStatus().name());
                         }
@@ -103,12 +114,12 @@ public class MultiProcessRedisNode {
                                     .save(new com.stock_spoon.river_be.user.entity.User("load-test"));
                             var account = context.getBean(com.stock_spoon.river_be.account.repository.AccountRepository.class)
                                     .save(new com.stock_spoon.river_be.account.entity.Account(user, "load-test", 20000000));
-                            var orders = new ArrayList<com.stock_spoon.river_be.order.Order>();
-                            for (int i = 0; i < 101; i++) orders.add(com.stock_spoon.river_be.order.Order.pendingLimit(
-                                    account, "TST009", com.stock_spoon.river_be.order.Order.Side.BUY, 1,
-                                    i == 100 ? 1 : 120000, com.stock_spoon.river_be.order.Order.Source.AI, null,
+                            var orders = new ArrayList<com.stock_spoon.river_be.order.entity.Order>();
+                            for (int i = 0; i < 101; i++) orders.add(com.stock_spoon.river_be.order.entity.Order.pendingLimit(
+                                    account, "TST009", com.stock_spoon.river_be.order.entity.Order.Side.BUY, 1,
+                                    i == 100 ? 1 : 120000, com.stock_spoon.river_be.order.entity.Order.Source.AI, null,
                                     Instant.now().minusSeconds(1)));
-                            context.getBean(com.stock_spoon.river_be.order.OrderRepository.class).saveAll(orders);
+                            context.getBean(com.stock_spoon.river_be.order.repository.OrderRepository.class).saveAll(orders);
                             reply("ok");
                         }
                         case "emit-load-high", "emit-load-low" -> {
@@ -127,13 +138,13 @@ public class MultiProcessRedisNode {
                             reply(Integer.toString(fixture.events.size()));
                         }
                         case "load-assets" -> {
-                            var executions = context.getBean(com.stock_spoon.river_be.order.ExecutionRepository.class);
+                            var executions = context.getBean(com.stock_spoon.river_be.execution.repository.ExecutionRepository.class);
                             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
                             while (executions.count() < 100 && System.nanoTime() < deadline) Thread.sleep(50);
                             var all = executions.findAll();
-                            long uniqueOrders = all.stream().map(com.stock_spoon.river_be.order.Execution::getOrderId).distinct().count();
-                            long quantity = context.getBean(com.stock_spoon.river_be.order.HoldingRepository.class)
-                                    .findAll().stream().mapToLong(com.stock_spoon.river_be.order.Holding::getQuantity).sum();
+                            long uniqueOrders = all.stream().map(com.stock_spoon.river_be.execution.entity.Execution::getOrderId).distinct().count();
+                            long quantity = context.getBean(com.stock_spoon.river_be.holding.repository.HoldingRepository.class)
+                                    .findAll().stream().mapToLong(com.stock_spoon.river_be.holding.entity.Holding::getQuantity).sum();
                             long cash = context.getBean(com.stock_spoon.river_be.account.repository.AccountRepository.class)
                                     .findAll().getFirst().getCashBalance();
                             reply(all.size() + ":" + uniqueOrders + ":" + quantity + ":" + cash);
@@ -143,14 +154,14 @@ public class MultiProcessRedisNode {
                                     .save(new com.stock_spoon.river_be.user.entity.User("process-test"));
                             var account = context.getBean(com.stock_spoon.river_be.account.repository.AccountRepository.class)
                                     .save(new com.stock_spoon.river_be.account.entity.Account(user, "process-test", 1000000));
-                            context.getBean(com.stock_spoon.river_be.order.OrderRepository.class).save(
-                                    com.stock_spoon.river_be.order.Order.pendingLimit(account, "TST009",
-                                            com.stock_spoon.river_be.order.Order.Side.BUY, 1, 120000,
-                                            com.stock_spoon.river_be.order.Order.Source.AI, null, Instant.now().minusSeconds(1)));
+                            context.getBean(com.stock_spoon.river_be.order.repository.OrderRepository.class).save(
+                                    com.stock_spoon.river_be.order.entity.Order.pendingLimit(account, "TST009",
+                                            com.stock_spoon.river_be.order.entity.Order.Side.BUY, 1, 120000,
+                                            com.stock_spoon.river_be.order.entity.Order.Source.AI, null, Instant.now().minusSeconds(1)));
                             reply("ok");
                         }
                         case "assets" -> {
-                            var executions = context.getBean(com.stock_spoon.river_be.order.ExecutionRepository.class);
+                            var executions = context.getBean(com.stock_spoon.river_be.execution.repository.ExecutionRepository.class);
                             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
                             while (executions.count() == 0 && System.nanoTime() < deadline) Thread.sleep(50);
                             var accounts = context.getBean(com.stock_spoon.river_be.account.repository.AccountRepository.class);
@@ -188,8 +199,8 @@ public class MultiProcessRedisNode {
                     .atZone(ZoneId.of("Asia/Seoul")).toInstant(), ZoneOffset.UTC);
             return new org.springframework.beans.factory.config.BeanPostProcessor() {
                 public Object postProcessBeforeInitialization(Object bean, String name) {
-                    if (bean instanceof com.stock_spoon.river_be.order.OrderService
-                            || bean instanceof com.stock_spoon.river_be.order.OrderExecutionService) {
+                    if (bean instanceof com.stock_spoon.river_be.order.service.OrderService
+                            || bean instanceof com.stock_spoon.river_be.execution.service.OrderExecutionService) {
                         org.springframework.test.util.ReflectionTestUtils.setField(bean, "clock", fixed);
                     }
                     return bean;

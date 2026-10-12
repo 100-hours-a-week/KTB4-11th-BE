@@ -1,5 +1,7 @@
 package com.stock_spoon.river_be.market;
 
+import com.stock_spoon.river_be.order.repository.OrderRepository;
+
 import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -39,7 +41,7 @@ class RedisSharedMarketLiveTests {
         var stream = new RedisMarketStream(store, demands, mock(KiwoomStockStream.class),
                 mock(com.stock_spoon.river_be.market.kiwoom.RedisCollectorHeartbeat.class), container,
                 event -> { if (event instanceof RedisQuoteStore.QuoteEvent quote) events.add(quote.price()); },
-                mock(com.stock_spoon.river_be.order.OrderRepository.class));
+                mock(com.stock_spoon.river_be.order.repository.OrderRepository.class));
         try {
             assertThat(redis.hasKey("coord:kiwoom:collector")).isFalse();
             redis.opsForValue().set("coord:kiwoom:collector", owner, java.time.Duration.ofSeconds(15));

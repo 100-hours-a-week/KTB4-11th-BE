@@ -180,7 +180,7 @@ Redis 데이터 형식, 만료·최신성 기준, 요청 전달 방식, 담당 �
 - `river_be/src/main/java/com/stock_spoon/river_be/market/kiwoom/KiwoomTokenProvider.java`
 - `river_be/src/main/java/com/stock_spoon/river_be/market/kiwoom/KiwoomMarketClient.java`
 - `river_be/src/main/java/com/stock_spoon/river_be/market/KospiIndexService.java`
-- `river_be/src/main/java/com/stock_spoon/river_be/order/OrderSubscriptionService.java`
-- `river_be/src/main/java/com/stock_spoon/river_be/order/OrderService.java`
+- `river_be/src/main/java/com/stock_spoon/river_be/order/service/OrderSubscriptionService.java`
+- `river_be/src/main/java/com/stock_spoon/river_be/order/service/OrderService.java`
 - `river_be/src/main/java/com/stock_spoon/river_be/account/service/AccountService.java`
 - `river_be/src/main/java/com/stock_spoon/river_be/account/dto/AccountDetailResponse.java`

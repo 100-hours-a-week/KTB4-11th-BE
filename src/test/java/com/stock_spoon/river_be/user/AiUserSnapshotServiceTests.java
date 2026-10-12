@@ -7,10 +7,10 @@ import static org.mockito.Mockito.never;
 
 import com.stock_spoon.river_be.account.entity.Account;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
-import com.stock_spoon.river_be.order.Holding;
-import com.stock_spoon.river_be.order.HoldingRepository;
-import com.stock_spoon.river_be.order.Order;
-import com.stock_spoon.river_be.order.OrderRepository;
+import com.stock_spoon.river_be.holding.entity.Holding;
+import com.stock_spoon.river_be.holding.repository.HoldingRepository;
+import com.stock_spoon.river_be.order.entity.Order;
+import com.stock_spoon.river_be.order.repository.OrderRepository;
 import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream;
 import com.stock_spoon.river_be.user.entity.User;
 import com.stock_spoon.river_be.user.repository.UserRepository;

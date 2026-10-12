@@ -43,7 +43,7 @@ AI 서버는 BE와 동일한 JWT 서명 시크릿을 사용하고 사용자 ID�
 
 **결정 근거:** v1은 AI가 사용자 계좌를 대신 운용하고 일반 사용자는 직접 주문하지 않는다는 합의에 따라 `actor=AI`를 요구한다. 계좌 ID만 알면 타인 계좌에 주문할 수 있어서는 안 되므로, JWT `sub`와 DB에 저장된 계좌 소유자를 비교한다. 요청 본문의 `order_source`나 임의의 `user_id`로 출처와 권한을 결정하지 않는다.
 
-**코드·검증 근거:** `config/SecurityConfig.java`의 쿠키 토큰 추출·CSRF 설정, `config/JwtConfig.java`의 access decoder, `order/OrderController.java`의 `actor`·`sub` 검사, `order/OrderService.java`의 `assertOrderableAccount`와 예약 시 소유자 재검사, `order/OrderControllerTests.java`의 일반 사용자 토큰·타인 계좌 거절 테스트를 참고한다.
+**코드·검증 근거:** `config/SecurityConfig.java`의 쿠키 토큰 추출·CSRF 설정, `config/JwtConfig.java`의 access decoder, `order/controller/OrderController.java`의 `actor`·`sub` 검사, `order/service/OrderService.java`의 `assertOrderableAccount`와 예약 시 소유자 재검사, `order/service/OrderControllerTests.java`의 일반 사용자 토큰·타인 계좌 거절 테스트를 참고한다.
 
 **남는 전제:** AI 서버는 BE와 같은 JWT 서명 비밀키를 보유하므로 임의 사용자 ID를 `sub`로 한 토큰을 만들 수 있다. 현재 소유자 검사는 **토큰에 적힌 사용자와 계좌가 일치하는지** 확인하며, AI가 어떤 사용자 ID를 선택했는지 별도로 승인하지 않는다. 공유 비밀키는 AI 서버 내부에서만 보관해야 한다.
 
@@ -57,7 +57,7 @@ AI 서버는 BE와 동일한 JWT 서명 시크릿을 사용하고 사용자 ID�
 
 **결정 근거:** 사용자와 합의한 v1 범위는 지정가 주문 접수까지이며 시장가는 체결 기능과 함께 구현한다. AI 판단 근거의 최종 형식은 미정이므로 `decision_id`·`summary` 두 필드만 임시로 받는다. 향후 사용자 주문은 근거 생략·`null`을 허용할 계획이지만 지금은 AI 주문만 열려 있어 필수로 검사한다. 수량은 주 단위 정수로 다루며, 잘못된 값으로 현금·보유수량 예약이 계산되지 않도록 한다.
 
-**코드·검증 근거:** `order/OrderCreateRequest.java`의 JSON 필드 매핑·Bean Validation, `order/OrderController.java`의 지원 주문 방식·매수/매도·지정가·근거 검사, `order/OrderService.java`의 내부 입력 재검사와 주문금액 범위 검사, `order/OrderControllerTests.java`의 시장가·근거 누락 거절 테스트를 참고한다.
+**코드·검증 근거:** `order/dto/OrderCreateRequest.java`의 JSON 필드 매핑·Bean Validation, `order/controller/OrderController.java`의 지원 주문 방식·매수/매도·지정가·근거 검사, `order/service/OrderService.java`의 내부 입력 재검사와 주문금액 범위 검사, `order/service/OrderControllerTests.java`의 시장가·근거 누락 거절 테스트를 참고한다.
 
 **남는 전제:** `reason`의 두 필드는 임시 계약이다. AI 팀과 최종 근거 형식을 정하면 요청 DTO, 저장 방식, 응답 계약을 함께 조정해야 한다. 현재 `decision_id`는 중복 요청 차단 키가 아니므로 같은 내용을 두 번 보내면 별도 주문 두 건이 만들어진다.
 
@@ -71,7 +71,7 @@ AI 서버는 BE와 동일한 JWT 서명 시크릿을 사용하고 사용자 ID�
 
 **결정 근거:** 사용자는 v1에서 날짜 제한 없이 한국 시간 09:00~15:30에 주문 생성을 허용하고, 이후 허용 시장코드를 `0/8`로 좁혀 ETN을 제외했으며, 개별 종목 거래정지는 검사하지 않기로 정했다. 기존 `0s` 방식은 장중 재연결 직후 시작 이벤트를 받지 못하면 실제 장중에도 접수를 거절할 수 있어 시간 규칙으로 교체했다. 종목의 시장구분은 키움 `ka10100`, 호가가격단위는 거래소 규칙을 근거로 한다.
 
-**코드·자료·검증 근거:** `order/OrderMarketValidator.java`의 한국 시간 판정·호가단위 검사와 `market/kiwoom/KiwoomMarketClient.java`의 `stockInfo`를 참고한다. `order/OrderMarketValidatorTests.java`는 고정된 테스트 시계로 09:00·15:30 경계와 주말을 확인한다. 실제 서버는 현재 시각을 읽는다. 외부 자료는 [키움 REST API 가이드](https://openapi.kiwoom.com/guide/apiguide)의 종목정보조회(`ka10100`)와 [한국거래소 호가가격단위](https://regulation.krx.co.kr/contents/RGL/03/03010100/RGL03010100T3.jsp)다. 시간 범위는 외부 API가 아닌 서비스 정책이다.
+**코드·자료·검증 근거:** `order/validator/OrderMarketValidator.java`의 한국 시간 판정·호가단위 검사와 `market/kiwoom/KiwoomMarketClient.java`의 `stockInfo`를 참고한다. `order/validator/OrderMarketValidatorTests.java`는 고정된 테스트 시계로 09:00·15:30 경계와 주말을 확인한다. 실제 서버는 현재 시각을 읽는다. 외부 자료는 [키움 REST API 가이드](https://openapi.kiwoom.com/guide/apiguide)의 종목정보조회(`ka10100`)와 [한국거래소 호가가격단위](https://regulation.krx.co.kr/contents/RGL/03/03010100/RGL03010100T3.jsp)다. 시간 범위는 외부 API가 아닌 서비스 정책이다.
 
 **남는 전제:** 시간 규칙은 실제 장 개장을 검증하지 않는다. 주말·휴일, 임시 개장 지연·조기 마감에도 시각만 맞으면 이후 종목정보·호가단위 검증으로 진행한다. 허용 시장코드만으로 실제 개별 종목의 거래 가능 여부를 보장하지도 않는다. 주문 가능 시간 검사는 DB 예약 트랜잭션 전에 한 번 수행하므로 경계 시각 직전에 통과한 주문이 15:30 이후 저장될 가능성도 있다.
 
@@ -85,7 +85,7 @@ AI 서버는 BE와 동일한 JWT 서명 시크릿을 사용하고 사용자 ID�
 
 **결정 근거:** 주문 접수와 모의체결을 분리하므로 접수 시 현금·보유 수량을 실제로 차감하지 않는다. 대신 대기 주문의 예약금을 현금 계산에서, 대기 매도 수량을 보유 수량 계산에서 빼서 중복 사용을 막는다. 계좌 행 잠금은 같은 계좌를 대상으로 이 잠금 규칙에 참여하는 트랜잭션들이 예약 계산을 순서대로 수행하도록 하기 위한 선택이다.
 
-**코드·검증 근거:** `account/repository/AccountRepository.java`의 `findLockedById`, `order/OrderService.java`의 `reserveLimit`·`availableCash`·`sellableQuantity`, `order/OrderRepository.java`의 pending 예약 합계 조회, `order/OrderServiceTests.java`의 매수·매도 예약과 부족액 거절 테스트를 참고한다.
+**코드·검증 근거:** `account/repository/AccountRepository.java`의 `findLockedById`, `order/service/OrderService.java`의 `reserveLimit`·`availableCash`·`sellableQuantity`, `order/repository/OrderRepository.java`의 pending 예약 합계 조회, `order/service/OrderServiceTests.java`의 매수·매도 예약과 부족액 거절 테스트를 참고한다.
 
 **남는 전제:** 같은 계좌의 자산을 바꾸는 다른 기능도 동일한 잠금 순서를 따라야 동시성 제어가 성립한다. 주문 생성 시간·종목 검증은 이 DB 트랜잭션 전에 수행되므로 시간 경계와 DB 저장을 하나의 원자적 판단으로 묶지는 못한다.
 
@@ -99,7 +99,7 @@ AI 서버는 BE와 동일한 JWT 서명 시크릿을 사용하고 사용자 ID�
 
 **결정 근거:** BE 자체 모의체결은 후속 기능이다. 지금의 `PENDING`은 접수·대기 중이라는 뜻이며 체결 완료를 의미하지 않는다. AI 주문의 `order_source`는 요청 본문을 믿지 않고 BE가 정한다. `reason`의 두 필드만 저장하는 방식은 AI 판단 근거 형식 확정 전의 임시 계약이다.
 
-**코드·검증 근거:** `order/OrderService.java`의 `orders.save`, `order/Order.java`의 `pendingLimit`과 필드 매핑, `order/OrderControllerTests.java`의 AI 출처·근거·동일 요청 2건 저장 테스트, `order/OrderServiceTests.java`의 잔액·보유 수량 불변 테스트를 참고한다.
+**코드·검증 근거:** `order/service/OrderService.java`의 `orders.save`, `order/entity/Order.java`의 `pendingLimit`과 필드 매핑, `order/service/OrderControllerTests.java`의 AI 출처·근거·동일 요청 2건 저장 테스트, `order/service/OrderServiceTests.java`의 잔액·보유 수량 불변 테스트를 참고한다.
 
 **남는 전제:** `EXECUTED` 상태는 모델에 정의돼 있지만 현재 체결 엔진은 없다. 체결 때 현금·보유 주식·예약금을 한 트랜잭션에서 어떻게 갱신할지는 후속 구현 범위다.
 
@@ -113,7 +113,7 @@ AI 서버는 BE와 동일한 JWT 서명 시크릿을 사용하고 사용자 ID�
 
 **결정 근거:** 신규 주문을 만들었으므로 `201`을 사용하고, 접수와 체결을 분리하므로 상태를 `pending`으로 돌려준다. 빈 체결 배열은 아직 체결 내역이 없다는 현재 상태를 명시한다.
 
-**코드·검증 근거:** `order/OrderController.java`의 `@ResponseStatus(CREATED)`와 응답 반환, `order/OrderCreateResponse.java`의 필드 매핑, `order/OrderExceptionHandler.java`의 주문 오류 응답, `order/OrderControllerTests.java`의 `201`·`pending`·예약금 확인을 참고한다. 응답 예시는 [주문 생성 API](stockspoon_order_create.md)에 있다.
+**코드·검증 근거:** `order/controller/OrderController.java`의 `@ResponseStatus(CREATED)`와 응답 반환, `order/dto/OrderCreateResponse.java`의 필드 매핑, `order/exception/OrderExceptionHandler.java`의 주문 오류 응답, `order/service/OrderControllerTests.java`의 `201`·`pending`·예약금 확인을 참고한다. 응답 예시는 [주문 생성 API](stockspoon_order_create.md)에 있다.
 
 **남는 전제:** 생성 응답의 `executions`는 현재 항상 빈 배열이다. 체결 엔진과 주문 내역 조회 API가 아직 없으므로 AI 근거와 체결 결과를 조회·표시하는 계약은 후속 작업에서 확정해야 한다.
 
@@ -121,7 +121,7 @@ AI 서버는 BE와 동일한 JWT 서명 시크릿을 사용하고 사용자 ID�
 
 주문 생성 API가 반환한 `pending` 주문은 체결 엔진이 없는 현재 상태에서 자동으로 체결되지 않는다. `OrderService.cancel(accountId, orderId)`라는 **BE 내부 취소 로직은 구현돼 있다.** 이 로직은 계좌 행을 잠그고 해당 계좌의 주문을 조회해 `PENDING`일 때만 `CANCELLED`로 바꾼다. 취소 시 `reserved_cash`를 0으로 만들고 `cancelled_at`을 기록한다. 매수 주문은 주문 가능 현금 계산에서 예약금이 빠지고, 매도 주문은 pending 매도 수량 합계에서 제외돼 예약 수량이 풀린다. 현금 잔액이나 보유 수량을 되돌리는 동작은 필요하지 않다. 접수 시 실제 잔액·보유 수량을 변경하지 않았기 때문이다.
 
-**현재 `OrderService.cancel`을 호출하는 취소 HTTP API는 없다.** 따라서 FE나 AI 서버가 HTTP 요청으로 주문을 취소할 수 없다. 주문 내역 조회 HTTP API와 모의체결 엔진도 아직 없다. 취소 API를 만들 때는 지금 내부 메서드에 없는 요청자 인증·계좌 소유권 검사를 연결해야 한다. 현재의 내부 취소 규칙과 예약 해제는 `order/OrderService.java`, `order/Order.java`, `order/OrderServiceTests.java`에서 확인할 수 있다.
+**현재 `OrderService.cancel`을 호출하는 취소 HTTP API는 없다.** 따라서 FE나 AI 서버가 HTTP 요청으로 주문을 취소할 수 없다. 주문 내역 조회 HTTP API와 모의체결 엔진도 아직 없다. 취소 API를 만들 때는 지금 내부 메서드에 없는 요청자 인증·계좌 소유권 검사를 연결해야 한다. 현재의 내부 취소 규칙과 예약 해제는 `order/service/OrderService.java`, `order/entity/Order.java`, `order/service/OrderServiceTests.java`에서 확인할 수 있다.
 
 ## 주문 생성 시간과 종목·가격을 확인하는 과정
 

@@ -140,4 +140,4 @@ DB 조회 실패는 가격 누락 오류로 변환하지 않는다.
 - `user/dto/AiUserSnapshotResponse.java`: 최종 응답 필드
 - `user/exception/AiSnapshotUnavailableException.java`, `UserExceptionHandler.java`: 503 응답
 - `config/SecurityConfig.java`: AI 서버 쿠키 인증·인가
-- `order/OrderSubscriptionService.java`: 대기 주문 기반 구독 관리
+- `order/service/OrderSubscriptionService.java`: 대기 주문 기반 구독 관리

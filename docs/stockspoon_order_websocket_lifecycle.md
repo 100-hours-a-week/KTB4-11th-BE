@@ -71,7 +71,7 @@
 - `OrderController.create()`는 시장 검증 뒤 `OrderSubscriptionService.create()`를 호출하고, 주문 예약은 그 콜백 안에서 수행한다.
 - `OrderSubscriptionService.create()`는 종목을 임시 수요로 추가하고 최대 10초 동안 `whenSubscribed()`를 기다린다. 성공 후 주문 저장을 실행하고, 성공·실패 모두 `finally`에서 임시 수요를 해제한다.
 - 구독 실패 시 주문 저장이 호출되지 않는다. 응답 오류는 `OrderException`의 503 경로를 사용한다.
-- 관련 코드: `order/OrderController.java`, `order/OrderSubscriptionService.java`, `order/OrderService.java`.
+- 관련 코드: `order/controller/OrderController.java`, `order/service/OrderSubscriptionService.java`, `order/service/OrderService.java`.
 
 ### 참고 자료
 
@@ -155,7 +155,7 @@
 - 다음 Gradle 명령으로 주문 예약·취소와 주문 구독 관련 테스트를 실행했다.
 
 ```powershell
-.\gradlew.bat test --tests com.stock_spoon.river_be.order.OrderServiceTests --tests com.stock_spoon.river_be.order.OrderSubscriptionServiceTests
+.\gradlew.bat test --tests com.stock_spoon.river_be.order.service.OrderServiceTests --tests com.stock_spoon.river_be.order.service.OrderSubscriptionServiceTests
 ```
 
 - 결과: `BUILD SUCCESSFUL`. Java 본 코드와 테스트 코드 컴파일이 완료되고 지정한 테스트가 통과했다.
@@ -173,6 +173,6 @@
 - API 계약·접수 검증: `docs/stockspoon_order_create.md`
 - Kiwoom WebSocket 프로토콜·설정: `docs/stockspoon_kiwoom_websocket.md`
 - 기존 주문 정책 흐름: `docs/stockspoon_order_create_flow.md`
-- 구독 조정: `src/main/java/com/stock_spoon/river_be/order/OrderSubscriptionService.java`
-- 만료 취소·예약 해제: `src/main/java/com/stock_spoon/river_be/order/OrderService.java`, `Order.java`, `OrderRepository.java`
+- 구독 조정: `src/main/java/com/stock_spoon/river_be/order/service/OrderSubscriptionService.java`
+- 만료 취소·예약 해제: `src/main/java/com/stock_spoon/river_be/order/service/OrderService.java`, `Order.java`, `OrderRepository.java`
 - Kiwoom 연결·등록·해제: `src/main/java/com/stock_spoon/river_be/market/kiwoom/KiwoomStockStream.java`

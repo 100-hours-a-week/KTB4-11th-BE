@@ -1,5 +1,7 @@
 package com.stock_spoon.river_be.market.kiwoom;
 
+import com.stock_spoon.river_be.order.repository.OrderRepository;
+
 import com.stock_spoon.river_be.market.*;
 import java.nio.file.*;
 import java.time.*;
@@ -80,7 +82,7 @@ class KiwoomRedisLiveTests {
             ordinary = new RedisMarketStream(store, new RedisSubscriptionDemand(redis), disabledStream,
                     normalOwner, channels, event -> {
                         if (event instanceof RedisQuoteStore.QuoteEvent quote) received.add(quote);
-                    }, mock(com.stock_spoon.river_be.order.OrderRepository.class));
+                    }, mock(com.stock_spoon.river_be.order.repository.OrderRepository.class));
             ordinary.updateSymbols(Set.of("005930"));
             collector.updateSymbols(Set.of("005930"));
             collector.whenSubscribed("005930").get(25, TimeUnit.SECONDS);

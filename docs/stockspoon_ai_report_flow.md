@@ -59,10 +59,10 @@ OrderService와 Order.pendingLimit의 모든 호출부를 검색했다. 주문 �
 주문·체결·계좌·AI 사용자 스냅샷 테스트도 이전 두 필드 인자를 사용하고 있어 함께 수정했다.
 테스트의 호출 인자와 근거 저장 위치만 변경했으며, 계좌·스냅샷의 제품 동작을 확장하지 않았다.
 
-**코드 근거:** [OrderController](../src/main/java/com/stock_spoon/river_be/order/OrderController.java),
-[OrderService](../src/main/java/com/stock_spoon/river_be/order/OrderService.java),
-[OrderSubscriptionService](../src/main/java/com/stock_spoon/river_be/order/OrderSubscriptionService.java),
-[OrderExecutionService](../src/main/java/com/stock_spoon/river_be/order/OrderExecutionService.java).
+**코드 근거:** [OrderController](../src/main/java/com/stock_spoon/river_be/order/controller/OrderController.java),
+[OrderService](../src/main/java/com/stock_spoon/river_be/order/service/OrderService.java),
+[OrderSubscriptionService](../src/main/java/com/stock_spoon/river_be/order/service/OrderSubscriptionService.java),
+[OrderExecutionService](../src/main/java/com/stock_spoon/river_be/execution/service/OrderExecutionService.java).
 
 ## 3. 변경할 계약을 먼저 테스트로 표현했다
 
@@ -78,7 +78,7 @@ OrderService와 Order.pendingLimit의 모든 호출부를 검색했다. 주문 �
 실행 결과로 확인했다. 모든 보강 테스트를 각각 실패부터 실행한 것은 아니다.
 이후 입력 검증·DB 중복 제약 테스트를 보강해 최종 회귀 검증에 포함했다.
 
-**검증 근거:** [OrderControllerTests](../src/test/java/com/stock_spoon/river_be/order/OrderControllerTests.java).
+**검증 근거:** [OrderControllerTests](../src/test/java/com/stock_spoon/river_be/order/service/OrderControllerTests.java).
 
 ## 4. reason을 검증 가능한 긴 문자열로 변경했다
 
@@ -109,8 +109,8 @@ Java의 길이 검사는 UTF-16 코드 단위 기준이다. 이모지 등 일부
 기존 근거 없는 데이터·테스트를 표현하기 위해 null을 허용한다. 이 경우 리포트를 만들지 않는다.
 따라서 DB의 모든 과거 주문에 리포트가 반드시 존재한다고 보장하지 않는다.
 
-**코드 근거:** [OrderCreateRequest](../src/main/java/com/stock_spoon/river_be/order/OrderCreateRequest.java),
-[AiOrderReport](../src/main/java/com/stock_spoon/river_be/order/AiOrderReport.java), OrderService.
+**코드 근거:** [OrderCreateRequest](../src/main/java/com/stock_spoon/river_be/order/dto/OrderCreateRequest.java),
+[AiOrderReport](../src/main/java/com/stock_spoon/river_be/report/entity/AiOrderReport.java), OrderService.
 
 ## 5. 주문과 1:1인 리포트를 같은 트랜잭션에 저장했다
 
@@ -139,7 +139,7 @@ FK는 존재하지 않는 주문에 리포트가 연결되는 것을 막는다.
 같은 주문의 두 번째 리포트 저장에서 PersistenceException이 발생하는 것을 검사했다.
 리포트 저장 실패를 주입해 주문 롤백까지 직접 확인하는 별도 테스트는 추가하지 않았다.
 
-**코드 근거:** [Order](../src/main/java/com/stock_spoon/river_be/order/Order.java), AiOrderReport,
+**코드 근거:** [Order](../src/main/java/com/stock_spoon/river_be/order/entity/Order.java), AiOrderReport,
 OrderService, [DB 이관 SQL](../db/ai_order_reports.sql).
 
 ## 6. 상세 조회는 사용자 권한을 먼저 검사하도록 구현했다
@@ -166,10 +166,10 @@ OrderService, [DB 이관 SQL](../db/ai_order_reports.sql).
 | 계좌 내 주문 없음·리포트 없음·USER 주문 | 404 / AI_REPORT_NOT_FOUND |
 | 정상 조회 | 200 |
 
-**코드 근거:** [AiReportController](../src/main/java/com/stock_spoon/river_be/order/AiReportController.java),
-[AiReportService](../src/main/java/com/stock_spoon/river_be/order/AiReportService.java),
+**코드 근거:** [AiReportController](../src/main/java/com/stock_spoon/river_be/report/controller/AiReportController.java),
+[AiReportService](../src/main/java/com/stock_spoon/river_be/report/service/AiReportService.java),
 [SecurityConfig](../src/main/java/com/stock_spoon/river_be/config/SecurityConfig.java),
-[OrderRepository](../src/main/java/com/stock_spoon/river_be/order/OrderRepository.java).
+[OrderRepository](../src/main/java/com/stock_spoon/river_be/order/repository/OrderRepository.java).
 
 ## 7. 실행 결과는 체결 데이터에서 집계했다
 
@@ -205,9 +205,9 @@ OrderService, [DB 이관 SQL](../db/ai_order_reports.sql).
 총 거래금액 393,000원, 평균 체결가 196,500원, 실현손익 19,800원,
 평균 매수가 186,600원, 실현수익률 5.3055%를 확인했다.
 
-**코드 근거:** [AiReportResponse](../src/main/java/com/stock_spoon/river_be/order/AiReportResponse.java),
-[Execution](../src/main/java/com/stock_spoon/river_be/order/Execution.java),
-[ExecutionRepository](../src/main/java/com/stock_spoon/river_be/order/ExecutionRepository.java).
+**코드 근거:** [AiReportResponse](../src/main/java/com/stock_spoon/river_be/report/dto/AiReportResponse.java),
+[Execution](../src/main/java/com/stock_spoon/river_be/execution/entity/Execution.java),
+[ExecutionRepository](../src/main/java/com/stock_spoon/river_be/execution/repository/ExecutionRepository.java).
 
 ## 8. 데이터가 없는 화면 항목은 응답에 임의로 채우지 않았다
 
@@ -291,7 +291,7 @@ build의 spotbugsMain도 통과했다. 이는 2026-10-01 구현 완료 시 실�
 보고하지 않았다. 테스트가 모든 오류 분기를 개별 검증한 것은 아니다. USER 주문·리포트 없는
 주문·비활성 계좌·손익 누락 등은 코드 분기가 있으나 이번 추가 테스트에서 각각 직접 검증하지 않았다.
 
-**검증 자료:** [테스트 소스](../src/test/java/com/stock_spoon/river_be/order/OrderControllerTests.java),
+**검증 자료:** [테스트 소스](../src/test/java/com/stock_spoon/river_be/order/service/OrderControllerTests.java),
 로컬 `build/test-results/test/TEST-*.xml`, `build/reports/tests/test/index.html`,
 `build/reports/spotbugs/main.html`. build 산출물은 이후 빌드에서 갱신될 수 있다.
 

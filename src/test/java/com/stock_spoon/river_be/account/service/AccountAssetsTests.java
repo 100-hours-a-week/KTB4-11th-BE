@@ -1,10 +1,16 @@
 package com.stock_spoon.river_be.account.service;
 
+import com.stock_spoon.river_be.execution.entity.Execution;
+import com.stock_spoon.river_be.holding.entity.Holding;
+import com.stock_spoon.river_be.order.entity.Order;
+import com.stock_spoon.river_be.execution.repository.ExecutionRepository;
+import com.stock_spoon.river_be.holding.repository.HoldingRepository;
+import com.stock_spoon.river_be.order.repository.OrderRepository;
+
 import com.stock_spoon.river_be.account.entity.Account;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import com.stock_spoon.river_be.account.exception.AccountException;
 import com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient;
-import com.stock_spoon.river_be.order.*;
 import com.stock_spoon.river_be.user.entity.User;
 import com.stock_spoon.river_be.user.repository.UserRepository;
 import org.junit.jupiter.api.Test;

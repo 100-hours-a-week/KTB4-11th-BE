@@ -1,5 +1,8 @@
 package com.stock_spoon.river_be.market;
 
+import com.stock_spoon.river_be.order.entity.Order;
+import com.stock_spoon.river_be.order.repository.OrderRepository;
+
 import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream;
 import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.StockPrice;
 import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.OrderBook;
@@ -41,7 +44,7 @@ public class RedisMarketStream implements MarketStream, MessageListener, Subscri
     private final RedisCollectorHeartbeat heartbeat;
     private final RedisMessageListenerContainer channels;
     private final ApplicationEventPublisher events;
-    private final com.stock_spoon.river_be.order.OrderRepository orders;
+    private final com.stock_spoon.river_be.order.repository.OrderRepository orders;
     private final ConcurrentHashMap<String, CompletableFuture<Void>> waiting = new ConcurrentHashMap<>();
     private final ThreadPoolExecutor callbacks = new ThreadPoolExecutor(2, 2, 0, TimeUnit.SECONDS,
             new ArrayBlockingQueue<>(256), runnable -> {
@@ -56,7 +59,7 @@ public class RedisMarketStream implements MarketStream, MessageListener, Subscri
             KiwoomStockStream collector, RedisCollectorHeartbeat heartbeat,
             @org.springframework.beans.factory.annotation.Qualifier("quoteListenerContainer")
             RedisMessageListenerContainer channels, ApplicationEventPublisher events,
-            com.stock_spoon.river_be.order.OrderRepository orders) {
+            com.stock_spoon.river_be.order.repository.OrderRepository orders) {
         this.quotes = quotes;
         this.demands = demands;
         this.collector = collector;
@@ -95,7 +98,7 @@ public class RedisMarketStream implements MarketStream, MessageListener, Subscri
             if (heartbeat.ownsLease()) {
                 // 임시 표시 해제는 DB 커밋 뒤다. 이 순서로 읽어 전환 순간에도 한쪽 수요를 확보한다.
                 var combined = new HashSet<>(demands.symbols());
-                combined.addAll(orders.findStockCodesByStatus(com.stock_spoon.river_be.order.Order.Status.PENDING));
+                combined.addAll(orders.findStockCodesByStatus(com.stock_spoon.river_be.order.entity.Order.Status.PENDING));
                 collector.updateSymbols(combined);
             }
             for (var entry : waiting.entrySet()) {

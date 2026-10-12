@@ -76,8 +76,8 @@ ERD의 테이블 이름 `executions`와 API의 체결 필드를 참고했다. �
 
 ### 구현 내용
 
-- [Execution.java](../src/main/java/com/stock_spoon/river_be/order/Execution.java): 체결 한 건을 나타내는 JPA 엔티티.
-- [ExecutionRepository.java](../src/main/java/com/stock_spoon/river_be/order/ExecutionRepository.java): 체결 저장과 주문별 체결 조회.
+- [Execution.java](../src/main/java/com/stock_spoon/river_be/execution/entity/Execution.java): 체결 한 건을 나타내는 JPA 엔티티.
+- [ExecutionRepository.java](../src/main/java/com/stock_spoon/river_be/execution/repository/ExecutionRepository.java): 체결 저장과 주문별 체결 조회.
 - [order_execution.sql](../db/order_execution.sql): 로컬·배포 DB에 적용할 테이블 생성 SQL.
 
 | DB 컬럼 | 의미 | 타입 |
@@ -115,7 +115,7 @@ ERD의 테이블 이름 `executions`와 API의 체결 필드를 참고했다. �
 
 ### 구현 내용
 
-핵심은 [OrderExecutionService.executeLimit()](../src/main/java/com/stock_spoon/river_be/order/OrderExecutionService.java)다.
+핵심은 [OrderExecutionService.executeLimit()](../src/main/java/com/stock_spoon/river_be/execution/service/OrderExecutionService.java)다.
 
 1. 현재가가 양수인지 검사한다.
 2. `AccountRepository.findLockedById()`로 계좌에 쓰기 잠금을 건다.
@@ -133,9 +133,9 @@ ERD의 테이블 이름 `executions`와 API의 체결 필드를 참고했다. �
 
 - [AccountRepository.java](../src/main/java/com/stock_spoon/river_be/account/repository/AccountRepository.java): `PESSIMISTIC_WRITE` 계좌 잠금.
 - [Account.java](../src/main/java/com/stock_spoon/river_be/account/entity/Account.java): `changeCash()`가 잔액을 변경하며 음수 잔액·숫자 범위 초과를 검사.
-- [Holding.java](../src/main/java/com/stock_spoon/river_be/order/Holding.java): 매수 수량·원가 추가, 부분 매도 수량·원가 감소.
-- [Order.java](../src/main/java/com/stock_spoon/river_be/order/Order.java): `execute()`가 상태와 예약 현금을 변경.
-- [OrderService.java](../src/main/java/com/stock_spoon/river_be/order/OrderService.java): 만료 취소도 계좌 잠금 뒤 수행하도록 수정.
+- [Holding.java](../src/main/java/com/stock_spoon/river_be/holding/entity/Holding.java): 매수 수량·원가 추가, 부분 매도 수량·원가 감소.
+- [Order.java](../src/main/java/com/stock_spoon/river_be/order/entity/Order.java): `execute()`가 상태와 예약 현금을 변경.
+- [OrderService.java](../src/main/java/com/stock_spoon/river_be/order/service/OrderService.java): 만료 취소도 계좌 잠금 뒤 수행하도록 수정.
 
 #### 매수 예시
 
@@ -216,7 +216,7 @@ ERD의 테이블 이름 `executions`와 API의 체결 필드를 참고했다. �
 
 ### 구현 내용
 
-[OrderRepository.java](../src/main/java/com/stock_spoon/river_be/order/OrderRepository.java)의 `findAllByAccountIdAndStatus()`에 다음 조회를 명시했다.
+[OrderRepository.java](../src/main/java/com/stock_spoon/river_be/order/repository/OrderRepository.java)의 `findAllByAccountIdAndStatus()`에 다음 조회를 명시했다.
 
 ~~~java
 @Query("select o from Order o where o.account.id = :accountId and o.status = :status")
@@ -254,9 +254,9 @@ JPQL의 `o.account.id`는 “주문의 계좌 객체 안에 있는 ID”라는 �
 
 #### 1. 주문 저장 뒤 최초 판단
 
-[OrderController.create()](../src/main/java/com/stock_spoon/river_be/order/OrderController.java)는 기존 구독 확인·주문 저장 이후 `OrderExecutionListener.orderCreated(order)`를 호출한다.
+[OrderController.create()](../src/main/java/com/stock_spoon/river_be/order/controller/OrderController.java)는 기존 구독 확인·주문 저장 이후 `OrderExecutionListener.orderCreated(order)`를 호출한다.
 
-[OrderExecutionListener.java](../src/main/java/com/stock_spoon/river_be/order/OrderExecutionListener.java)의 최초 판단 순서:
+[OrderExecutionListener.java](../src/main/java/com/stock_spoon/river_be/execution/listener/OrderExecutionListener.java)의 최초 판단 순서:
 
 1. `stream.latest(stockCode)`로 보관 가격 확인.
 2. 있으면 해당 가격 사용.
@@ -316,7 +316,7 @@ REST 호출은 서버 설정상 연결 3초·읽기 5초 제한을 사용한다.
 
 #### 5. 생성 응답
 
-`OrderExecutionListener.response()`가 주문과 체결 내역을 읽고 [OrderCreateResponse.java](../src/main/java/com/stock_spoon/river_be/order/OrderCreateResponse.java)가 JSON용 값으로 변환한다.
+`OrderExecutionListener.response()`가 주문과 체결 내역을 읽고 [OrderCreateResponse.java](../src/main/java/com/stock_spoon/river_be/order/dto/OrderCreateResponse.java)가 JSON용 값으로 변환한다.
 
 이제 생성 직후 체결되면 `order_status: "executed"`, `reserved_cash: 0`, 실제 `executions`를 반환한다. 아직 미체결이면 `pending`과 빈 체결 목록을 반환한다. 이 응답은 조회 시점의 상태이며 이후 웹소켓 체결로 변할 수 있다.
 

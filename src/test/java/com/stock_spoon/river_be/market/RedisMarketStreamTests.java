@@ -2,8 +2,8 @@ package com.stock_spoon.river_be.market;
 
 import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream;
 import com.stock_spoon.river_be.market.kiwoom.RedisCollectorHeartbeat;
-import com.stock_spoon.river_be.order.Order;
-import com.stock_spoon.river_be.order.OrderRepository;
+import com.stock_spoon.river_be.order.entity.Order;
+import com.stock_spoon.river_be.order.repository.OrderRepository;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;

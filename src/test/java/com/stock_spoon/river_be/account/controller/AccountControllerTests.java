@@ -1,5 +1,8 @@
 package com.stock_spoon.river_be.account.controller;
 
+import com.stock_spoon.river_be.order.entity.Order;
+import com.stock_spoon.river_be.order.service.OrderService;
+
 import com.jayway.jsonpath.JsonPath;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import com.stock_spoon.river_be.auth.token.JwtTokenProvider;
@@ -31,7 +34,7 @@ class AccountControllerTests {
     @Autowired UserRepository users;
     @Autowired AccountRepository accounts;
     @Autowired JwtTokenProvider tokens;
-    @Autowired com.stock_spoon.river_be.order.OrderService orders;
+    @Autowired com.stock_spoon.river_be.order.service.OrderService orders;
     private MockMvc mvc;
 
     @BeforeEach
@@ -221,10 +224,10 @@ class AccountControllerTests {
         User user = users.save(new User("거래 횟수 사용자"));
         var account = accounts.save(new com.stock_spoon.river_be.account.entity.Account(user, "집계 계좌", 1000000));
         var completed = orders.reserveLimit(account.getId(), "005930",
-                com.stock_spoon.river_be.order.Order.Side.BUY, 1, 100, null);
+                com.stock_spoon.river_be.order.entity.Order.Side.BUY, 1, 100, null);
         completed.execute();
         orders.reserveLimit(account.getId(), "005930",
-                com.stock_spoon.river_be.order.Order.Side.BUY, 1, 100, null);
+                com.stock_spoon.river_be.order.entity.Order.Side.BUY, 1, 100, null);
         mvc.perform(get("/api/v1/users/me/accounts/{accountId}", account.getId()).cookie(authCookie(user)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.executed_trade_count").value(1));
@@ -236,7 +239,7 @@ class AccountControllerTests {
                 .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString());
         renameAccount(user, accountId, "변경된 계좌")
                 .andExpect(status().isOk());
-        orders.reserveLimit(accountId, "005930", com.stock_spoon.river_be.order.Order.Side.BUY,
+        orders.reserveLimit(accountId, "005930", com.stock_spoon.river_be.order.entity.Order.Side.BUY,
                 10, 70_000, null);
 
         mvc.perform(get("/api/v1/users/me/accounts/{accountId}", accountId)

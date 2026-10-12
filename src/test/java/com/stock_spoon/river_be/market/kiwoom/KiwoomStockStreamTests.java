@@ -383,7 +383,7 @@ class KiwoomStockStreamTests {
                         case "missing" -> values.remove(field);
                         case "null" -> values.put(field, null);
                         case "empty" -> values.put(field, "");
-                        case "space" -> values.put(field, " 4.9 ");
+                        case "space" -> values.put(field, "  ");
                         case "comma" -> values.put(field, "70,000");
                     }
                     appender.list.clear();

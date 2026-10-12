@@ -108,7 +108,51 @@ class KiwoomMarketClientTests {
     }
 
     @Test
-    void spacesQueriesEvenWhenConcurrentCallsWaitForTokenRefresh() throws Exception {
+    void lostCollectorStopsBeforeTokenIssuanceOrExternalRequest() {
+        var builder = RestClient.builder().baseUrl("https://api.kiwoom.com");
+        var isolatedServer = MockRestServiceServer.bindTo(builder).build();
+        var guarded = new KiwoomMarketClient(new DirectKiwoomRestTransport(builder.build(), tokens, () -> false));
+        assertThatThrownBy(() -> guarded.currentPrice("005930")).isInstanceOf(IllegalStateException.class);
+        verifyNoInteractions(tokens);
+        isolatedServer.verify();
+    }
+
+    @Test
+    void blockedPriceTrDoesNotBlockDifferentStockInfoTr() throws Exception {
+        var builder = RestClient.builder().baseUrl("https://api.kiwoom.com");
+        var parallelServer = MockRestServiceServer.bindTo(builder).ignoreExpectOrder(true).build();
+        var started = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        parallelServer.expect(requestTo("https://api.kiwoom.com/api/dostk/stkinfo"))
+                .andExpect(header("api-id", "ka10001"))
+                .andRespond(request -> {
+                    started.countDown();
+                    try {
+                        if (!release.await(5, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("가격 조회 해제 실패");
+                    } catch (InterruptedException error) {
+                        Thread.currentThread().interrupt();
+                        throw new java.io.IOException(error);
+                    }
+                    return withSuccess("{\"return_code\":0,\"stk_cd\":\"005930\",\"cur_prc\":\"70000\"}", MediaType.APPLICATION_JSON).createResponse(request);
+                });
+        parallelServer.expect(requestTo("https://api.kiwoom.com/api/dostk/stkinfo"))
+                .andExpect(header("api-id", "ka10100"))
+                .andRespond(withSuccess("{\"return_code\":0,\"code\":\"005930\",\"marketCode\":\"0\"}", MediaType.APPLICATION_JSON));
+        var parallelClient = new KiwoomMarketClient(builder.build(), tokens);
+        try (var workers = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            var price = workers.submit(() -> parallelClient.currentPrice("005930"));
+            assertThat(started.await(2, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            try {
+                var info = workers.submit(() -> parallelClient.stockInfo("005930"));
+                assertThat(info.get(1, java.util.concurrent.TimeUnit.SECONDS).stockCode()).isEqualTo("005930");
+            } finally { release.countDown(); }
+            assertThat(price.get(2, java.util.concurrent.TimeUnit.SECONDS)).isEqualTo(70000);
+        } finally { release.countDown(); }
+        parallelServer.verify();
+    }
+
+    @Test
+    void allowsAvailableCapacityImmediatelyAfterConcurrentTokenRefresh() throws Exception {
         var builder = RestClient.builder().baseUrl("https://api.kiwoom.com");
         var delayedServer = MockRestServiceServer.bindTo(builder).ignoreExpectOrder(true).build();
         var arrivals = new java.util.concurrent.CountDownLatch(3);
@@ -143,7 +187,7 @@ class KiwoomMarketClientTests {
         }
         starts.sort(Long::compareTo);
         assertThat(starts).hasSize(3);
-        for (int i = 1; i < starts.size(); i++) assertThat(starts.get(i) - starts.get(i - 1)).isGreaterThan(180_000_000L);
+        assertThat(starts.getLast() - starts.getFirst()).isLessThan(180_000_000L);
         delayedServer.verify();
     }
 

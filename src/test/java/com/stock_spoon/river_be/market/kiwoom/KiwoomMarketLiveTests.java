@@ -22,7 +22,7 @@ class KiwoomMarketLiveTests {
         var config = new KiwoomConfig();
         var tokenProvider = config.kiwoomTokenProvider(
                 setting("KIWOOM_APP_KEY", local), setting("KIWOOM_APP_SECRET", local));
-        var index = config.kiwoomMarketClient(tokenProvider).kospi();
+        var index = liveClient(config, tokenProvider).kospi();
         assertThat(index.value()).isGreaterThan(BigDecimal.ZERO);
         assertThat(index.fetchedAt()).isNotNull();
     }
@@ -38,7 +38,7 @@ class KiwoomMarketLiveTests {
         var config = new KiwoomConfig();
         var tokenProvider = config.kiwoomTokenProvider(
                 setting("KIWOOM_APP_KEY", local), setting("KIWOOM_APP_SECRET", local));
-        var market = config.kiwoomMarketClient(tokenProvider);
+        var market = liveClient(config, tokenProvider);
         var samsung = market.stockInfo("005930");
         var etf = market.stockInfo("069500");
         assertThat(samsung.stockCode()).isEqualTo("005930");
@@ -60,9 +60,16 @@ class KiwoomMarketLiveTests {
         var config = new KiwoomConfig();
         var provider = config.kiwoomTokenProvider(
                 setting("KIWOOM_APP_KEY", local), setting("KIWOOM_APP_SECRET", local));
-        long price = config.kiwoomMarketClient(provider).currentPrice("005930");
+        long price = liveClient(config, provider).currentPrice("005930");
         assertThat(price).isPositive();
         System.out.println("삼성전자 005930 REST 현재가 조회 성공: " + price + "원 (장중 실시간 여부는 검증하지 않음)");
+    }
+
+    private KiwoomMarketClient liveClient(KiwoomConfig config, KiwoomTokenProvider provider) {
+        // 명시적으로 켠 단독 외부 API 테스트는 운영 담당 임대와 분리한다.
+        var heartbeat = org.mockito.Mockito.mock(RedisCollectorHeartbeat.class);
+        org.mockito.Mockito.when(heartbeat.ownsLease()).thenReturn(true);
+        return new KiwoomMarketClient(config.kiwoomRestTransport(provider, heartbeat, null, true, "", ""));
     }
 
     private String setting(String name, Properties local) {

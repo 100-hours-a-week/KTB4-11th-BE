@@ -3,6 +3,18 @@ spring:
     import: optional:file:.env.local[.properties]
   application:
     name: river_be
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6380}
+      username: ${REDIS_USERNAME:}
+      password: ${REDIS_PASSWORD:}
+      connect-timeout: 3s
+      timeout: 3s
+      repositories:
+        enabled: false
+      ssl:
+        enabled: ${REDIS_SSL:false}
   datasource:
     url: ${SPRING_DATASOURCE_URL}
     username: ${MYSQL_USER}
@@ -28,5 +40,9 @@ jwt:
 kiwoom:
   app-key: ${KIWOOM_APP_KEY:}
   app-secret: ${KIWOOM_APP_SECRET:}
+  collector:
+    enabled: ${KIWOOM_COLLECTOR_ENABLED:false}
+    url: ${KIWOOM_COLLECTOR_URL:}
+    secret: ${KIWOOM_COLLECTOR_SECRET:}
   stream:
     enabled: ${KIWOOM_STREAM_ENABLED:false}

@@ -17,7 +17,7 @@ public class OrderController {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OrderController.class);
     private final OrderBuyPriceService buyPrices;
     private final OrderExecutionService marketExecution;
-    private final com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream stream;
+    private final com.stock_spoon.river_be.market.MarketStream stream;
     private final OrderHistoryService history;
     private final OrderService orders;
     private final OrderMarketValidator market;
@@ -29,7 +29,7 @@ public class OrderController {
     public OrderController(OrderService orders, OrderMarketValidator market,
             OrderSubscriptionService subscriptions, OrderExecutionListener execution, OrderHistoryService history,
             OrderExecutionService marketExecution,
-            com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream stream, OrderBuyPriceService buyPrices) {
+            com.stock_spoon.river_be.market.MarketStream stream, OrderBuyPriceService buyPrices) {
         this.buyPrices = buyPrices;
         this.marketExecution = marketExecution;
         this.stream = stream;
@@ -115,8 +115,26 @@ public class OrderController {
             var prices = side == Order.Side.BUY ? buyPrices.fetch(accountId, request.stockCode())
                     : java.util.Map.<String, java.math.BigDecimal>of();
             var order = subscriptions.create(request.stockCode(), () -> {
-                var book = stream.latestOrderBook(request.stockCode()).orElse(null);
-                return marketExecution.executeMarket(userId, accountId, request, book, prices);
+                com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.OrderBook book;
+                com.stock_spoon.river_be.market.RedisQuoteStore.QuoteEvent quote;
+                try {
+                    quote = stream.latestBookQuote(request.stockCode()).orElse(null);
+                    book = quote == null ? null : quote.orderBook();
+                } catch (RuntimeException error) {
+                    throw new OrderException(HttpStatus.SERVICE_UNAVAILABLE, "MARKET_STREAM_UNAVAILABLE",
+                            "사용 가능한 최신 호가를 확인할 수 없습니다.");
+                }
+                Runnable validate = () -> {
+                    try {
+                        if (quote == null) stream.assertAvailable(request.stockCode());
+                        else stream.assertSource(request.stockCode(), quote.source());
+                    } catch (RuntimeException error) {
+                        throw new OrderException(HttpStatus.SERVICE_UNAVAILABLE, "MARKET_STREAM_UNAVAILABLE",
+                                "사용 가능한 최신 호가를 확인할 수 없습니다.");
+                    }
+                };
+                validate.run();
+                return marketExecution.executeMarket(userId, accountId, request, book, prices, validate);
             });
             return execution.response(accountId, order.getId());
         }

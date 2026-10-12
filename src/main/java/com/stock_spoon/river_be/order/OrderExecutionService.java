@@ -60,22 +60,28 @@ public class OrderExecutionService {
 
     @Transactional
     public Order executeMarket(long userId, long accountId, OrderCreateRequest request, OrderBook book,
-            java.util.Map<String, BigDecimal> prices) {
+            java.util.Map<String, BigDecimal> prices, Runnable validate) {
         return executeMarket(userId, accountId, request.stockCode(),
                 Order.Side.valueOf(request.orderSide().toUpperCase(java.util.Locale.ROOT)),
                 request.quantity(), request.reason(), book, request.stockName(), request.reasoning(),
-                request.holdingWeightLimitPercent(), request.isLowerTriggered(), prices);
+                request.holdingWeightLimitPercent(), request.isLowerTriggered(), prices, validate);
+    }
+
+    @Transactional
+    public Order executeMarket(long userId, long accountId, OrderCreateRequest request, OrderBook book,
+            java.util.Map<String, BigDecimal> prices) {
+        return executeMarket(userId, accountId, request, book, prices, () -> {});
     }
 
     /** 공개 메서드의 트랜잭션 안에서 주문·체결·자산을 전량 반영한다. */
     private Order executeMarket(long userId, long accountId, String stockCode, Order.Side side,
             long quantity, String reason, OrderBook book) {
-        return executeMarket(userId, accountId, stockCode, side, quantity, reason, book, null, java.util.List.of(), null, null, java.util.Map.of());
+        return executeMarket(userId, accountId, stockCode, side, quantity, reason, book, null, java.util.List.of(), null, null, java.util.Map.of(), () -> {});
     }
 
     private Order executeMarket(long userId, long accountId, String stockCode, Order.Side side,
             long quantity, String reason, OrderBook book, String stockName, java.util.List<ReportReasoning> reasoning,
-            Double holdingWeightLimitPercent, Boolean isLowerTriggered, java.util.Map<String, BigDecimal> prices) {
+            Double holdingWeightLimitPercent, Boolean isLowerTriggered, java.util.Map<String, BigDecimal> prices, Runnable validate) {
         if (stockCode == null || !stockCode.matches("[0-9]{6}") || quantity <= 0
                 || reason == null || reason.isBlank() || reason.length() > 100000) {
             throw new OrderException("주문 입력값을 확인하세요.");
@@ -159,6 +165,8 @@ public class OrderExecutionService {
         } catch (ArithmeticException error) {
             throw new OrderException("현금 잔액이 허용 범위를 초과합니다.");
         }
+        // 계좌 잠금·DB 조회를 기다리는 동안 담당이나 연결 세션이 바뀌었으면 자산을 변경하지 않는다.
+        validate.run();
         var order = orders.save(Order.pendingMarket(account, stockCode, side, quantity, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered, now));
         account.changeCash(cashDelta);
         var cost = BigDecimal.valueOf(amount);
@@ -233,6 +241,12 @@ public class OrderExecutionService {
     @Transactional
     public boolean executeLimit(long accountId, long orderId, long currentPrice,
             java.util.Map<String, BigDecimal> prices) {
+        return executeLimit(accountId, orderId, currentPrice, prices, () -> {});
+    }
+
+    @Transactional
+    public boolean executeLimit(long accountId, long orderId, long currentPrice,
+            java.util.Map<String, BigDecimal> prices, Runnable validate) {
         if (currentPrice <= 0) throw new IllegalArgumentException("현재가는 양수여야 합니다.");
         var account = accounts.findLockedById(accountId).orElseThrow();
         var order = orders.findByIdAndAccountId(orderId, accountId).orElseThrow();
@@ -252,6 +266,7 @@ public class OrderExecutionService {
         long amount = Math.multiplyExact(currentPrice, quantity);
         var cost = BigDecimal.valueOf(amount);
         var holding = holdings.findByAccountIdAndStockCode(accountId, order.getStockCode());
+        validate.run();
         BigDecimal pnl = null;
         BigDecimal returnPercent = null;
         if (order.getSide() == Order.Side.BUY) {

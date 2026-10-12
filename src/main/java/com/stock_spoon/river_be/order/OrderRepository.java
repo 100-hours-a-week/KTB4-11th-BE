@@ -32,7 +32,7 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     List<Order> findAllByStatus(Order.Status status);
 
-    @Query("select o from Order o join fetch o.account where o.stockCode = :stockCode "
+    @Query("select o from Order o join fetch o.account left join fetch o.report where o.stockCode = :stockCode "
             + "and o.status = :status and o.type = :type")
     List<Order> findPendingForPrice(@Param("stockCode") String stockCode,
             @Param("status") Order.Status status, @Param("type") Order.Type type);

@@ -28,6 +28,7 @@ class KiwoomStockStreamTests {
     private final List<WebSocket> sockets = new ArrayList<>();
     private final List<String> sent = new ArrayList<>();
     private KiwoomStockStream stream;
+    private org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory redisConnection;
 
     @BeforeEach
     void setUp() {
@@ -53,7 +54,114 @@ class KiwoomStockStreamTests {
 
     @AfterEach
     void tearDown() {
+        try {
+            stream.close();
+        } finally {
+            if (redisConnection != null) redisConnection.destroy();
+        }
+    }
+
+    @Test
+    void lostCollectorLeaseStopsConnectionAndPriceUse() {
+        var allowed = new java.util.concurrent.atomic.AtomicBoolean(true);
+        stream.setCollectorCheck(allowed::get);
+        subscribe();
+        receive(trade("005930", "0B", "70000", "0", "0", "100000"));
+        assertThat(stream.latest("005930")).isPresent();
+        allowed.set(false);
+        assertThat(stream.latest("005930")).isEmpty();
+        stream.maintainConnection();
+        verify(sockets.getLast()).abort();
+        stream.maintainConnection();
+        assertThat(sockets).hasSize(1);
+        assertThat(stream.whenSubscribed("005930")).isCompletedExceptionally();
+    }
+
+    @Test
+    @org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable(named = "REDIS_LIVE_TEST", matches = "true")
+    void websocketMessagesReachRealRedisAndReconnectRejectsPreviousQuotes() {
+        redisConnection = new org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory("localhost", 6380);
+        redisConnection.afterPropertiesSet();
+        redisConnection.start();
+        var redis = new org.springframework.data.redis.core.StringRedisTemplate(redisConnection);
+        var store = new com.stock_spoon.river_be.market.RedisQuoteStore(redis);
+        stream = new KiwoomStockStream(tokens, true, List.of("TST002"), http, clock, store);
+        subscribe();
+        receive(trade("TST002", "0B", "70000", "0", "0", "100000"));
+        receive(book("TST002", "70100", "12"));
+        assertThat(store.latestPrice("TST002").orElseThrow().currentPrice()).isEqualByComparingTo("70000");
+        assertThat(stream.latestOrderBook("TST002").orElseThrow().asks()).hasSize(10);
+        var previous = listeners.getLast();
+        previous.onClose(sockets.getLast(), 1006, "test");
+        assertThat(store.latestPrice("TST002")).isEmpty();
+        assertThat(store.latestOrderBook("TST002")).isEmpty();
+
+        // 재시작 전에 남은 값이 있어도 새 등록 시 지운다.
+        store.savePrice(new KiwoomStockStream.StockPrice("TST002", new BigDecimal("60000"),
+                BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(10, 0), NOW));
+        subscribe();
+        assertThat(stream.latest("TST002")).isEmpty();
+        receive(trade("TST002", "0B", "71000", "0", "0", "100001"));
+        previous.onText(sockets.getFirst(), trade("TST002", "0B", "50000", "0", "0", "100000"), true);
+        assertThat(store.latestPrice("TST002").orElseThrow().currentPrice()).isEqualByComparingTo("71000");
+        stream.updateSymbols(java.util.Set.of());
+        assertThat(store.latestPrice("TST002")).isEmpty();
+    }
+
+    @Test
+    void usesSharedStoreAndDoesNotExposeQuotesAfterDisconnect() {
+        var store = mock(com.stock_spoon.river_be.market.QuoteStore.class);
+        stream = new KiwoomStockStream(tokens, true, List.of("005930"), http, clock, store);
+        subscribe();
+        receive(trade("005930", "0B", "70000", "0", "0", "100000"));
+        var expected = new KiwoomStockStream.StockPrice("005930", new BigDecimal("70000"),
+                BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(10, 0), NOW);
+        verify(store).savePrice(eq(expected), any());
+        when(store.latestPrice("005930")).thenReturn(java.util.Optional.of(expected));
+        assertThat(stream.latest("005930")).contains(expected);
+        receive(book("005930", "70100", "12"));
+        verify(store).saveOrderBook(argThat(value -> value.asks().getFirst().quantity() == 12), any());
+        clearInvocations(store);
+        listeners.getLast().onClose(sockets.getLast(), 1006, "test");
+        verify(store).remove("005930");
+        assertThat(stream.latest("005930")).isEmpty();
+        verify(store, never()).latestPrice(anyString());
+    }
+
+    @Test
+    void failedStoreWriteDisconnectsBeforeDeliveringPrice() {
+        var store = mock(com.stock_spoon.river_be.market.QuoteStore.class);
+        doThrow(new IllegalStateException("redis unavailable")).when(store).savePrice(any(), any());
+        stream = new KiwoomStockStream(tokens, true, List.of("005930"), http, clock, store);
+        var delivered = new ArrayList<KiwoomStockStream.StockPrice>();
+        stream.setPriceListener(delivered::add);
+        subscribe();
+        receive(trade("005930", "0B", "70000", "0", "0", "100000"));
+        assertThat(stream.state()).isEqualTo(KiwoomStockStream.State.DISCONNECTED);
+        assertThat(delivered).isEmpty();
+        verify(sockets.getLast()).abort();
+    }
+
+    @Test
+    void disabledStreamDoesNotDeleteCollectorsSharedQuotes() {
+        var store = mock(com.stock_spoon.river_be.market.QuoteStore.class);
+        stream = new KiwoomStockStream(tokens, false, List.of("005930"), http, clock, store);
+        stream.updateSymbols(java.util.Set.of());
         stream.close();
+        verifyNoInteractions(store);
+        verifyNoInteractions(tokens);
+    }
+
+    @Test
+    void disconnectFinishesEvenIfRedisCleanupFails() {
+        var store = mock(com.stock_spoon.river_be.market.QuoteStore.class);
+        stream = new KiwoomStockStream(tokens, true, List.of("005930"), http, clock, store);
+        subscribe();
+        doThrow(new IllegalStateException("redis unavailable")).when(store).remove(anyString());
+        listeners.getLast().onClose(sockets.getLast(), 1006, "test");
+        assertThat(stream.state()).isEqualTo(KiwoomStockStream.State.DISCONNECTED);
+        assertThat(stream.latest("005930")).isEmpty();
+        verify(sockets.getLast()).abort();
     }
 
     @Test

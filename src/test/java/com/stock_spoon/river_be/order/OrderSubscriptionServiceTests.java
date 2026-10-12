@@ -17,6 +17,26 @@ class OrderSubscriptionServiceTests {
     private final OrderSubscriptionService service = new OrderSubscriptionService(orders, stream, orderService);
 
     @Test
+    void requestDemandHasUniqueIdAndIsCheckedBeforeSave() {
+        when(orders.findStockCodesByStatus(Order.Status.PENDING)).thenReturn(Set.of());
+        when(stream.whenSubscribed("005930")).thenReturn(CompletableFuture.completedFuture(null));
+        service.create("005930", () -> null);
+        var id = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(stream).retainRequest(id.capture(), eq("005930"));
+        assertThat(id.getValue()).matches("[0-9a-f-]{36}");
+        verify(stream).assertRequest(id.getValue(), "005930");
+        verify(stream).assertAvailable("005930");
+        verify(stream).releaseRequest(id.getValue(), "005930");
+    }
+
+    @Test
+    void redisDemandFailureReturnsUnavailableWithoutSaving() {
+        doThrow(new IllegalStateException("Redis down")).when(stream).retainRequest(anyString(), eq("005930"));
+        assertThatThrownBy(() -> service.create("005930", () -> { throw new AssertionError("저장 금지"); }))
+                .isInstanceOfSatisfying(OrderException.class, error -> assertThat(error.status().value()).isEqualTo(503));
+    }
+
+    @Test
     void waitsForRegistrationBeforeSavingAndRetainsCommittedPendingOrder() throws Exception {
         when(orders.findStockCodesByStatus(Order.Status.PENDING)).thenReturn(Set.of());
         var registered = new CompletableFuture<Void>();

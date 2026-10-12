@@ -14,16 +14,22 @@ class KospiIndexServiceTests {
     @Test
     void keepsLastSuccessfulIndexWhenRefreshFails() {
         var client = mock(KiwoomMarketClient.class);
-        var service = new KospiIndexService(client, false);
+        var cache = mock(RedisKospiStore.class);
+        var heartbeat = mock(com.stock_spoon.river_be.market.kiwoom.RedisCollectorHeartbeat.class);
+        when(heartbeat.ownsLease()).thenReturn(true);
+        var service = new KospiIndexService(client, false, cache, heartbeat,
+                java.time.Clock.fixed(Instant.parse("2026-09-26T06:31:00Z"), java.time.ZoneOffset.UTC));
         var first = new KospiIndex(new BigDecimal("2817.42"), new BigDecimal("-12.50"),
                 new BigDecimal("-0.44"), Instant.parse("2026-09-26T06:30:00Z"));
         when(client.kospi()).thenReturn(first).thenThrow(new IllegalStateException("provider-secret"));
+        when(cache.read(false)).thenReturn(java.util.Optional.of(first));
 
         service.refresh();
         service.refresh();
 
         assertThat(service.latest()).contains(first);
         verify(client, times(2)).kospi();
+        verify(cache).save(first);
     }
 
     @Test

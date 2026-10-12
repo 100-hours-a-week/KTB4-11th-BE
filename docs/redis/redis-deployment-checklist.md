@@ -2,6 +2,12 @@
 
 현재 구조는 고정 수집 담당 BE 1대와 일반 BE 여러 대가 같은 Valkey와 DB를 사용하는 방식이다. 담당 자동 인계는 없으며 담당 장애 시 새 주문·체결을 중단한다. DB의 대기 주문은 유지한다.
 
+## 인프라 IAM 연결 보완
+
+이후 Serverless Valkey 주소·사용자명·TLS·클러스터·리전·캐시 이름을 전달받았고 인스턴스에 IAM 역할이 부여됐다는 확인을 받았다. 인프라 변수 이름을 그대로 사용하는 [IAM 연결](iam-connection.md)을 구현했다. 아래의 “접속 설정 없음”과 282개 검증 수치는 이전 단계 기록이다. 실제 인스턴스 IAM·MySQL·배포 Valkey 연결 검증은 여전히 별도다.
+
+IAM 보완 후 최종 전체 회귀·빌드·정적 분석이 성공했다. **290개 중 284개 통과, 실제 키움 연결 테스트 6개 건너뜀, 실패·오류 0건**이다. 처음과 주기 갱신의 일시적 실패를 복구하는 테스트까지 포함했으며 기존 로컬 Valkey·ACL·다중 BE·장애 복구·부하를 함께 검증했다. 배포 클러스터 초기화·갱신에 필요한 `CLUSTER NODES`, `INFO` 권한은 인프라 ACL에서 확인한다.
+
 인프라 접속 설정이 아직 없다는 사용자 확인에 따라 [운영 인계](operations-handoff.md), 공통·역할별 환경변수 예시, [PR 설명 초안](pull-request-draft.md)을 준비했다. 배포용 `bootJar` 빌드와 현재 CI의 `spotbugsMain` 정적 분석이 모두 성공했다. `.env.local`은 Docker 빌드 컨텍스트에서도 제외한다. Docker 이미지 빌드·원격 게시·PR 생성·실제 배포는 이번 단계에서 수행하지 않았다. 기존 CD가 사용하는 인프라 저장소의 역할별 서비스·환경변수 반영은 배포 전 필요하다.
 
 ## 최신 전체 회귀 검증 — 2026-10-12
@@ -73,7 +79,7 @@ Redis 장애는 테스트용 프록시로 BE 연결만 끊어 재현했다. Valk
 
 현재 배포 연결 설정은 미준비이며, 사용자 확인에 따라 로컬 ACL 검증을 먼저 수행했다. 인프라에는 [valkey-acl-requirements.md](valkey-acl-requirements.md)의 키·채널·명령 권한 표와 필요한 연결 정보를 전달한다. 로컬 ACL 검증과 배포 환경 검증을 구분한다.
 
-- Valkey 엔드포인트, 포트, TLS 여부, ACL 사용자명·비밀번호의 주입 방법을 확인한다. 비밀값은 문서나 Git에 기록하지 않는다. IAM 인증이면 현재 비밀번호 방식과 별도로 갱신 구현이 필요하다.
+- 전달받은 Valkey 엔드포인트·TLS·클러스터·IAM 변수를 주입한다. 인스턴스 역할로 토큰을 생성·갱신하며 비밀값을 문서나 Git에 기록하지 않는다. 실제 IAM 접속 권한·사용자 설정·네트워크 경로는 인프라 환경에서 확인한다.
 - 기존 허용 키 `quote:*`, `session:*`, `token:*`에 **`coord:*`를 추가**한다. Pub/Sub 채널은 `quotes:*`이며 `PSUBSCRIBE`를 사용하지 않는다.
 - 명령 권한은 `GET`, `SET`(NX/EX/PX 포함), `EXPIRE`, `PEXPIRE`, `DEL`, `TIME`, `ZADD`, `ZRANGE`, `ZREM`, `ZREMRANGEBYSCORE`, `EVAL`, `EVALSHA`, `SCRIPT LOAD`, `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`가 필요하다. 연결 초기화 명령까지 포함한 최종 ACL은 실제 Spring/Lettuce 연결로 확인한다.
 - 내부 REST 주소는 일반 BE가 접근할 수 있는 담당 BE 주소로 지정한다. 내부 API의 외부 접근을 제한하고 공통 `KIWOOM_COLLECTOR_SECRET`을 비밀 관리 방식으로 주입한다.
@@ -89,7 +95,11 @@ Redis 장애는 테스트용 프록시로 BE 연결만 끊어 재현했다. Valk
 | `KIWOOM_COLLECTOR_SECRET` | 공통 비밀값 | 같은 비밀값 |
 | `KIWOOM_APP_KEY`, `KIWOOM_APP_SECRET` | 설정 | 생략 가능 |
 | `REDIS_HOST`, `REDIS_PORT` | 공유 Valkey 주소 | 같은 주소 |
-| `REDIS_USERNAME`, `REDIS_PASSWORD`, `REDIS_SSL_ENABLED` | 배포 연결 설정 | 같은 저장소에 접근하는 설정 |
+| `REDIS_USERNAME`, `REDIS_PASSWORD`, `REDIS_SSL` | 배포 연결 설정 | 같은 저장소에 접근하는 설정 |
+| `REDIS_CLUSTER_MODE` | 배포 Serverless는 `true` | 같은 값 |
+| `AWS_REGION`, `ELASTICACHE_CACHE_NAME` | IAM 리전·캐시 이름 | 같은 값 |
+
+현재 IAM 배포에서는 `REDIS_PASSWORD`를 사용하지 않는다. 캐시 이름이 비어 있을 때만 기존 로컬/비밀번호 인증을 사용한다.
 
 DB도 공유해야 중복 체결을 계좌 잠금과 주문 상태 검사로 방지할 수 있다. 실제 여러 프로세스로 실행할 때는 각 BE의 서버 포트를 구분한다. 로컬 테스트 기본 Valkey 포트는 6380이다.
 
@@ -109,6 +119,6 @@ DB도 공유해야 중복 체결을 계좌 잠금과 주문 상태 검사로 방
 - 사용자 확인(2026-10-12): 현재가는 담당·종목 구독·연결 ID를 검증하는 기존 기준을 유지한다. 수신 후 추가 경과시간 제한은 추후 결정하며 이번 단계에서 5초 제한을 추가하지 않는다. 시세 TTL 1일은 정리 기간이며 신선도 보장이 아니다. 호가의 기존 5초 판단은 유지한다. REST는 현재 설정으로 먼저 측정한 뒤 호출 순서 대기 상한 3초를 승인·적용했으며 [대기 부하 측정 결과](rest-load-measurement.md)에 기록했다.
 - 사용자가 제공한 공식 FAQ로 실전 REST의 TR당·토큰별 초당 5회 기준을 확인했다. 단일 계좌/토큰의 각 api-id에 최근 1초 최대 5회까지 즉시 허용하고 초과 요청만 기다리도록 변경했다. 응답 후 220ms를 두는 이전 방식은 대체됐다. 이후 사용자 승인으로 호출 순서 대기를 최대 3초로 제한했다. 초과하면 외부 호출 전에 실패하며 내부 조회 API는 503을 반환한다. 전체 HTTP 응답 제한과는 별개다. [공식 확인 기록](kiwoom-call-limit-verification.md)과 [대기 상한 적용 결과](rest-load-measurement.md)를 참고한다.
 - 휴장일 달력, 실제 배포 네트워크·부하, 임대 확인과 쓰기 사이 및 최종 시세 확인과 DB 커밋 사이의 원자성은 현재 검증 범위 밖이다.
-- 로컬 `.env.local`에는 키움 인증 설정이 있지만 배포 Valkey 연결 설정은 없다. 배포 검증은 인프라 설정을 주입한 뒤 수행한다.
+- 인프라가 제공한 IAM Valkey 설정은 [환경변수 예시](deployment-common.env.example)에 반영했다. 실제 배포 환경의 설정 주입·MySQL 연결·검증 실행은 인프라 환경에서 수행한다. 로컬 `.env.local`을 배포 대상으로 변경하지 않았다.
 
 구현과 로컬 검증의 상세 내용은 [local-valkey.md](local-valkey.md)를 참고한다.

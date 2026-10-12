@@ -23,9 +23,9 @@ BE를 PC에서 실행하면 기본 설정으로 `localhost:6380`에 연결합니
 | `REDIS_PORT` | `6380` | 포트. 배포 주소의 실제 포트 지정 |
 | `REDIS_USERNAME` | 빈 값 | ACL 사용자명 |
 | `REDIS_PASSWORD` | 빈 값 | 인증 비밀번호 |
-| `REDIS_SSL_ENABLED` | `false` | TLS 사용 여부 |
+| `REDIS_SSL` | `false` | TLS 사용 여부 |
 
-연결·명령 제한시간은 각각 3초입니다. Redis Repository 자동 탐색은 사용하지 않습니다. 배포에서 IAM 인증을 사용한다면 별도의 인증 갱신 구현이 필요하며 위 비밀번호 설정만으로 지원한다고 가정하지 않습니다.
+연결·명령 제한시간은 각각 3초입니다. Redis Repository 자동 탐색은 사용하지 않습니다. 로컬에서는 `REDIS_CLUSTER_MODE=false`, `ELASTICACHE_CACHE_NAME=`으로 설정합니다. 캐시 이름이 있으면 Serverless IAM 인증을 사용하고 토큰을 생성·갱신합니다. 인프라 변수와 동작은 [IAM 연결](iam-connection.md)에 기록합니다. 실제 배포 IAM 연결 검증은 별도입니다.
 
 ## Spring 연결 검증
 

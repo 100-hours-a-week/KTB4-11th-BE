@@ -1,11 +1,12 @@
 # Redis 문서 안내
 
-현재 구현과 로컬 검증은 완료됐고 배포 접속 정보는 아직 없다. 실제 배포·MySQL·배포 Valkey 검증은 준비 중이다.
+Redis 전환의 로컬 검증 후 인프라의 Serverless IAM 환경변수를 전달받아 배포 연결·인증 코드를 보완했다. 실제 인스턴스·MySQL·배포 Valkey 검증은 별도다.
 
 | 목적 | 문서 |
 |---|---|
 | 최신 검증 결과와 남은 단계 | [배포 준비](redis-deployment-checklist.md) |
 | 인프라 인계·설정·배포·장애 복구 | [운영 인계](operations-handoff.md) |
+| IAM 토큰·TLS·클러스터 연결 및 환경변수 | [IAM 연결](iam-connection.md) |
 | 키·채널·명령 ACL 요청 | [Valkey 권한 요구 사항](valkey-acl-requirements.md) |
 | 로컬 사용·테스트 실행 | [로컬 Valkey](local-valkey.md) |
 | REST 호출 제한 근거 | [공식 호출 제한 확인](kiwoom-call-limit-verification.md) |

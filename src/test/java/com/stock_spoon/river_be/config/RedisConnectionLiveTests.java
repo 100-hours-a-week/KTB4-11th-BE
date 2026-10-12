@@ -24,6 +24,7 @@ class RedisConnectionLiveTests {
                 new FileSystemResource("src/main/resources/application.yaml")).getFirst();
         new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(DataRedisAutoConfiguration.class))
+                .withUserConfiguration(RedisDeploymentConfiguration.class)
                 .withInitializer(context -> context.getEnvironment().getPropertySources().addLast(settings))
                 .run(context -> {
                     assertNull(context.getStartupFailure());

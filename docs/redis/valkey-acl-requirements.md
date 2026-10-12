@@ -1,6 +1,6 @@
 # 인프라 전달용 Valkey 권한과 연결 설정
 
-현재 검증은 로컬 Valkey 8에서 수행했다. 배포 Valkey 엔드포인트·TLS·인증 설정은 아직 없으므로 배포 검증 완료를 의미하지 않는다.
+현재 데이터 명령·ACL 검증은 로컬 Valkey 8에서 수행했다. 이후 인프라의 Serverless 엔드포인트·TLS·IAM 설정을 전달받아 연결 코드를 보완했다. 실제 인스턴스의 배포 연결 검증 완료를 의미하지 않는다. [IAM 연결](iam-connection.md)을 참고한다.
 
 2026-10-12 로컬 ACL 검증과 기본 Spring 연결 검증 2개가 모두 통과했다. 임시 ACL 사용자의 삭제 응답도 확인했다. 운영 코드 변경은 없었다.
 
@@ -29,17 +29,19 @@
 
 로컬은 위 명령만 허용한 사용자로 Lettuce 연결과 운영 저장소 코드를 검증했다. 이 표는 실제 허용해 시험한 목록이며, 모든 연결 명령이 매번 실행되거나 반드시 필요하다는 뜻은 아니다. 배포 서비스의 명령 지원과 ACL 허용은 실제 연결에서 확인해야 한다. `TTL`·`PTTL`은 검증·관찰 명령이다.
 
+배포의 클러스터 연결에는 **`CLUSTER NODES`와 `INFO`도 확인해야 한다.** 현재 Lettuce 7.5.2의 토폴로지 조회·갱신 코드가 두 명령을 사용한다. 기존 단일 노드 로컬 ACL 시험에 포함한 명령은 아니며, 배포 사용자의 추가 권한으로 인프라에 전달한다. 전체 `CLUSTER` 관리 권한이나 `+@all`을 요구하는 것은 아니다. AWS는 Serverless에서 가상 클러스터 정보를 반환하는 `CLUSTER NODES`를 지원한다고 안내한다. [AWS 지원 명령](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/SupportedCommands.html)
+
 `PSUBSCRIBE`, `KEYS`, 애플리케이션 사용자의 ACL 관리는 허용하지 않았다. 코드의 Lua 스크립트와 개별 채널 사용은 이 제한 안에서 통과했다. 실제 접수 수요 키의 `{accepting}` 해시 태그는 유지해야 한다. Cluster 슬롯·Serverless 서비스 제약은 로컬 단일 노드 결과만으로 검증했다고 볼 수 없다.
 
 ## 필요한 배포 정보
 
 - 엔드포인트·포트와 BE에서 접근 가능한 네트워크 경로
 - TLS 사용 여부와 인증서 신뢰 설정
-- ACL 사용자/비밀번호 인증인지 IAM 인증인지
+- 인프라에서 선택한 IAM 사용자 설정과 캐시·사용자에 대한 인스턴스 접속 권한
 - 사용자명과 비밀번호의 비밀 관리·주입 방식
 - 키·채널 범위 및 명령 ACL의 실제 설정
 
-비밀번호 원문을 문서·Git·채팅에 기록하지 않는다. 사용자/비밀번호 방식은 `REDIS_HOST`, `REDIS_PORT`, `REDIS_USERNAME`, `REDIS_PASSWORD`, `REDIS_SSL_ENABLED`로 주입한다. IAM 인증이면 현재 비밀번호 설정 방식과 별도로 토큰 갱신 지원이 필요하다.
+비밀번호 원문을 문서·Git·채팅에 기록하지 않는다. 사용자/비밀번호 방식은 캐시 이름을 비운 상태에서 `REDIS_HOST`, `REDIS_PORT`, `REDIS_USERNAME`, `REDIS_PASSWORD`, `REDIS_SSL`로 주입한다. 현재 배포 IAM 방식은 `REDIS_CLUSTER_MODE=true`, `AWS_REGION`, `ELASTICACHE_CACHE_NAME`을 추가하며 고정 비밀번호 대신 인스턴스 자격으로 토큰을 생성·갱신한다.
 
 현재 로컬 검증은 공통 BE 권한 범위다. 일반 BE의 키움 토큰 사용은 애플리케이션의 담당 역할 검사로 차단한다. 역할별 ACL 사용자 분리는 이번 단계에서 적용하지 않았다.
 

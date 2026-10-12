@@ -14,7 +14,7 @@ spring:
       repositories:
         enabled: false
       ssl:
-        enabled: ${REDIS_SSL_ENABLED:false}
+        enabled: ${REDIS_SSL:false}
   datasource:
     url: ${SPRING_DATASOURCE_URL}
     username: ${MYSQL_USER}

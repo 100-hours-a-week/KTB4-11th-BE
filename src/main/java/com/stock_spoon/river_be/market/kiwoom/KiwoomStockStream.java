@@ -335,7 +335,7 @@ public class KiwoomStockStream implements com.stock_spoon.river_be.market.Market
     private static BigDecimal parseDecimal(String code, String type, JsonNode values, int field, String name) {
         JsonNode value = values.path(Integer.toString(field));
         try {
-            return new BigDecimal(value.asText());
+            return new BigDecimal(value.asText().strip());
         } catch (NumberFormatException error) {
             logNumberFailure(code, type, field, name, value, "BigDecimal", error);
             throw error;
@@ -345,7 +345,7 @@ public class KiwoomStockStream implements com.stock_spoon.river_be.market.Market
     private static long parseQuantity(String code, JsonNode values, int field, String name) {
         JsonNode value = values.path(Integer.toString(field));
         try {
-            return Long.parseLong(value.asText());
+            return Long.parseLong(value.asText().strip());
         } catch (NumberFormatException error) {
             logNumberFailure(code, "0D", field, name, value, "long", error);
             throw error;

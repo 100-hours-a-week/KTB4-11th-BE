@@ -474,6 +474,22 @@ class KiwoomStockStreamTests {
     }
 
     @Test
+    void acceptsWhitespaceAroundPriceAndOrderBookNumbers() {
+        subscribe();
+        receive(trade("005930", "0B", " -70000 ", " -100 ", " -0.14 ", "100000"));
+        var price = stream.latest("005930").orElseThrow();
+        assertThat(price.currentPrice()).isEqualByComparingTo("70000");
+        assertThat(price.change()).isEqualByComparingTo("-100");
+        assertThat(price.changeRate()).isEqualByComparingTo("-0.14");
+        receive(book("005930", " 70100 ", " 12 "));
+        var book = stream.latestOrderBook("005930").orElseThrow();
+        assertThat(book.asks().getFirst().price()).isEqualByComparingTo("70100");
+        assertThat(book.asks().getFirst().quantity()).isEqualTo(12);
+        assertThat(stream.state()).isEqualTo(KiwoomStockStream.State.SUBSCRIBED);
+        verify(sockets.getLast(), never()).abort();
+    }
+
+    @Test
     void logsNumericFailureContextAndPreservesDisconnectBehavior() {
         var logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(KiwoomStockStream.class);
         var appender = new ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent>();
@@ -491,7 +507,7 @@ class KiwoomStockStreamTests {
                         case "missing" -> values.remove(field);
                         case "null" -> values.put(field, null);
                         case "empty" -> values.put(field, "");
-                        case "space" -> values.put(field, " 4.9 ");
+                        case "space" -> values.put(field, "   ");
                         case "comma" -> values.put(field, "70,000");
                     }
                     appender.list.clear();
@@ -503,7 +519,7 @@ class KiwoomStockStreamTests {
                                 "messageType=0B", "field=" + field + " ", "targetType=BigDecimal",
                                 "valueState=" + (value.equals("missing") || value.equals("null") ? value : "present"));
                         if (value.equals("empty")) assertThat(message).contains("rawValue=\"\"");
-                        if (value.equals("space")) assertThat(message).contains("rawValue=\" 4.9 \"");
+                        if (value.equals("space")) assertThat(message).contains("rawValue=\"   \"");
                     });
                     assertThat(stream.state()).isEqualTo(KiwoomStockStream.State.DISCONNECTED);
                     assertThat(stream.latestOrderBook("005930")).isEmpty();

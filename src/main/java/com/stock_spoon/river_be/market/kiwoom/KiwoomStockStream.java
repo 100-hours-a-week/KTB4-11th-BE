@@ -1,6 +1,7 @@
 package com.stock_spoon.river_be.market.kiwoom;
 
 import jakarta.annotation.PreDestroy;
+import com.stock_spoon.river_be.market.QuoteStore;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -27,7 +28,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /** 서버 내부 시세 구독. 전체 키움 메시지·인증 정보는 기록하지 않고, 숫자 변환 실패값만 제한적으로 기록한다. */
-public class KiwoomStockStream {
+public class KiwoomStockStream implements com.stock_spoon.river_be.market.MarketStream {
     private static final Logger log = LoggerFactory.getLogger(KiwoomStockStream.class);
     private static final URI URL = URI.create("wss://api.kiwoom.com:10000/api/dostk/websocket");
     private static final JsonMapper JSON = JsonMapper.builder().build();
@@ -40,12 +41,21 @@ public class KiwoomStockStream {
     private final Set<String> symbols = new HashSet<>();
     private final Set<String> registered = new HashSet<>();
     private final Map<String, CompletableFuture<Void>> registrations = new HashMap<>();
-    private final Map<String, StockPrice> prices = new HashMap<>();
-    private final Map<String, OrderBook> books = new HashMap<>();
+    private final QuoteStore quotes;
     private java.util.function.Consumer<StockPrice> priceListener = ignored -> {};
     private Session session;
     private State state;
     private boolean stopped;
+    private String collectorId = "standalone";
+    private java.util.function.BooleanSupplier collectorCheck = () -> true;
+
+    public synchronized void setCollectorCheck(java.util.function.BooleanSupplier check) {
+        collectorCheck = java.util.Objects.requireNonNull(check);
+    }
+
+    public synchronized void setCollectorId(String collectorId) {
+        this.collectorId = java.util.Objects.requireNonNull(collectorId);
+    }
 
     public KiwoomStockStream(KiwoomTokenProvider tokens, boolean enabled, List<String> symbols) {
         this(tokens, enabled, symbols,
@@ -53,9 +63,22 @@ public class KiwoomStockStream {
                 Clock.systemUTC());
     }
 
+    public KiwoomStockStream(KiwoomTokenProvider tokens, boolean enabled, List<String> symbols,
+            QuoteStore quotes) {
+        this(tokens, enabled, symbols,
+                HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build(),
+                Clock.systemUTC(), quotes);
+    }
+
     KiwoomStockStream(KiwoomTokenProvider tokens, boolean enabled, List<String> symbols,
             HttpClient http, Clock clock) {
+        this(tokens, enabled, symbols, http, clock, new LocalQuotes());
+    }
+
+    KiwoomStockStream(KiwoomTokenProvider tokens, boolean enabled, List<String> symbols,
+            HttpClient http, Clock clock, QuoteStore quotes) {
         this.tokens = tokens;
+        this.quotes = java.util.Objects.requireNonNull(quotes);
         this.enabled = enabled;
         this.symbols.addAll(symbols.stream().map(String::trim).filter(s -> !s.isEmpty()).toList());
         // 첫 단계는 KRX 보통 종목코드만 허용한다. NXT/SOR는 별도 합의 후 확장한다.
@@ -81,10 +104,12 @@ public class KiwoomStockStream {
         if (desired.stream().anyMatch(s -> s == null || !s.matches("[0-9A-Z]{6}"))) {
             throw new IllegalArgumentException("키움 구독 종목코드를 확인하세요.");
         }
+        if (!enabled || stopped || !collectorCheck.getAsBoolean()) return;
+        for (String previous : symbols) {
+            if (!desired.contains(previous)) quotes.remove(previous);
+        }
         symbols.clear();
         symbols.addAll(desired);
-        prices.keySet().retainAll(desired);
-        books.keySet().retainAll(desired);
         registrations.entrySet().removeIf(entry -> {
             if (desired.contains(entry.getKey())) return false;
             entry.getValue().completeExceptionally(new IllegalStateException("구독 수요가 종료되었습니다."));
@@ -105,8 +130,7 @@ public class KiwoomStockStream {
         if (idle == null) return;
         session = null;
         registered.clear();
-        prices.clear();
-        books.clear();
+        clearQuotes();
         state = stopped ? State.STOPPED : State.DISCONNECTED;
         log.info("event=kiwoom_stream_idle_closed");
         idle.token = null;
@@ -124,7 +148,7 @@ public class KiwoomStockStream {
     }
 
     public synchronized CompletableFuture<Void> whenSubscribed(String symbol) {
-        if (!enabled || stopped || !symbols.contains(symbol)) {
+        if (!enabled || stopped || !collectorCheck.getAsBoolean() || !symbols.contains(symbol)) {
             return CompletableFuture.failedFuture(new IllegalStateException("시세 구독을 사용할 수 없습니다."));
         }
         if (isRegistered(symbol)) return CompletableFuture.completedFuture(null);
@@ -132,7 +156,7 @@ public class KiwoomStockStream {
     }
 
     private boolean isRegistered(String symbol) {
-        return session != null && session.authenticated && registered.contains(symbol)
+        return session != null && collectorCheck.getAsBoolean() && session.authenticated && registered.contains(symbol)
                 && symbols.contains(symbol)
                 && !("REMOVE".equals(session.control) && session.controlSymbols.contains(symbol))
                 && clock.instant().isBefore(session.lastMessage.plusSeconds(90));
@@ -151,6 +175,8 @@ public class KiwoomStockStream {
         }
         session.control = removed.isEmpty() ? "REG" : "REMOVE";
         session.controlSymbols = Set.copyOf(removed.isEmpty() ? added : removed);
+        // 신규 연결·재등록에서는 이전 연결의 시세를 재사용하지 않는다.
+        if ("REG".equals(session.control)) session.controlSymbols.forEach(quotes::remove);
         session.controlStartedAt = clock.instant();
         state = State.SUBSCRIBING;
         var packet = new HashMap<String, Object>();
@@ -167,7 +193,7 @@ public class KiwoomStockStream {
         if (!isRegistered(symbol)) {
             return Optional.empty();
         }
-        return Optional.ofNullable(prices.get(symbol));
+        return quotes.latestPrice(symbol);
     }
 
     /** 호가 시각/수신 시각은 별도로 확인해야 한다. 연결 생존만으로 체결 가능성을 보장하지 않는다. */
@@ -175,7 +201,7 @@ public class KiwoomStockStream {
         if (!isRegistered(symbol)) {
             return Optional.empty();
         }
-        return Optional.ofNullable(books.get(symbol));
+        return quotes.latestOrderBook(symbol);
     }
 
     @Scheduled(fixedDelay = 5000)
@@ -183,6 +209,10 @@ public class KiwoomStockStream {
         final Session next;
         synchronized (this) {
             if (!enabled || stopped) return;
+            if (!collectorCheck.getAsBoolean()) {
+                if (session != null) disconnect(session);
+                return;
+            }
             if (symbols.isEmpty()) return;
             Instant now = clock.instant();
             if (session != null) {
@@ -206,7 +236,10 @@ public class KiwoomStockStream {
             // 토큰 HTTP 요청 중에도 주문의 구독 대기 시간과 시세 수신이 막히지 않게 한다.
             String token = tokens.accessToken();
             synchronized (this) {
-                if (session != next || stopped) return;
+                if (session != next || stopped || !collectorCheck.getAsBoolean()) {
+                    disconnect(next);
+                    return;
+                }
                 next.token = token;
                 http.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(5))
                     .buildAsync(URL, next).whenComplete((socket, error) -> {
@@ -235,8 +268,7 @@ public class KiwoomStockStream {
         registrations.values().forEach(future -> future.completeExceptionally(
                 new IllegalStateException("키움 시세 구독 연결이 종료되었습니다.")));
         registrations.clear();
-        prices.clear();
-        books.clear();
+        clearQuotes();
         state = stopped ? State.STOPPED : State.DISCONNECTED;
         failed.token = null;
         if (failed.socket != null) {
@@ -253,8 +285,7 @@ public class KiwoomStockStream {
         if (session != null) {
             disconnect(session);
         }
-        prices.clear();
-        books.clear();
+        clearQuotes();
         state = State.STOPPED;
         registrations.values().forEach(future -> future.completeExceptionally(
                 new IllegalStateException("시세 구독이 종료되었습니다.")));
@@ -263,6 +294,30 @@ public class KiwoomStockStream {
     }
 
     public enum State { DISABLED, DISCONNECTED, CONNECTING, AUTHENTICATING, SUBSCRIBING, SUBSCRIBED, STOPPED }
+
+    private void clearQuotes() {
+        if (!enabled || !collectorCheck.getAsBoolean()) return;
+        for (String symbol : symbols) {
+            try {
+                quotes.remove(symbol);
+            } catch (RuntimeException error) {
+                // Redis 장애여도 소켓 종료와 로컬 등록 무효화는 끝까지 수행한다.
+                log.warn("event=kiwoom_quote_clear_failed stockCode={} causeType={}",
+                        symbol, error.getClass().getSimpleName());
+            }
+        }
+    }
+
+    /** Spring 운영 Bean은 Redis를 주입한다. 단독 스트림 테스트는 외부 저장소 없이 실행한다. */
+    private static final class LocalQuotes implements QuoteStore {
+        private final Map<String, StockPrice> prices = new HashMap<>();
+        private final Map<String, OrderBook> books = new HashMap<>();
+        public void savePrice(StockPrice price) { prices.put(price.stockCode(), price); }
+        public void saveOrderBook(OrderBook book) { books.put(book.stockCode(), book); }
+        public Optional<StockPrice> latestPrice(String code) { return Optional.ofNullable(prices.get(code)); }
+        public Optional<OrderBook> latestOrderBook(String code) { return Optional.ofNullable(books.get(code)); }
+        public void remove(String code) { prices.remove(code); books.remove(code); }
+    }
 
     public record StockPrice(String stockCode, BigDecimal currentPrice, BigDecimal change,
             BigDecimal changeRate, LocalTime tradeTime, Instant receivedAt) {}
@@ -326,6 +381,7 @@ public class KiwoomStockStream {
     }
 
     private final class Session implements WebSocket.Listener {
+        private final QuoteStore.Source source = new QuoteStore.Source(collectorId, java.util.UUID.randomUUID().toString());
         private String token;
         private final Instant startedAt;
         private Instant lastMessage;
@@ -346,7 +402,7 @@ public class KiwoomStockStream {
         public void onOpen(WebSocket socket) {
             synchronized (KiwoomStockStream.this) {
                 this.socket = socket;
-                if (session != this || stopped) {
+                if (session != this || stopped || !collectorCheck.getAsBoolean()) {
                     socket.abort();
                     token = null;
                     return;
@@ -375,6 +431,10 @@ public class KiwoomStockStream {
                 if (session != this || stopped) {
                     return null;
                 }
+                if (!collectorCheck.getAsBoolean()) {
+                    disconnect(this);
+                    return null;
+                }
                 try {
                     if (fragments.length() + data.length() > 1_048_576) {
                         throw new IllegalArgumentException();
@@ -385,6 +445,11 @@ public class KiwoomStockStream {
                         fragments.setLength(0);
                         accept(message, receivedPrices);
                         lastMessage = clock.instant();
+                        if (session == this) {
+                            for (String code : registered) {
+                                if (isRegistered(code)) quotes.register(code, source, lastMessage);
+                            }
+                        }
                     }
                 } catch (RuntimeException error) {
                     log.warn("event=kiwoom_stream_protocol_failed causeType={}", error.getClass().getSimpleName());
@@ -394,6 +459,7 @@ public class KiwoomStockStream {
             }
             // ponytail: v1은 수신 순서대로 동기 처리한다. 처리량이 늘면 크기를 제한한 순차 큐로 분리한다.
             for (StockPrice price : receivedPrices) {
+                if (!collectorCheck.getAsBoolean()) break;
                 try {
                     priceListener.accept(price);
                 } catch (RuntimeException error) {
@@ -456,8 +522,8 @@ public class KiwoomStockStream {
                         }
                         JsonNode values = entry.path("values");
                         if ("0D".equals(type)) {
-                            books.put(code, new OrderBook(code, levels(code, values, 41, 61), levels(code, values, 51, 71),
-                                    LocalTime.parse(values.path("21").asText(), TIME), clock.instant()));
+                            quotes.saveOrderBook(new OrderBook(code, levels(code, values, 41, 61), levels(code, values, 51, 71),
+                                    LocalTime.parse(values.path("21").asText(), TIME), clock.instant()), source);
                             continue;
                         }
                         if (!"0B".equals(type)) {
@@ -472,7 +538,7 @@ public class KiwoomStockStream {
                                 parseDecimal(code, type, values, 11, "change"),
                                 parseDecimal(code, type, values, 12, "changeRate"),
                                 LocalTime.parse(values.path("20").asText(), TIME), clock.instant());
-                        prices.put(code, received);
+                        quotes.savePrice(received, source);
                         receivedPrices.add(received);
                     }
                 }

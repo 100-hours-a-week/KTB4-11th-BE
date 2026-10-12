@@ -1,6 +1,6 @@
 package com.stock_spoon.river_be.order;
 
-import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream;
+import com.stock_spoon.river_be.market.MarketStream;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -23,12 +23,12 @@ import org.springframework.context.event.EventListener;
 public class OrderSubscriptionService {
     private static final Logger log = LoggerFactory.getLogger(OrderSubscriptionService.class);
     private final OrderRepository orders;
-    private final KiwoomStockStream stream;
+    private final MarketStream stream;
     private final OrderService orderService;
-    // ponytail: v1은 단일 BE. 여러 인스턴스에서는 구독 담당과 시세 공유를 먼저 설계한다.
-    private final Map<String, Integer> accepting = new HashMap<>();
+    // 이 서버에서 진행 중인 요청을 추적한다. 다른 서버와 공유할 수요는 Redis에 별도 저장한다.
+    private final Map<String, String> accepting = new HashMap<>();
 
-    public OrderSubscriptionService(OrderRepository orders, KiwoomStockStream stream,
+    public OrderSubscriptionService(OrderRepository orders, MarketStream stream,
             OrderService orderService) {
         this.orders = orders;
         this.stream = stream;
@@ -40,8 +40,15 @@ public class OrderSubscriptionService {
     }
 
     Order create(String stockCode, Supplier<Order> saveOrder, Duration timeout) {
+        String requestId = java.util.UUID.randomUUID().toString();
         try {
-            retain(stockCode).get(timeout.toNanos(), TimeUnit.NANOSECONDS);
+            retain(requestId, stockCode).get(timeout.toNanos(), TimeUnit.NANOSECONDS);
+            try {
+                stream.assertRequest(requestId, stockCode);
+                stream.assertAvailable(stockCode);
+            } catch (RuntimeException error) {
+                throw unavailable();
+            }
             // 별도 OrderService 프록시의 트랜잭션이 커밋된 뒤에 임시 수요를 해제한다.
             // 위 구독 대기가 성공한 뒤 Controller에서 전달한 람다를 실행한다.
             // Supplier<Order>의 get()은 DB 조회가 아니라 전달받은 작업을 실행하고 Order를 받는 호출이다.
@@ -63,19 +70,41 @@ public class OrderSubscriptionService {
             log.warn("event=order_subscription_failed stockCode={} causeType={}", stockCode, error.getClass().getSimpleName());
             throw unavailable();
         } finally {
-            release(stockCode);
+            release(requestId, stockCode);
         }
     }
 
-    private synchronized CompletableFuture<Void> retain(String stockCode) {
-        accepting.merge(stockCode, 1, Integer::sum);
-        synchronizeSymbols();
-        return stream.whenSubscribed(stockCode);
+    private synchronized CompletableFuture<Void> retain(String id, String stockCode) {
+        try {
+            stream.retainRequest(id, stockCode);
+            accepting.put(id, stockCode);
+            synchronizeSymbols();
+            return stream.whenSubscribed(stockCode);
+        } catch (RuntimeException error) {
+            throw unavailable();
+        }
     }
 
-    private synchronized void release(String stockCode) {
-        accepting.computeIfPresent(stockCode, (ignored, count) -> count == 1 ? null : count - 1);
+    private synchronized void release(String id, String stockCode) {
+        accepting.remove(id);
         refresh();
+        try {
+            stream.releaseRequest(id, stockCode);
+        } catch (RuntimeException error) {
+            // 커밋된 주문 응답을 정리 실패로 바꾸지 않는다. 임시 수요는 TTL로 정리된다.
+            log.warn("event=order_demand_release_failed causeType={}", error.getClass().getSimpleName());
+        }
+    }
+
+    @Scheduled(fixedDelay = 10000)
+    public synchronized void renewAcceptingRequests() {
+        accepting.forEach((id, code) -> {
+            try {
+                stream.renewRequest(id, code);
+            } catch (RuntimeException error) {
+                log.warn("event=order_demand_renew_failed stockCode={} causeType={}", code, error.getClass().getSimpleName());
+            }
+        });
     }
 
     /** 시작 시 복구 및 취소/체결 이후 누락된 수요 변경을 기존 5초 유지 주기에 맞춰 반영한다. */
@@ -97,7 +126,7 @@ public class OrderSubscriptionService {
 
     private void synchronizeSymbols() {
         var desired = new HashSet<>(orders.findStockCodesByStatus(Order.Status.PENDING));
-        desired.addAll(accepting.keySet());
+        desired.addAll(accepting.values());
         stream.updateSymbols(desired);
     }
 

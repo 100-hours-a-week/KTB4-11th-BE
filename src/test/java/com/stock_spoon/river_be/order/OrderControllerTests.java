@@ -76,6 +76,8 @@ class OrderControllerTests {
 
     @BeforeEach
     void setup() {
+        org.mockito.Mockito.doCallRealMethod().when(stream).latestQuote(anyString());
+        org.mockito.Mockito.doCallRealMethod().when(stream).latestBookQuote(anyString());
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
         user = users.save(new User("AI 주문 사용자"));
         account = accounts.save(new Account(user, "자동매매 계좌", 1_000_000));
@@ -285,6 +287,22 @@ class OrderControllerTests {
         return mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
                 .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
                 .content(marketBody(quantity, price)));
+    }
+
+    @Test
+    void marketBuyRejectsPreviousSessionBookWithoutSaving() throws Exception {
+        marketBook(Instant.parse("2026-10-01T01:00:00Z"), java.time.LocalTime.of(10, 0));
+        var source = new com.stock_spoon.river_be.market.QuoteStore.Source("owner", "previous-session");
+        var book = stream.latestOrderBook("005930").orElseThrow();
+        org.mockito.Mockito.doReturn(java.util.Optional.of(
+                new com.stock_spoon.river_be.market.RedisQuoteStore.QuoteEvent("005930", "orderbook",
+                        book.receivedAt(), source, null, book))).when(stream).latestBookQuote("005930");
+        org.mockito.Mockito.doThrow(new IllegalStateException("previous session"))
+                .when(stream).assertSource("005930", source);
+        marketRequest(1, "null").andExpect(status().isServiceUnavailable());
+        assertThat(orders.count()).isZero();
+        assertThat(executions.count()).isZero();
+        assertThat(account.getCashBalance()).isEqualTo(1000000);
     }
 
     @Test

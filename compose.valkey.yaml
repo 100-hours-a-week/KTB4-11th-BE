@@ -1,0 +1,11 @@
+services:
+  valkey:
+    image: ${STOCK_SPOON_VALKEY_IMAGE:-valkey/valkey:8-alpine}
+    ports:
+      - "127.0.0.1:${STOCK_SPOON_VALKEY_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+

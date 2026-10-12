@@ -77,6 +77,44 @@ class MarketBuyTransactionTests {
     }
 
     @Test
+    void sourceLostWhileWaitingForRealAccountLockLeavesAssetsUnchanged() throws Exception {
+        var account = account();
+        var locked = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var started = new CountDownLatch(1);
+        var valid = new java.util.concurrent.atomic.AtomicBoolean(true);
+        Runnable validate = () -> { if (!valid.get()) throw new IllegalStateException("old session"); };
+        validate.run();
+        var request = new OrderCreateRequest("005930", "buy", "market", null, 1L, "근거", null, List.of(), 100.0, null);
+        long before = executions.count();
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var holder = pool.submit(() -> new TransactionTemplate(transactions).execute(status -> {
+                accounts.findLockedById(account.getId()).orElseThrow();
+                locked.countDown();
+                try { if (!release.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("test lock timeout"); }
+                catch (InterruptedException error) { Thread.currentThread().interrupt(); throw new IllegalStateException(error); }
+                return null;
+            }));
+            try {
+                assertThat(locked.await(1, TimeUnit.SECONDS)).isTrue();
+                var waiting = pool.submit(() -> {
+                    started.countDown();
+                    return execution.executeMarket(account.getUser().getId(), account.getId(), request,
+                            book(NOW, LocalTime.of(10, 0)), java.util.Map.of(), validate);
+                });
+                assertThat(started.await(1, TimeUnit.SECONDS)).isTrue();
+                valid.set(false);
+                release.countDown();
+                holder.get(2, TimeUnit.SECONDS);
+                assertThatThrownBy(() -> waiting.get(2, TimeUnit.SECONDS))
+                        .hasRootCauseInstanceOf(IllegalStateException.class).hasRootCauseMessage("old session");
+            } finally { release.countDown(); }
+        }
+        unchanged(account);
+        assertThat(executions.count()).isEqualTo(before);
+    }
+
+    @Test
     void laterExecutionSaveFailureRollsBackOrderAllExecutionsAndAssets() {
         var account = account();
         long before = executions.count();

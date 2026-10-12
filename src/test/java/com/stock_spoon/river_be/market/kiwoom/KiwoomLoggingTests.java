@@ -22,7 +22,7 @@ class KiwoomLoggingTests {
         var tokens = mock(KiwoomTokenProvider.class);
         when(tokens.accessToken()).thenReturn("secret-token");
         var client = new KiwoomMarketClient(builder.build(), tokens);
-        Logger logger = (Logger) LoggerFactory.getLogger(KiwoomMarketClient.class);
+        Logger logger = (Logger) LoggerFactory.getLogger(DirectKiwoomRestTransport.class);
         var logs = new ListAppender<ILoggingEvent>();
         logs.start();
         logger.addAppender(logs);

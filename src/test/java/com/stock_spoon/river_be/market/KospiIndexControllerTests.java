@@ -24,6 +24,7 @@ class KospiIndexControllerTests {
     @Autowired KospiIndexService service;
     @Autowired JwtTokenProvider tokens;
     @MockitoBean KiwoomMarketClient client;
+    @MockitoBean RedisKospiStore store;
 
     @Test
     void returnsCachedIndexWithoutCallingKiwoomForEachFrontendRequest() throws Exception {
@@ -37,10 +38,10 @@ class KospiIndexControllerTests {
                 .andExpect(jsonPath("$.code").value("MARKET_DATA_UNAVAILABLE"));
         verifyNoInteractions(client);
 
-        when(client.kospi()).thenReturn(new KospiIndex(new BigDecimal("2817.42"),
+        var fetchedAt = Instant.now().minusSeconds(1);
+        when(store.read(anyBoolean())).thenReturn(java.util.Optional.of(new KospiIndex(new BigDecimal("2817.42"),
                 new BigDecimal("-12.50"), new BigDecimal("-0.44"),
-                Instant.parse("2026-09-26T06:30:00Z")));
-        service.refresh();
+                fetchedAt)));
 
         for (int i = 0; i < 2; i++) {
             mvc.perform(get("/api/v1/market/indices/kospi").cookie(auth))
@@ -48,8 +49,19 @@ class KospiIndexControllerTests {
                     .andExpect(jsonPath("$.value").value(2817.42))
                     .andExpect(jsonPath("$.change").value(-12.50))
                     .andExpect(jsonPath("$.changeRate").value(-0.44))
-                    .andExpect(jsonPath("$.fetchedAt").value("2026-09-26T06:30:00Z"));
+                    .andExpect(jsonPath("$.fetchedAt").value(fetchedAt.toString()));
         }
-        verify(client, times(1)).kospi();
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void redisFailureReturnsUnavailableWithoutExternalFallback() throws Exception {
+        var mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
+        var auth = new Cookie("access_token", tokens.issue(1L).accessToken());
+        when(store.read(anyBoolean())).thenThrow(new IllegalStateException("private details"));
+        mvc.perform(get("/api/v1/market/indices/kospi").cookie(auth))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("MARKET_DATA_UNAVAILABLE"));
+        verifyNoInteractions(client);
     }
 }

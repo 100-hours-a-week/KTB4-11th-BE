@@ -13,7 +13,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 /**
- * 키움 API 호출에 사용할 액세스 토큰을 발급받고 BE 메모리에 보관하는 클래스.
+ * 키움 API 호출 토큰을 발급한다. 운영에서는 고정 담당만 Redis 캐시를 사용한다.
  * 호출 흐름: 키움 REST/웹소켓 사용 → accessToken() → 캐시 재사용 또는 새 토큰 발급.
  * 토큰과 APP KEY/SECRET은 사용자 응답이나 로그에 기록하지 않는다.
  * 발급 시점은 최초 사용 시점이며, 이 클래스 자체에는 주기적으로 갱신하는 스케줄러가 없다.
@@ -37,29 +37,46 @@ public class KiwoomTokenProvider {
     private final String appSecret;
     // 현재 시각을 제공한다. 운영에서는 실제 시계, 테스트에서는 고정 시계를 전달할 수 있다.
     private final Clock clock;
-    // 이 BE 인스턴스 메모리에 저장된 액세스 토큰. 최초 생성/재시작 시 null이다.
+    private final RedisKiwoomTokenStore shared;
+    private final java.util.function.BooleanSupplier collector;
+    // 단독 테스트용 로컬 캐시. 운영 Redis 경로에서는 이 필드를 사용하지 않는다.
     private String token;
     // 토큰의 절대 만료 시각. EPOCH(1970년)은 아직 유효한 토큰이 없다는 초기값이다.
     private Instant expiresAt = Instant.EPOCH;
 
     /** 의존성을 보관한다. 생성자에서 실제 토큰 발급 요청을 보내지는 않는다. */
     public KiwoomTokenProvider(RestClient client, String appKey, String appSecret, Clock clock) {
+        this(client, appKey, appSecret, clock, null, () -> true);
+    }
+
+    public KiwoomTokenProvider(RestClient client, String appKey, String appSecret, Clock clock,
+            RedisKiwoomTokenStore shared, java.util.function.BooleanSupplier collector) {
         this.client = client;
         this.appKey = appKey;
         this.appSecret = appSecret;
         this.clock = clock;
+        this.shared = shared;
+        this.collector = collector;
     }
 
-    // ponytail: 단일 서버 메모리 캐시. 여러 서버 운영 시 공유 저장소와 분산 잠금을 검토한다.
+    // 단독 외부 API 테스트 생성자는 로컬 캐시를 사용하며 운영 빈은 Redis를 사용한다.
     /**
      * API 호출에 사용할 토큰을 반환한다. 유효한 캐시가 없으면 동기적으로 발급받는다.
      * synchronized: 같은 인스턴스의 발급·폐기가 동시에 실행되지 않도록 잠근다.
-     * 여러 EC2/BE 인스턴스 사이의 동시 발급까지 막는 잠금은 아니다.
+     * 운영에서는 Redis 담당 임대로 한 프로세스만 발급하고 이 잠금은 그 안의 중복 발급을 막는다.
      * 발급 실패는 호출한 서비스로 전달되어 해당 API의 실패 응답으로 이어질 수 있다.
      */
     public synchronized String accessToken() {
+        assertCollector();
+        if (shared != null) {
+            var cached = shared.read();
+            if (cached.isPresent() && clock.instant().isBefore(cached.get().expiresAt().minusSeconds(60))) {
+                assertCollector();
+                return cached.get().value();
+            }
+        }
         // 만료 60초 전까지 재사용한다. 정확히 60초 남은 시점부터는 새 발급이 필요하다.
-        if (token != null && clock.instant().isBefore(expiresAt.minusSeconds(60))) {
+        if (shared == null && token != null && clock.instant().isBefore(expiresAt.minusSeconds(60))) {
             // 이 경로에서는 키움 서버에 토큰 발급 요청을 하지 않는다.
             return token;
         }
@@ -74,6 +91,7 @@ public class KiwoomTokenProvider {
         log.debug("event=kiwoom_token_refresh_started");
         // 발급 응답의 return_code, token, token_type, expires_dt 등을 담는다.
         Map<String, Object> response;
+        assertCollector();
         try {
             // 키움 토큰 발급 API에 POST 요청을 구성한다.
             response = client.post().uri("/oauth2/token")
@@ -136,11 +154,17 @@ public class KiwoomTokenProvider {
             throw invalidResponse();
         }
         // 모든 검증이 끝난 뒤 토큰과 만료 시각을 함께 교체한다. 앞에서 실패하면 기존 값은 유지된다.
-        token = newToken;
-        expiresAt = newExpiry;
+        assertCollector();
+        if (shared != null) {
+            shared.save(new RedisKiwoomTokenStore.Token(newToken, newExpiry), clock.instant());
+            assertCollector();
+        } else {
+            token = newToken;
+            expiresAt = newExpiry;
+        }
         log.info("event=kiwoom_token_refreshed elapsedMs={}", (System.nanoTime() - started) / 1_000_000);
         // 호출자는 이 문자열을 Authorization: Bearer <토큰> 또는 웹소켓 LOGIN에 사용한다.
-        return token;
+        return newToken;
     }
 
     // REST 8005 또는 WebSocket LOGIN에서 거부된 토큰만 폐기한다. 이미 갱신된 토큰은 유지한다.
@@ -150,6 +174,11 @@ public class KiwoomTokenProvider {
      * 이 메서드 자체는 새 발급 요청을 보내지 않는다.
      */
     synchronized void invalidate(String rejectedToken) {
+        assertCollector();
+        if (shared != null) {
+            shared.invalidate(rejectedToken);
+            return;
+        }
         // 오래된 요청의 실패가 다른 요청에서 이미 갱신한 새 토큰을 삭제하지 않도록 비교한다.
         if (token != null && token.equals(rejectedToken)) {
             log.warn("event=kiwoom_token_invalidated");
@@ -165,5 +194,9 @@ public class KiwoomTokenProvider {
         log.warn("event=kiwoom_token_response_invalid");
         return new IllegalStateException(
                 "키움 토큰 발급 응답이 유효하지 않습니다. 앱 키, 시크릿, 허용 IP 및 서버 시간을 확인하세요.");
+    }
+
+    private void assertCollector() {
+        if (!collector.getAsBoolean()) throw new IllegalStateException("키움 수집 담당 서버를 사용할 수 없습니다.");
     }
 }

@@ -46,3 +46,7 @@ kiwoom:
     secret: ${KIWOOM_COLLECTOR_SECRET:}
   stream:
     enabled: ${KIWOOM_STREAM_ENABLED:false}
+
+execution:
+  url: ${EXECUTION_SERVER_URL:}
+  secret: ${EXECUTION_INTERNAL_SECRET:}

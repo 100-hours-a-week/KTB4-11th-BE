@@ -1,0 +1,10 @@
+server:
+  port: ${SERVER_PORT:8081}
+spring:
+  application:
+    name: stockspoon-execution
+kiwoom:
+  collector:
+    enabled: false
+  stream:
+    enabled: true

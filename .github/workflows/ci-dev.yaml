@@ -16,7 +16,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: be-dev-ci-${{ github.ref }}
@@ -58,3 +57,48 @@ jobs:
         with:
           name: spotbugs-report
           path: build/reports/spotbugs/
+
+  push-image:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ECR_REGION: us-east-1
+      ECR_REGISTRY: public.ecr.aws/g8x9p1p0
+      ECR_REPOSITORY: stockspoon-v2-backend
+      IMAGE_TAG: ${{ github.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_V2_DEV_ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ env.ECR_REGION }}
+
+      - name: Login to Public ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Build and push V2 backend image
+        run: |
+          set -Eeuo pipefail
+          IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+          docker build -t "$IMAGE_URI" .
+          docker push "$IMAGE_URI"
+
+  deploy-dev:
+    needs: push-image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/cd-dev.yaml
+    with:
+      image_tag: ${{ github.sha }}
+    secrets: inherit

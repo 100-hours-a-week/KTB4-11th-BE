@@ -1,5 +1,7 @@
 # 체결 Application 분리 및 DB 스키마 변경 인계
 
+처음 읽는 사람은 [구현 흐름과 변경 영역 설명](execution-server-guide.md)을 먼저 참고한다.
+
 ## 적용 범위
 
 같은 프로젝트에서 RiverBeApplication(BE)과 ExecutionApplication(체결)을 별도 프로세스로 실행한다. MySQL/Valkey를 공유하며 내부 HTTP로 통신한다. SQS는 이번 단계에 도입하지 않는다.

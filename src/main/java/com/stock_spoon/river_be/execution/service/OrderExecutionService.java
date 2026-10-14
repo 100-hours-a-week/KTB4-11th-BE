@@ -26,7 +26,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /** 시장가·지정가 전량 체결. 모든 자산 변경은 계좌 잠금 아래 한 트랜잭션으로 실행한다. */
-@org.springframework.context.annotation.Profile("!api")
 @Service
 public class OrderExecutionService {
     private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");

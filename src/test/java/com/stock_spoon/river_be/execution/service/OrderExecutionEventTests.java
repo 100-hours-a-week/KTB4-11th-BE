@@ -191,7 +191,7 @@ class OrderExecutionEventTests {
         assertThat(accounts.findById(goodAccount.getId()).orElseThrow().getCashBalance()).isEqualTo(931000);
         assertThat(orders.findById(goodOrder.getId()).orElseThrow().getStatus()).isEqualTo(Order.Status.EXECUTED);
         assertThat(executions.count()).isEqualTo(1);
-        assertThat(new com.stock_spoon.river_be.order.service.OrderQueryService(orders, executions).response(goodAccount.getId(), goodOrder.getId()).executions()).hasSize(1);
+        assertThat(listener.response(goodAccount.getId(), goodOrder.getId()).executions()).hasSize(1);
         verify(subscriptions, atLeastOnce()).refresh();
     }
 
@@ -206,7 +206,7 @@ class OrderExecutionEventTests {
         assertThat(executions.count()).isZero();
 
         events.publishEvent(price());
-        var response = new com.stock_spoon.river_be.order.service.OrderQueryService(orders, executions).response(account.getId(), order.getId());
+        var response = listener.response(account.getId(), order.getId());
         assertThat(response.orderStatus()).isEqualTo("executed");
         assertThat(response.reservedCash()).isZero();
         assertThat(response.executions()).hasSize(1);

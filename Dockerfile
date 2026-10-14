@@ -12,7 +12,7 @@ RUN --mount=type=cache,target=/root/.gradle ./gradlew dependencies --no-daemon
 
 COPY src ./src
 RUN --mount=type=cache,target=/root/.gradle ./gradlew bootJar --no-daemon \
-    && cp build/libs/river_be-0.0.1-SNAPSHOT.jar application.jar
+    && cp build/libs/*.jar application.jar
 
 FROM eclipse-temurin:21-jre-jammy AS runtime
 

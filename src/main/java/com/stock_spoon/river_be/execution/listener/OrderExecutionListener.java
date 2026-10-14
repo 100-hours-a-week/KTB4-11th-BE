@@ -17,7 +17,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /** 외부 시세와 주문 체결을 연결한다. 주문별 트랜잭션은 별도 서비스 프록시가 담당한다. */
-@org.springframework.context.annotation.Profile("!api")
 @Service
 public class OrderExecutionListener {
     private static final Logger log = LoggerFactory.getLogger(OrderExecutionListener.class);
@@ -44,12 +43,6 @@ public class OrderExecutionListener {
     /** 저장이 커밋된 뒤 연결 식별자를 유지한 최신 시세로 이 주문을 먼저 판단한다. */
     // [체결 진입 A] Controller가 저장 후 직접 호출한다. 현재가 확보 후 attempt()로 이어진다.
     public void orderCreated(Order order) {
-        orderCreated(order, true);
-    }
-    public void recover(Order order) {
-        orderCreated(order, false);
-    }
-    private void orderCreated(Order order, boolean refresh) {
         try {
             stream.assertAvailable(order.getStockCode());
             var latest = stream.latestQuote(order.getStockCode());
@@ -72,7 +65,7 @@ public class OrderExecutionListener {
         } catch (RuntimeException error) {
             log.warn("event=order_initial_price_failed orderId={} causeType={}", order.getId(), error.getClass().getSimpleName());
         } finally {
-            if (refresh) subscriptions.refresh();
+            subscriptions.refresh();
         }
     }
 
@@ -132,4 +125,10 @@ public class OrderExecutionListener {
         }
     }
 
+    @Transactional(readOnly = true)
+    // DB에서 주문·체결을 다시 읽고 응답 DTO로 옮긴다. Entity를 그대로 HTTP 응답에 노출하지 않는다.
+    public OrderCreateResponse response(long accountId, long orderId) {
+        var order = orders.findByIdAndAccountId(orderId, accountId).orElseThrow();
+        return OrderCreateResponse.from(order, executions.findForOrder(orderId));
+    }
 }

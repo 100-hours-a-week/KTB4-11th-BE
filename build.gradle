@@ -57,20 +57,3 @@ tasks.named('test') {
 	useJUnitPlatform()
 	systemProperty 'test.runtime.classpath', sourceSets.test.runtimeClasspath.asPath
 }
-
-bootJar {
-    mainClass = 'com.stock_spoon.river_be.RiverBeApplication'
-}
-bootRun {
-    mainClass = 'com.stock_spoon.river_be.RiverBeApplication'
-}
-tasks.register('executionBootJar', org.springframework.boot.gradle.tasks.bundling.BootJar) {
-    targetJavaVersion = JavaVersion.VERSION_21
-    mainClass = 'com.stock_spoon.river_be.execution.ExecutionApplication'
-    archiveClassifier = 'execution'
-    classpath = sourceSets.main.runtimeClasspath
-}
-tasks.register('executionBootRun', org.springframework.boot.gradle.tasks.run.BootRun) {
-    mainClass = 'com.stock_spoon.river_be.execution.ExecutionApplication'
-    classpath = sourceSets.main.runtimeClasspath
-}

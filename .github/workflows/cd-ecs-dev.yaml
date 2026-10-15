@@ -1,0 +1,154 @@
+name: Backend Dev CD (V2 ECS)
+
+# dev 이미지를 운영 ECS 클러스터의 backend 서비스(Service ASG)에 배포한다.
+# 인프라(환경변수·Secret·용량 등)는 Cloud 레포 ecs root가 관리하고, 이 워크플로는 이미지만 바꾼다.
+# 주의: V1 DB 사용 기간에는 이 서비스가 운영 DB(V1 MySQL)에 연결된다.
+
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        description: Backend image tag pushed by Backend Dev CI
+        required: true
+        type: string
+
+concurrency:
+  group: stockspoon-v2-prod-ecs-backend-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-26.04
+    # environment를 지정하면 OIDC sub가 environment:<이름>으로 바뀌어 배포 Role 신뢰 조건과 맞지 않는다.
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ap-northeast-2
+      ECS_CLUSTER: stockspoon-v2-prod-cluster
+      ECS_SERVICE: stockspoon-v2-prod-backend
+      TASK_FAMILY: stockspoon-v2-prod-backend
+      CONTAINER_NAME: backend
+      IMAGE_TAG: ${{ inputs.image_tag }}
+      ECR_REGISTRY: public.ecr.aws/g8x9p1p0
+      ECR_REPOSITORY: stockspoon-v2-backend
+    steps:
+      - name: Validate image tag
+        run: |
+          set -Eeuo pipefail
+          [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid image tag: $IMAGE_TAG" >&2; exit 1; }
+          echo "IMAGE=${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}" >> "$GITHUB_ENV"
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_V2_ECS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Terraform이 관리하는 최신 리비전을 기준으로 이미지만 바꾼다.
+      # (Terraform이 환경변수 등을 바꿔 등록한 리비전도 다음 배포에 반영된다)
+      - name: Register task definition revision
+        id: register
+        run: |
+          set -Eeuo pipefail
+          aws ecs describe-task-definition \
+            --task-definition "$TASK_FAMILY" \
+            --query taskDefinition > current.json
+
+          echo "Base revision: $(jq -r .taskDefinitionArn current.json)"
+
+          if [[ "$(jq --arg name "$CONTAINER_NAME" '[.containerDefinitions[] | select(.name == $name)] | length' current.json)" != "1" ]]; then
+            echo "Container '$CONTAINER_NAME' not found in $TASK_FAMILY" >&2
+            exit 1
+          fi
+
+          # describe 결과의 읽기 전용 필드는 register에서 받지 않으므로 제거한다.
+          jq --arg name "$CONTAINER_NAME" --arg image "$IMAGE" '
+            .containerDefinitions |= map(if .name == $name then .image = $image else . end)
+            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities,
+                  .registeredAt, .registeredBy, .deregisteredAt)
+          ' current.json > next.json
+
+          TASK_DEFINITION_ARN="$(aws ecs register-task-definition \
+            --cli-input-json file://next.json \
+            --query taskDefinition.taskDefinitionArn \
+            --output text)"
+
+          echo "Registered: $TASK_DEFINITION_ARN"
+          echo "task_definition_arn=$TASK_DEFINITION_ARN" >> "$GITHUB_OUTPUT"
+
+      - name: Update ECS service
+        id: update
+        env:
+          TASK_DEFINITION_ARN: ${{ steps.register.outputs.task_definition_arn }}
+        run: |
+          set -Eeuo pipefail
+          DEPLOYMENT_ID="$(aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "$TASK_DEFINITION_ARN" \
+            --query "service.deployments[?status=='PRIMARY' && taskDefinition=='${TASK_DEFINITION_ARN}'].id | [0]" \
+            --output text)"
+
+          if [[ -z "$DEPLOYMENT_ID" || "$DEPLOYMENT_ID" == "None" ]]; then
+            echo "Could not find the new ECS deployment" >&2
+            exit 1
+          fi
+
+          echo "Deployment: $DEPLOYMENT_ID"
+          echo "deployment_id=$DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
+
+      # services-stable 대기는 Circuit Breaker가 이전 리비전으로 롤백한 뒤에도 성공으로 끝나므로,
+      # 이번 배포의 rolloutState를 직접 확인한다.
+      - name: Wait for deployment
+        env:
+          DEPLOYMENT_ID: ${{ steps.update.outputs.deployment_id }}
+        run: |
+          set -Eeuo pipefail
+          deadline=$((SECONDS + 35 * 60))
+
+          while (( SECONDS < deadline )); do
+            DEPLOYMENT="$(aws ecs describe-services \
+              --cluster "$ECS_CLUSTER" \
+              --services "$ECS_SERVICE" \
+              --query "services[0].deployments[?id=='${DEPLOYMENT_ID}'] | [0]" \
+              --output json)"
+
+            if [[ "$DEPLOYMENT" == "null" ]]; then
+              echo "Deployment $DEPLOYMENT_ID is no longer active (rolled back or replaced)" >&2
+              exit 1
+            fi
+
+            STATE="$(jq -r '.rolloutState' <<<"$DEPLOYMENT")"
+            echo "$(date -u +%H:%M:%S) $STATE running=$(jq -r .runningCount <<<"$DEPLOYMENT")/$(jq -r .desiredCount <<<"$DEPLOYMENT") failed=$(jq -r .failedTasks <<<"$DEPLOYMENT")"
+
+            case "$STATE" in
+              COMPLETED)
+                echo "Deployment completed"
+                exit 0
+                ;;
+              FAILED)
+                echo "Deployment failed: $(jq -r '.rolloutStateReason' <<<"$DEPLOYMENT")" >&2
+                aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+                  --query 'services[0].events[:10].[createdAt,message]' --output text || true
+                exit 1
+                ;;
+            esac
+
+            sleep 15
+          done
+
+          echo "Timed out waiting for deployment $DEPLOYMENT_ID" >&2
+          exit 1
+
+      - name: Add deployment summary
+        if: always()
+        run: |
+          {
+            echo "### Backend V2 ECS deployment"
+            echo "- image: \`${IMAGE:-$IMAGE_TAG}\`"
+            echo "- service: \`${ECS_CLUSTER}/${ECS_SERVICE}\`"
+            echo "- task definition: \`${{ steps.register.outputs.task_definition_arn }}\`"
+            echo "- result: \`${{ job.status }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

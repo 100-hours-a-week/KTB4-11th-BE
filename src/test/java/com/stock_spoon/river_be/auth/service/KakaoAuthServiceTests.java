@@ -30,6 +30,34 @@ class KakaoAuthServiceTests {
     }
 
     @Test
+    void acceptsDevelopmentHttpCallback() {
+        var client = mock(KakaoClient.class);
+        var users = mock(UserRepository.class);
+        var oauthUsers = mock(UserOAuthRepository.class);
+        var service = new KakaoAuthService(client,
+                new KakaoProperties("app", "", "http://54.180.180.202/auth/callback", "", false),
+                users, oauthUsers);
+        var existing = new User("dev");
+        when(client.verifyUser("code")).thenReturn(new KakaoUserInfo(123L, "dev", null));
+        when(oauthUsers.findByProviderAndProviderUserId(OAuthProvider.KAKAO, 123L))
+                .thenReturn(Optional.of(new UserOAuth(existing, OAuthProvider.KAKAO, 123L)));
+
+        assertThat(service.verify("code")).isSameAs(existing);
+        verify(client).verifyUser("code");
+    }
+
+    @Test
+    void rejectsUnapprovedHttpCallbackBeforeExternalCall() {
+        var client = mock(KakaoClient.class);
+        var service = new KakaoAuthService(client,
+                new KakaoProperties("app", "", "http://example.com/auth/callback", "", false),
+                mock(UserRepository.class), mock(UserOAuthRepository.class));
+        assertThatThrownBy(() -> service.verify("code"))
+                .isInstanceOfSatisfying(AuthException.class,
+                        error -> assertThat(error.code()).isEqualTo("OAUTH_NOT_CONFIGURED"));
+        verifyNoInteractions(client);
+    }
+    @Test
     void createsUserForFirstKakaoLogin() {
         var client = mock(KakaoClient.class);
         var users = mock(UserRepository.class);

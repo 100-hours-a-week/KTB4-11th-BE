@@ -58,7 +58,8 @@ public class KakaoAuthService {
         try {
             URI uri = URI.create(properties.redirectUri() == null ? "" : properties.redirectUri());
             valid &= uri.getHost() != null && ("https".equals(uri.getScheme())
-                    || ("http".equals(uri.getScheme()) && "localhost".equals(uri.getHost())));
+                    || ("http".equals(uri.getScheme())
+                    && ("localhost".equals(uri.getHost()) || "54.180.180.202".equals(uri.getHost()))));
         } catch (IllegalArgumentException error) {
             valid = false;
         }

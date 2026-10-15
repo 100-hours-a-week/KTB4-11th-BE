@@ -2,6 +2,8 @@ package com.stock_spoon.river_be.competition.controller;
 
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateRequest;
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateResponse;
+import com.stock_spoon.river_be.competition.dto.CompetitionListResponse;
+import org.springframework.web.bind.annotation.GetMapping;
 import com.stock_spoon.river_be.competition.service.CompetitionService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -20,6 +22,11 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 public class CompetitionController {
 
     private final CompetitionService competitionService;
+
+    @GetMapping // JWT의 사용자 ID로 본인의 대결만 조회한다.
+    public CompetitionListResponse listCompetitions(@AuthenticationPrincipal Jwt jwt) {
+        return competitionService.listCompetitions(Long.parseLong(jwt.getSubject()));
+    }
 
     @PostMapping // 공통 경로로 들어오는 POST 요청을 처리한다.
     @ResponseStatus(HttpStatus.CREATED) // 정상 반환 시 HTTP 상태 코드를 201 Created로 지정한다.

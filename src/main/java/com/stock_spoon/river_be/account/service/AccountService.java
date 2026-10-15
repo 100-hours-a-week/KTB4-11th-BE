@@ -38,11 +38,14 @@ public class AccountService {
     private final HoldingRepository holdings;
     private final KiwoomMarketClient market;
     private final TransactionTemplate read;
+    private final com.stock_spoon.river_be.competition.repository.CompetitionParticipantRepository participants;
 
     public AccountService(AccountRepository accountRepository, UserRepository userRepository,
             OrderService orderService, OrderRepository orders, HoldingRepository holdings,
             KiwoomMarketClient market,
-            PlatformTransactionManager transactions) {
+            PlatformTransactionManager transactions,
+            com.stock_spoon.river_be.competition.repository.CompetitionParticipantRepository participants) {
+        this.participants = participants;
         this.accountRepository = accountRepository;
         this.userRepository = userRepository;
         this.orderService = orderService;
@@ -55,7 +58,7 @@ public class AccountService {
 
     @Transactional
     public AccountResponse onboard(long userId, OnboardingRequest request) {
-        var user = userRepository.findById(userId)
+        var user = userRepository.findLockedById(userId)
                 .orElseThrow(() -> new AccountException(HttpStatus.NOT_FOUND,
                         "USER_NOT_FOUND", "사용자를 찾을 수 없습니다."));
 
@@ -72,7 +75,7 @@ public class AccountService {
 
     @Transactional
     public AccountCreateResponse create(long userId, AccountCreateRequest request) {
-        var user = userRepository.findById(userId)
+        var user = userRepository.findLockedById(userId)
                 .orElseThrow(() -> new AccountException(HttpStatus.NOT_FOUND,
                         "USER_NOT_FOUND", "사용자를 찾을 수 없습니다."));
         if (!user.isOnboardingCompleted()) {
@@ -84,7 +87,7 @@ public class AccountService {
                 ? nextDefaultName(userId)
                 : normalizeName(request.accountName());
 
-        if (accountRepository.existsByUserIdAndNameIgnoreCaseAndActiveTrue(userId, name)) {
+        if (accountRepository.existsByUserIdAndNameIgnoreCase(userId, name)) {
             throw new AccountException(HttpStatus.CONFLICT,
                     "DUPLICATE_ACCOUNT_NAME", "이미 사용 중인 계좌 이름입니다.");
         }
@@ -95,6 +98,9 @@ public class AccountService {
 
     @Transactional
     public AccountResponse rename(long userId, long accountId, AccountNameUpdateRequest request) {
+        // 대결 생성과 일반 계좌 이름 변경도 같은 사용자 잠금을 사용한다.
+        userRepository.findLockedById(userId).orElseThrow(() -> new AccountException(
+                HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "사용자를 찾을 수 없습니다."));
         var account = accountRepository.findByIdAndUserIdAndActiveTrue(accountId, userId)
                 .orElseThrow(() -> new AccountException(HttpStatus.NOT_FOUND,
                         "ACCOUNT_NOT_FOUND", "계좌를 찾을 수 없습니다."));
@@ -103,7 +109,7 @@ public class AccountService {
         if (account.getName().equals(name)) {
             return AccountResponse.from(account);
         }
-        if (accountRepository.existsByUserIdAndNameIgnoreCaseAndActiveTrueAndIdNot(
+        if (accountRepository.existsByUserIdAndNameIgnoreCaseAndIdNot(
                 userId, name, accountId)) {
             throw new AccountException(HttpStatus.CONFLICT,
                     "DUPLICATE_ACCOUNT_NAME", "이미 사용 중인 계좌 이름입니다.");
@@ -121,7 +127,7 @@ public class AccountService {
         var values = evaluate(snapshot);
         log.info("event=account_valuation_completed accountCount={} holdingCount={}", snapshot.accounts().size(), snapshot.holdings().size());
         return snapshot.accounts().stream().map(a -> AccountListResponse.from(a,
-                values.getOrDefault(a.getId(), 0L))).toList();
+                values.getOrDefault(a.getId(), 0L), snapshot.competitionAccountIds().contains(a.getId()))).toList();
     }
 
     public AccountDetailResponse get(long userId, long accountId) {
@@ -134,7 +140,7 @@ public class AccountService {
         var values = evaluate(snapshot);
         log.info("event=account_valuation_completed accountCount={} holdingCount={}", snapshot.accounts().size(), snapshot.holdings().size());
         return AccountDetailResponse.from(snapshot.accounts().getFirst(), snapshot.availableCash(),
-                values.getOrDefault(accountId, 0L), snapshot.executedTradeCount());
+                values.getOrDefault(accountId, 0L), snapshot.executedTradeCount(), snapshot.competitionAccountIds().contains(accountId));
     }
 
     private Snapshot snapshot(List<Account> accounts, boolean includeAvailableCash) {
@@ -144,7 +150,10 @@ public class AccountService {
         long available = includeAvailableCash ? orderService.availableCash(accounts.getFirst().getId()) : 0;
         long executedCount = includeAvailableCash
                 ? orders.countByAccountIdAndStatus(accounts.getFirst().getId(), Order.Status.EXECUTED) : 0;
-        return new Snapshot(List.copyOf(accounts), owned, available, executedCount);
+        // 한 번에 대결 계좌 ID를 조회해 목록의 각 계좌마다 DB를 다시 조회하지 않는다.
+        var competitionIds = accounts.isEmpty() ? java.util.Set.<Long>of()
+                : participants.findCompetitionAccountIds(accounts.stream().map(Account::getId).toList());
+        return new Snapshot(List.copyOf(accounts), owned, available, executedCount, competitionIds);
     }
 
     private Map<Long, Long> evaluate(Snapshot snapshot) {
@@ -169,10 +178,11 @@ public class AccountService {
     }
 
     private record Owned(long accountId, String code, long quantity) {}
-    private record Snapshot(List<Account> accounts, List<Owned> holdings, long availableCash, long executedTradeCount) {}
+    private record Snapshot(List<Account> accounts, List<Owned> holdings, long availableCash, long executedTradeCount,
+            java.util.Set<Long> competitionAccountIds) {}
     private String nextDefaultName(long userId) {
         int number = 1;
-        while (accountRepository.existsByUserIdAndNameIgnoreCaseAndActiveTrue(
+        while (accountRepository.existsByUserIdAndNameIgnoreCase(
                 userId, DEFAULT_ACCOUNT_NAME_PREFIX + number)) {
             number++;
         }

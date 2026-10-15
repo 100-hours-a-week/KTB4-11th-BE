@@ -55,11 +55,16 @@ public class Account {
     }
 
     public Account(User user, String name, long initialCapital) {
+        this(user, name, initialCapital, true);
+    }
+
+    // 기존 AI 운용 경로와 달리, 대결 생성에서는 사용자/AI 계좌를 명시적으로 구분한다.
+    public Account(User user, String name, long initialCapital, boolean aiManaged) {
         this.user = user;
         this.name = name;
         this.initialCapital = initialCapital;
         this.cashBalance = initialCapital;
-        this.aiManaged = true;
+        this.aiManaged = aiManaged;
         this.active = true;
     }
 

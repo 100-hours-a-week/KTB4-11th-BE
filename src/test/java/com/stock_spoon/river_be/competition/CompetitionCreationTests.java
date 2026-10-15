@@ -1,0 +1,216 @@
+package com.stock_spoon.river_be.competition;
+
+import com.stock_spoon.river_be.account.entity.Account;
+import com.stock_spoon.river_be.account.repository.AccountRepository;
+import com.stock_spoon.river_be.competition.dto.CompetitionCreateRequest;
+import com.stock_spoon.river_be.competition.entity.CompetitionParticipant;
+import com.stock_spoon.river_be.competition.exception.CompetitionException;
+import com.stock_spoon.river_be.competition.repository.CompetitionParticipantRepository;
+import com.stock_spoon.river_be.competition.repository.CompetitionRepository;
+import com.stock_spoon.river_be.competition.service.CompetitionService;
+import com.stock_spoon.river_be.competition.service.CompetitionTradingHours;
+import com.stock_spoon.river_be.competition.service.CompetitionStartScheduler;
+import com.stock_spoon.river_be.user.entity.User;
+import com.stock_spoon.river_be.user.repository.UserRepository;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
+
+@SpringBootTest
+class CompetitionCreationTests {
+    @Autowired CompetitionService service;
+    @Autowired CompetitionRepository competitions;
+    @MockitoSpyBean CompetitionParticipantRepository participants;
+    @Autowired AccountRepository accounts;
+    @Autowired UserRepository users;
+    @MockitoSpyBean CompetitionTradingHours tradingHours;
+    @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
+    @Autowired com.stock_spoon.river_be.account.service.AccountService accountService;
+    @Autowired org.springframework.web.context.WebApplicationContext context;
+    @Autowired com.stock_spoon.river_be.auth.token.JwtTokenProvider tokens;
+    private User user;
+
+    @BeforeEach
+    void setup() {
+        org.mockito.Mockito.doReturn(today().atTime(21, 0).atZone(ZoneId.of("Asia/Seoul")))
+                .when(tradingHours).now();
+        user = new User("대결" + UUID.randomUUID().toString().substring(0, 4));
+        user.completeOnboarding();
+        user = users.save(user);
+    }
+
+    @Test
+    void createsTwoAccountsAndParticipantLinksWithEqualCapital() {
+        var response = service.createCompetition(user.getId(), request("반도체 집중", 3, 1));
+        assertThat(response).isNotNull();
+        assertThat(response.getMessage()).isEqualTo("success");
+        assertThat(response.getState()).isEqualTo("ready");
+        var links = participants.findAllByCompetitionIdOrderByIdAsc(response.getCompetitionId());
+        assertThat(links).hasSize(2);
+        assertThat(links.get(0).getAccount().getName()).isEqualTo("반도체 집중");
+        assertThat(links.get(0).getAccount().isAiManaged()).isFalse();
+        assertThat(links.get(1).getAccount().isAiManaged()).isTrue();
+        assertThat(links.get(1).getAccount().getName()).isNotEqualTo("반도체 집중");
+        assertThat(links).allSatisfy(p -> assertThat(p.getAccount().getCashBalance()).isEqualTo(10_000_000));
+        assertThat(accounts.findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(user.getId()))
+                .extracting(Account::getId).containsExactly(links.get(0).getAccount().getId());
+        assertThat(accounts.findActiveAiManaged()).extracting(Account::getId)
+                .doesNotContain(links.get(1).getAccount().getId());
+        assertThat(accountService.list(user.getId())).singleElement()
+                .satisfies(a -> assertThat(a.duelAccount()).isTrue());
+        assertThatThrownBy(() -> accountService.create(user.getId(),
+                new com.stock_spoon.river_be.account.dto.AccountCreateRequest("반도체 집중", 10_000_000L)))
+                .isInstanceOf(com.stock_spoon.river_be.account.exception.AccountException.class);
+        assertThatThrownBy(() -> context.getBean(com.stock_spoon.river_be.order.service.OrderService.class)
+                .assertOrderableAccount(user.getId(), links.get(1).getAccount().getId()))
+                .isInstanceOf(com.stock_spoon.river_be.order.exception.OrderException.class);
+    }
+
+    @Test
+    void apiMapsSnakeCaseAndReturnsCreatedAndValidationErrors() throws Exception {
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup(context)
+                .apply(org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity()).build();
+        String body = """
+                {"competition_name":"API 생성","competition_type":"user_vs_ai",
+                 "start_date":"%s","end_date":"%s","initial_capital":10000000,"ai_participant_count":1}
+                """.formatted(today(), today().plusDays(3));
+        var auth = new jakarta.servlet.http.Cookie("access_token", tokens.issue(user.getId()).accessToken());
+        var csrfResponse = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v1/auth/csrf"))
+                .andReturn().getResponse();
+        var csrf = csrfResponse.getCookie("XSRF-TOKEN");
+        String token = com.jayway.jsonpath.JsonPath.read(csrfResponse.getContentAsString(), "$.token");
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/v2/users/me/competitions")
+                .cookie(auth, csrf).header("X-XSRF-TOKEN", token)
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(body))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isCreated())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.competition_id").isNumber())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.state").value("ready"));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/v2/users/me/competitions")
+                .cookie(auth, csrf).header("X-XSRF-TOKEN", token)
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(body))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isConflict())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.code").value("DUPLICATE_ACCOUNT_NAME"));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/v2/users/me/competitions")
+                .cookie(auth, csrf).header("X-XSRF-TOKEN", token)
+                .contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(body.replace("10000000", "0")))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
+    }
+
+    @Test
+    void startsWaitingCompetitionWhenTheNextMarketSessionOpens() {
+        // 토요일 생성 후 월요일 09:00에 시작하고, 요청받은 화요일 종료일은 유지한다.
+        var saturday = java.time.ZonedDateTime.parse("2026-10-17T12:00:00+09:00[Asia/Seoul]");
+        org.mockito.Mockito.doReturn(saturday).when(tradingHours).now();
+        var request = request("주말대기", 3, 1);
+        ReflectionTestUtils.setField(request, "startDate", saturday.toLocalDate());
+        ReflectionTestUtils.setField(request, "endDate", saturday.toLocalDate().plusDays(3));
+        var response = service.createCompetition(user.getId(), request);
+        assertThat(response.getState()).isEqualTo("ready");
+        var monday = saturday.plusDays(2).withHour(9).withMinute(0);
+        org.mockito.Mockito.doReturn(monday).when(tradingHours).now();
+        var scheduler = new CompetitionStartScheduler(competitions, tradingHours);
+        var tx = new org.springframework.transaction.support.TransactionTemplate(transactions);
+        tx.executeWithoutResult(status -> scheduler.startWaitingCompetitions());
+        // 같은 처리를 반복해도 이미 시작한 대결은 다시 시작하지 않는다.
+        tx.executeWithoutResult(status -> scheduler.startWaitingCompetitions());
+        var saved = competitions.findById(response.getCompetitionId()).orElseThrow();
+        assertThat(saved.getState()).isEqualTo(com.stock_spoon.river_be.competition.entity.Competition.State.IN_PROGRESS);
+        assertThat(saved.getStartedAt()).isEqualTo(monday.toInstant());
+        assertThat(saved.getEndDate()).isEqualTo(saturday.toLocalDate().plusDays(3));
+    }
+
+    @Test
+    void startsImmediatelyDuringMarketHours() {
+        var now = java.time.ZonedDateTime.parse("2026-10-16T09:00:00+09:00[Asia/Seoul]");
+        org.mockito.Mockito.doReturn(now).when(tradingHours).now();
+        var request = request("개장", 3, 1);
+        ReflectionTestUtils.setField(request, "startDate", now.toLocalDate());
+        ReflectionTestUtils.setField(request, "endDate", now.toLocalDate().plusDays(3));
+        var response = service.createCompetition(user.getId(), request);
+        assertThat(response.getState()).isEqualTo("in_progress");
+        assertThat(accounts.findActiveAiManagedOn(now.toLocalDate())).extracting(Account::getId)
+                .contains(participants.findAllByCompetitionIdOrderByIdAsc(response.getCompetitionId()).get(1).getAccount().getId());
+    }
+
+    @Test
+    void rejectsShortPeriodsWrongStartAndUnsupportedParticipantCounts() {
+        for (int days : new int[]{-1, 0, 1, 2}) {
+            assertThatThrownBy(() -> service.createCompetition(user.getId(), request("기간", days, 1)))
+                    .isInstanceOf(CompetitionException.class);
+        }
+        var past = request("과거", 3, 1);
+        ReflectionTestUtils.setField(past, "startDate", today().minusDays(1));
+        assertThatThrownBy(() -> service.createCompetition(user.getId(), past)).isInstanceOf(CompetitionException.class);
+        assertThatThrownBy(() -> service.createCompetition(user.getId(), request("인원", 3, 2)))
+                .isInstanceOf(CompetitionException.class);
+    }
+
+    @Test
+    void rejectsNameUsedByAnExistingAccount() {
+        accounts.save(new Account(user, "기존 계좌", 10_000_000));
+        assertThatThrownBy(() -> service.createCompetition(user.getId(), request(" 기존 계좌 ", 3, 1)))
+                .isInstanceOf(CompetitionException.class)
+                .hasMessageContaining("이름");
+    }
+
+    @Test
+    void concurrentRequestsWithTheSameNameCreateOnlyOneCompetition() throws Exception {
+        var start = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.Callable<Boolean> create = () -> {
+            start.await();
+            try {
+                service.createCompetition(user.getId(), request("동시생성", 3, 1));
+                return true;
+            } catch (CompetitionException expected) {
+                assertThat(expected.getCode()).isEqualTo("DUPLICATE_ACCOUNT_NAME");
+                return false;
+            }
+        };
+        try (var executor = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            var first = executor.submit(create);
+            var second = executor.submit(create);
+            start.countDown();
+            assertThat(java.util.List.of(first.get(10, java.util.concurrent.TimeUnit.SECONDS),
+                    second.get(10, java.util.concurrent.TimeUnit.SECONDS)))
+                    .containsExactlyInAnyOrder(true, false);
+        }
+        assertThat(accounts.findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(user.getId())).hasSize(1);
+    }
+
+    @Test
+    void rollsBackCompetitionAndBothAccountsWhenParticipantSaveFails() {
+        long competitionCount = competitions.count();
+        long accountCount = accounts.count();
+        long participantCount = participants.count();
+        doThrow(new IllegalStateException("저장 실패 테스트"))
+                .when(participants).save(any(CompetitionParticipant.class));
+        assertThatThrownBy(() -> service.createCompetition(user.getId(), request("롤백", 3, 1)))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(competitions.count()).isEqualTo(competitionCount);
+        assertThat(accounts.count()).isEqualTo(accountCount);
+        assertThat(participants.count()).isEqualTo(participantCount);
+    }
+
+    private static LocalDate today() { return LocalDate.now(ZoneId.of("Asia/Seoul")); }
+
+    private CompetitionCreateRequest request(String name, int days, int count) {
+        var request = new CompetitionCreateRequest();
+        ReflectionTestUtils.setField(request, "competitionName", name);
+        ReflectionTestUtils.setField(request, "competitionType", "user_vs_ai");
+        ReflectionTestUtils.setField(request, "startDate", today());
+        ReflectionTestUtils.setField(request, "endDate", today().plusDays(days));
+        ReflectionTestUtils.setField(request, "initialCapital", 10_000_000L);
+        ReflectionTestUtils.setField(request, "aiParticipantCount", count);
+        return request;
+    }
+}

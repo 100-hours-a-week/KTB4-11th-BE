@@ -105,6 +105,9 @@ public class OrderExecutionService {
         if (!account.isActive() || !account.isAiManaged()) {
             throw new OrderException("운용 가능한 자동매매 계좌가 아닙니다.");
         }
+        if (accounts.hasNonTradingCompetition(accountId, clock.instant().atZone(SEOUL).toLocalDate())) {
+            throw new OrderException(HttpStatus.CONFLICT, "COMPETITION_NOT_IN_PROGRESS", "진행 중인 대결만 주문할 수 있습니다.");
+        }
         var now = clock.instant();
         var local = now.atZone(SEOUL);
         if (local.toLocalTime().isBefore(LocalTime.of(9, 0))
@@ -263,6 +266,7 @@ public class OrderExecutionService {
         if (order.getStatus() != Order.Status.PENDING || order.getType() != Order.Type.LIMIT) return false;
         var now = clock.instant();
         var local = now.atZone(SEOUL);
+        if (accounts.hasNonTradingCompetition(accountId, local.toLocalDate())) return false;
         if (order.getCreatedAt().atZone(SEOUL).toLocalDate().isBefore(local.toLocalDate())
                 || !local.toLocalTime().isBefore(LocalTime.of(15, 30))) {
             order.cancel(now);

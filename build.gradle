@@ -36,6 +36,10 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-security'
 
+	// 롬복관련
+	compileOnly 'org.projectlombok:lombok'			// 롬복 컴파일시 사용가능하도록
+	annotationProcessor 'org.projectlombok:lombok'	// 롬복의 어노테이션 코드를 생성해주는 역할 (@Getter 같은거 실제 코드)
+
 	implementation 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 	implementation 'org.springframework.boot:spring-boot-starter-data-redis'

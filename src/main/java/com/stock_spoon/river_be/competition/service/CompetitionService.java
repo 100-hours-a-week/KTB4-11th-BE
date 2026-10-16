@@ -33,25 +33,28 @@ public class CompetitionService {
     public CompetitionListResponse listCompetitions(Long userId) {
         // 1. 한국 시간의 오늘 날짜를 구하고, 요청한 사용자의 대결 전체를 최신 생성 순으로 조회한다.
         // var는 오른쪽 값으로 변수 타입을 추론한다. today는 LocalDate, rows는 List<Competition>이다.
-        var today = tradingHours.now().toLocalDate();
+        var now = tradingHours.now();
+        var today = now.toLocalDate();
         var rows = competitions.findAllByUserIdOrderByCreatedAtDescIdDesc(userId);
         // 대결이 없으면 이후 계좌 조회·수익률 계산을 생략하고 개수 0과 빈 배열을 반환한다.
         if (rows.isEmpty()) return new CompetitionListResponse(0, java.util.List.of());
 
         // 2. AI를 제외한 사용자 참가자와 계좌를 한 번에 조회한다.
         // stream()은 목록의 각 요소를 차례로 처리하는 기능이다. p는 현재 처리 중인 참가자다.
-        // toMap(키, 값)으로 Map<Long, Account>를 만든다. 예: {대결 ID 1: 사용자 계좌, 대결 ID 2: 사용자 계좌}.
-        // CompetitionParticipant::getAccount는 p -> p.getAccount()와 같은 의미다.
-        var userAccounts = participants.findUserParticipants(userId).stream()
-                .collect(Collectors.toMap(p -> p.getCompetition().getId(), CompetitionParticipant::getAccount));
+        // toMap(키, 값)으로 {대결 ID: 사용자 참가자}를 만든 뒤, 아래에서 {대결 ID: 계좌}로 바꾼다.
+        // 참가자에는 완료 시 저장한 최종 수익률이 있고, 계좌에는 현재 자산이 있다.
+        var userParticipants = participants.findUserParticipants(userId).stream()
+                .collect(Collectors.toMap(p -> p.getCompetition().getId(), p -> p));
+        var userAccounts = userParticipants.entrySet().stream()
+                .collect(Collectors.toMap(java.util.Map.Entry::getKey, e -> e.getValue().getAccount()));
 
         // 3. 현재 수익률을 계산할 사용자 계좌만 추린다. c는 현재 처리 중인 대결이다.
-        // filter: 진행 중이고 종료일이 지나지 않은 대결만 남긴다. 종료일 당일은 포함한다.
+        // filter: 진행 중이고 실제 거래 종료 시각(마지막 평일 15:30) 전인 대결만 남긴다.
         // map: 대결 객체를 그 대결의 사용자 계좌로 바꾼다.
         // nonNull: 연결된 계좌가 없는 항목을 제외한다. toList(): 처리 결과를 목록으로 만든다.
         // 종료 후 현재 시세로 계산하면 최종 성적이 계속 바뀌므로, 종료된 대결은 여기서 제외한다.
         var liveAccounts = rows.stream()
-                .filter(c -> c.getState() == Competition.State.IN_PROGRESS && !today.isAfter(c.getEndDate()))
+                .filter(c -> c.isTradingAt(now))
                 .map(c -> userAccounts.get(c.getId())).filter(java.util.Objects::nonNull).toList();
         // 계좌 서비스가 현금 + 보유 주식 평가액으로 수익률을 계산한다.
         // returns는 Map<계좌 ID, 수익률>이다. userAccounts의 키인 '대결 ID'와 구분해야 한다.
@@ -70,12 +73,18 @@ public class CompetitionService {
             var account = userAccounts.get(c.getId());
             Double returnPercent = account == null ? null : returns.get(account.getId());
             if (c.getState() == Competition.State.READY) returnPercent = 0.0;
-            // shortcut: 종료 정산이 구현되면 확정 수익률과 승자를 저장된 결과에서 읽는다.
+            // 완료 대결은 현재 시세 대신 DB에 확정한 최종 수익률을 읽는다.
+            var participant = userParticipants.get(c.getId());
+            if (c.getState() == Competition.State.COMPLETED && participant != null
+                    && participant.getFinalReturnPercent() != null) {
+                returnPercent = participant.getFinalReturnPercent().doubleValue();
+            }
+            String winner = c.getWinner() == null ? null : c.getWinner().name().toLowerCase(Locale.ROOT);
             // Enum의 IN_PROGRESS, USER_VS_AI를 API 형식인 in_progress, user_vs_ai로 바꾼다.
-            // 마지막 null은 아직 확정되지 않은 winner 값이다.
+            // 아직 정산하지 않은 대결의 winner는 null이다.
             return new CompetitionListResponse.CompetitionItem(c.getId(), c.getState().name().toLowerCase(Locale.ROOT),
                     c.getCompetitionName(), c.getCompetitionType().name().toLowerCase(Locale.ROOT),
-                    c.getStartDate(), c.getEndDate(), dDay, returnPercent, null);
+                    c.getStartDate(), c.getEndDate(), dDay, returnPercent, winner);
         }).toList();
 
         // 5. 실제 진행 중(IN_PROGRESS)인 대결 수를 센다. 시작 대기(READY)는 세지 않는다.

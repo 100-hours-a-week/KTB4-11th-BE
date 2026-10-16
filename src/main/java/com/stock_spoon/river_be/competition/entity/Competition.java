@@ -17,6 +17,14 @@ import org.hibernate.annotations.UpdateTimestamp;
 public class Competition {
     public enum Type { USER_VS_AI }
     public enum State { READY, IN_PROGRESS, COMPLETED, CANCELLED }
+    public enum Winner { USER, AI, DRAW }
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 8)
+    private Winner winner;
+
+    @Column(name = "completed_at")
+    private Instant completedAt;
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY) // DB가 발급한 자동 증가 ID를 사용한다.
@@ -80,5 +88,31 @@ public class Competition {
         }
         this.startedAt = java.util.Objects.requireNonNull(startedAt);
         this.state = State.IN_PROGRESS;
+    }
+
+    // 공휴일은 아직 고려하지 않는다. 주말 종료일은 직전 금요일 종가로 평가한다.
+    public LocalDate tradingEndDate() {
+        LocalDate date = endDate;
+        while (date.getDayOfWeek() == java.time.DayOfWeek.SATURDAY
+                || date.getDayOfWeek() == java.time.DayOfWeek.SUNDAY) date = date.minusDays(1);
+        return date;
+    }
+
+    public Instant tradingEndsAt() {
+        return tradingEndDate().atTime(15, 30).atZone(java.time.ZoneId.of("Asia/Seoul")).toInstant();
+    }
+
+    public boolean isTradingAt(java.time.ZonedDateTime now) {
+        return state == State.IN_PROGRESS && !now.toLocalDate().isBefore(startDate)
+                && now.toInstant().isBefore(tradingEndsAt());
+    }
+
+    public void complete(Winner winner, Instant completedAt) {
+        if (state != State.IN_PROGRESS || completedAt.isBefore(tradingEndsAt())) {
+            throw new IllegalStateException("종료 시각이 지난 진행 중 대결만 완료할 수 있습니다.");
+        }
+        this.winner = java.util.Objects.requireNonNull(winner);
+        this.completedAt = completedAt;
+        this.state = State.COMPLETED;
     }
 }

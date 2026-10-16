@@ -37,6 +37,32 @@ class KiwoomMarketClientTests {
     }
 
     @Test
+    void closingPriceRequiresTheExactRequestedTradingDate() {
+        server.expect(requestTo("https://api.kiwoom.com/api/dostk/chart"))
+                .andExpect(header("api-id", "ka10081"))
+                .andExpect(content().json("{\"stk_cd\":\"000270\",\"base_dt\":\"20261016\",\"upd_stkpc_tp\":\"0\"}"))
+                .andRespond(withSuccess("""
+                        {"return_code":0,"stk_cd":"000270","stk_dt_pole_chart_qry":[
+                          {"dt":"20261015","cur_prc":"100000"},
+                          {"dt":"20261016","cur_prc":"-120000"}]}
+                        """, MediaType.APPLICATION_JSON));
+        assertThat(client.closingPrice("000270", java.time.LocalDate.of(2026, 10, 16))).isEqualTo(120000);
+        server.verify();
+    }
+
+    @Test
+    void closingPriceDoesNotSubstituteAnotherDaysPrice() {
+        server.expect(requestTo("https://api.kiwoom.com/api/dostk/chart"))
+                .andRespond(withSuccess("""
+                        {"return_code":0,"stk_cd":"000270","stk_dt_pole_chart_qry":[
+                          {"dt":"20261015","cur_prc":"100000"}]}
+                        """, MediaType.APPLICATION_JSON));
+        assertThatThrownBy(() -> client.closingPrice("000270", java.time.LocalDate.of(2026, 10, 16)))
+                .isInstanceOf(IllegalStateException.class);
+        server.verify();
+    }
+
+    @Test
     void invalidTokenIsDiscardedAndSamePriceRequestRetriesOnceWithRefreshedToken() {
         when(tokens.accessToken()).thenReturn("test-token", "fresh-token");
         expectCurrentPrice("test-token", "{\"return_code\":3,\"return_msg\":\"인증 실패[8005:Token이 유효하지 않습니다]\"}");

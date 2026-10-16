@@ -11,6 +11,20 @@ import lombok.NoArgsConstructor;
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class CompetitionParticipant {
+    @Column(name = "final_asset_value")
+    private Long finalAssetValue;
+
+    @Column(name = "final_return_percent", precision = 19, scale = 4)
+    private java.math.BigDecimal finalReturnPercent;
+
+    public void recordFinalAssets(long assets) {
+        if (assets < 0 || finalAssetValue != null) throw new IllegalStateException("최종 자산을 확정할 수 없습니다.");
+        this.finalAssetValue = assets;
+        this.finalReturnPercent = java.math.BigDecimal.valueOf(assets)
+                .subtract(java.math.BigDecimal.valueOf(account.getInitialCapital()))
+                .multiply(java.math.BigDecimal.valueOf(100))
+                .divide(java.math.BigDecimal.valueOf(account.getInitialCapital()), 4, java.math.RoundingMode.HALF_UP);
+    }
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "participant_id")

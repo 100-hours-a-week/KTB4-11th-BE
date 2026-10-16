@@ -86,6 +86,37 @@ public class KiwoomMarketClient {
         }
     }
 
+    /** 종료 거래일의 원주가 종가. 다른 날짜나 현재가로 대체하지 않는다. */
+    public long closingPrice(String stockCode, java.time.LocalDate date) {
+        if (stockCode == null || !stockCode.matches("[0-9A-Z]{6}") || date == null) {
+            throw new IllegalArgumentException("종목코드와 거래일을 확인하세요.");
+        }
+        String day = date.format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE);
+        Map<String, Object> response;
+        try {
+            response = transport.query("ka10081", "/api/dostk/chart",
+                    Map.of("stk_cd", stockCode, "base_dt", day, "upd_stkpc_tp", "0"));
+        } catch (RestClientException error) {
+            throw new IllegalStateException("키움 종가 조회에 실패했습니다.");
+        }
+        if (response == null || !"0".equals(String.valueOf(response.get("return_code")))
+                || !stockCode.equals(response.get("stk_cd"))
+                || !(response.get("stk_dt_pole_chart_qry") instanceof java.util.List<?> rows)) {
+            throw new IllegalStateException("키움 종가 응답을 확인할 수 없습니다.");
+        }
+        for (Object row : rows) {
+            if (row instanceof Map<?, ?> values && day.equals(values.get("dt"))) {
+                try {
+                    long price = number(values.get("cur_prc")).abs().longValueExact();
+                    if (price > 0) return price;
+                } catch (RuntimeException error) {
+                    throw new IllegalStateException("키움 종가 형식이 올바르지 않습니다.");
+                }
+            }
+        }
+        throw new IllegalStateException("해당 거래일의 종가가 아직 없습니다.");
+    }
+
     /** 업종코드 사전을 추측해 연결하지 않고, 종목정보의 업종명을 그대로 읽는다. */
     public StockDetails stockDetails(String stockCode) {
         var response = metadata == null ? stockInfoResponse(stockCode) : metadata(stockCode);

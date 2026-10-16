@@ -9,6 +9,12 @@ import jakarta.persistence.LockModeType;
 import com.stock_spoon.river_be.account.entity.Account;
 
 public interface AccountRepository extends JpaRepository<Account, Long> {
+    @Query("select p.competition from CompetitionParticipant p where p.account.id = :accountId")
+    Optional<com.stock_spoon.river_be.competition.entity.Competition> findCompetitionByAccountId(Long accountId);
+
+    default boolean hasNonTradingCompetition(Long accountId, java.time.ZonedDateTime now) {
+        return findCompetitionByAccountId(accountId).map(c -> !c.isTradingAt(now)).orElse(false);
+    }
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select a from Account a where a.id = :accountId")
     Optional<Account> findLockedById(@org.springframework.data.repository.query.Param("accountId") Long accountId);
@@ -18,10 +24,6 @@ public interface AccountRepository extends JpaRepository<Account, Long> {
     // 비활성 계좌도 DB의 이름 유일 제약에 포함되므로 이름을 재사용하지 않는다.
     boolean existsByUserIdAndNameIgnoreCase(Long userId, String name);
     boolean existsByUserIdAndNameIgnoreCaseAndIdNot(Long userId, String name, Long accountId);
-
-    @Query("select count(p) > 0 from CompetitionParticipant p where p.account.id = :accountId "
-            + "and (p.competition.state <> IN_PROGRESS or p.competition.startDate > :today or p.competition.endDate < :today)")
-    boolean hasNonTradingCompetition(Long accountId, java.time.LocalDate today);
 
     boolean existsByUserIdAndNameIgnoreCaseAndActiveTrue(Long userId, String name);
 

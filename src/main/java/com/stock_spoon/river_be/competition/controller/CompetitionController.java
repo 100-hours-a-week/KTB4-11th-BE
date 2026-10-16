@@ -4,6 +4,7 @@ import com.stock_spoon.river_be.competition.dto.CompetitionCreateRequest;
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateResponse;
 import com.stock_spoon.river_be.competition.dto.CompetitionListResponse;
 import com.stock_spoon.river_be.competition.dto.CompetitionDetailResponse;
+import com.stock_spoon.river_be.competition.dto.CompetitionResultResponse;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.GetMapping;
 import com.stock_spoon.river_be.competition.service.CompetitionService;
@@ -24,6 +25,12 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 public class CompetitionController {
 
     private final CompetitionService competitionService;
+
+    @GetMapping("/{competitionId}/result") // 완료된 대결의 최종 성적과 양측 비교 그래프를 조회한다.
+    public CompetitionResultResponse getCompetitionResult(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable Long competitionId) {
+        return competitionService.getCompetitionResult(Long.parseLong(jwt.getSubject()), competitionId);
+    }
 
     @GetMapping("/{competitionId}") // 대결 ID는 URL에서, 조회할 사용자 ID는 인증된 JWT에서 받는다.
     public CompetitionDetailResponse getCompetitionDetail(@AuthenticationPrincipal Jwt jwt,

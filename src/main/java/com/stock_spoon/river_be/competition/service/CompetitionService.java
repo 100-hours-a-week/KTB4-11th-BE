@@ -4,6 +4,7 @@ import com.stock_spoon.river_be.competition.dto.CompetitionCreateRequest;
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateResponse;
 import com.stock_spoon.river_be.competition.dto.CompetitionListResponse;
 import com.stock_spoon.river_be.competition.dto.CompetitionDetailResponse;
+import com.stock_spoon.river_be.competition.dto.CompetitionResultResponse;
 import com.stock_spoon.river_be.competition.repository.CompetitionDailyPerformanceRepository;
 import java.math.BigDecimal;
 import com.stock_spoon.river_be.account.service.AccountService;
@@ -33,6 +34,55 @@ public class CompetitionService {
     private final CompetitionTradingHours tradingHours;
     private final AccountService accountService;
     private final CompetitionDailyPerformanceRepository dailyPerformances;
+
+    @Transactional(readOnly = true)
+    public CompetitionResultResponse getCompetitionResult(Long userId, Long competitionId) {
+        // 1. 소유권부터 확인한 뒤 완료 상태를 검사한다. 날짜가 지났어도 정산 전이면 결과를 공개하지 않는다.
+        var competition = competitions.findByIdAndUserId(competitionId, userId)
+                .orElseThrow(() -> new CompetitionException(HttpStatus.NOT_FOUND,
+                        "COMPETITION_NOT_FOUND", "대결을 찾을 수 없습니다."));
+        if (competition.getState() != Competition.State.COMPLETED) {
+            throw new CompetitionException(HttpStatus.CONFLICT, "COMPETITION_NOT_COMPLETED", "아직 완료되지 않은 대결입니다.");
+        }
+
+        // 2. 참가자 저장 순서와 관계없이 계좌의 AI 운용 여부로 사용자·AI를 구분한다.
+        var links = participants.findAllByCompetitionIdOrderByIdAsc(competitionId);
+        if (links.size() != 2 || links.stream().filter(p -> p.getAccount().isAiManaged()).count() != 1) {
+            throw resultUnavailable();
+        }
+        var user = links.stream().filter(p -> !p.getAccount().isAiManaged()).findFirst().orElseThrow();
+        var ai = links.stream().filter(p -> p.getAccount().isAiManaged()).findFirst().orElseThrow();
+        if (competition.getWinner() == null || user.getFinalReturnPercent() == null || ai.getFinalReturnPercent() == null) {
+            throw resultUnavailable();
+        }
+
+        // 3. {날짜: {참가자 ID: 수익률}}로 묶는다. TreeMap은 날짜가 빠른 순서로 정렬해 준다.
+        // 없는 쪽의 값은 Map.get()이 null을 반환한다. 기록을 만들어 넣거나 현재가로 계산하지 않는다.
+        var byDate = new java.util.TreeMap<java.time.LocalDate, java.util.Map<Long, BigDecimal>>();
+        for (var record : dailyPerformances.findAllByParticipantCompetitionId(competitionId)) {
+            byDate.computeIfAbsent(record.getRecordDate(), date -> new java.util.HashMap<>())
+                    .put(record.getParticipant().getId(), record.getCumulativeReturnPercent());
+        }
+        var history = byDate.entrySet().stream().map(day -> new CompetitionResultResponse.DailyPerformanceItem(
+                day.getKey(), day.getValue().get(user.getId()), day.getValue().get(ai.getId()))).toList();
+
+        // 4. account_id는 결과 화면 하단에서 참가 계좌의 매매 내역을 조회할 때 사용한다.
+        var participantItems = links.stream().map(link -> {
+            boolean isAi = link.getAccount().isAiManaged();
+            return new CompetitionResultResponse.ParticipantItem(link.getId(), isAi ? "ai" : "user",
+                    link.getAccount().getId(), isAi ? "AI" : "나");
+        }).toList();
+        return new CompetitionResultResponse(competition.getId(), competition.getCompetitionName(),
+                competition.getCompetitionType().name().toLowerCase(Locale.ROOT), "completed",
+                competition.getStartDate(), competition.getEndDate(), null,
+                competition.getWinner().name().toLowerCase(Locale.ROOT), user.getFinalReturnPercent(),
+                ai.getFinalReturnPercent(), participantItems, history);
+    }
+
+    private CompetitionException resultUnavailable() {
+        return new CompetitionException(HttpStatus.INTERNAL_SERVER_ERROR,
+                "COMPETITION_RESULT_UNAVAILABLE", "확정된 대결 결과를 확인할 수 없습니다.");
+    }
 
     @Transactional(readOnly = true) // 저장된 성적만 읽으므로 시세 API 호출이나 DB 갱신은 하지 않는다.
     public CompetitionDetailResponse getCompetitionDetail(Long userId, Long competitionId) {

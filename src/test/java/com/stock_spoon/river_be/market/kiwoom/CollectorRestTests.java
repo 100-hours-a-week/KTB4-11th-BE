@@ -16,6 +16,30 @@ class CollectorRestTests {
     private static final String SECRET = "test-only-collector-shared-secret";
 
     @Test
+    void normalBeForwardsDailyClosingPriceWithFixedReadOnlyBody() {
+        var redis = mock(StringRedisTemplate.class);
+        ValueOperations<String, String> values = mock(ValueOperations.class);
+        when(redis.opsForValue()).thenReturn(values);
+        when(values.get("coord:kiwoom:collector")).thenReturn("owner-1");
+        var builder = RestClient.builder().baseUrl("http://collector:8080");
+        var server = MockRestServiceServer.bindTo(builder).build();
+        server.expect(requestTo("http://collector:8080/internal/kiwoom/query"))
+                .andExpect(content().json("{\"apiId\":\"ka10081\",\"stockCode\":\"005930\",\"collectorId\":\"owner-1\",\"baseDate\":\"20261016\"}"))
+                .andRespond(withSuccess("""
+                        {"return_code":0,"stk_cd":"005930","stk_dt_pole_chart_qry":[{"dt":"20261016","cur_prc":"70000"}]}
+                        """, MediaType.APPLICATION_JSON));
+        var client = new KiwoomMarketClient(new RemoteKiwoomRestTransport(builder.build(), redis, SECRET));
+        assertThat(client.closingPrice("005930", java.time.LocalDate.of(2026, 10, 16))).isEqualTo(70000);
+        assertThat(CollectorQuery.from("ka10081", "/api/dostk/chart",
+                Map.of("stk_cd", "005930", "base_dt", "20261016", "upd_stkpc_tp", "0"), "owner-1").body())
+                .containsEntry("upd_stkpc_tp", "0");
+        assertThatThrownBy(() -> CollectorQuery.from("ka10081", "/api/dostk/chart",
+                Map.of("stk_cd", "005930", "base_dt", "20260230", "upd_stkpc_tp", "0"), "owner-1"))
+                .isInstanceOf(IllegalArgumentException.class);
+        server.verify();
+    }
+
+    @Test
     void normalBeForwardsOnlyQueryAndChecksCollectorIdentity() {
         var redis = mock(StringRedisTemplate.class);
         ValueOperations<String, String> values = mock(ValueOperations.class);

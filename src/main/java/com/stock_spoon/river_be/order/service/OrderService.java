@@ -47,6 +47,7 @@ public class OrderService {
         if (!account.isAiManaged()) {
             throw new OrderException("운용 가능한 자동매매 계좌가 아닙니다.");
         }
+        assertCompetitionStarted(accountId);
     }
 
     @Transactional
@@ -183,7 +184,15 @@ public class OrderService {
         if (!account.isActive() || !account.isAiManaged()) {
             throw new OrderException("운용 가능한 자동매매 계좌가 아닙니다.");
         }
+        assertCompetitionStarted(accountId);
         return account;
+    }
+
+    private void assertCompetitionStarted(long accountId) {
+        // 계좌 ID로 직접 주문해도 시작 대기·종료된 대결의 운용을 우회할 수 없게 한다.
+        if (accounts.hasNonTradingCompetition(accountId, clock.instant().atZone(SEOUL))) {
+            throw new OrderException(HttpStatus.CONFLICT, "COMPETITION_NOT_IN_PROGRESS", "진행 중인 대결만 주문할 수 있습니다.");
+        }
     }
 
     private long availableCash(Account account) {

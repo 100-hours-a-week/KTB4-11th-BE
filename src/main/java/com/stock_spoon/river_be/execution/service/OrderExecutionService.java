@@ -105,6 +105,9 @@ public class OrderExecutionService {
         if (!account.isActive() || !account.isAiManaged()) {
             throw new OrderException("운용 가능한 자동매매 계좌가 아닙니다.");
         }
+        if (accounts.hasNonTradingCompetition(accountId, clock.instant().atZone(SEOUL))) {
+            throw new OrderException(HttpStatus.CONFLICT, "COMPETITION_NOT_IN_PROGRESS", "진행 중인 대결만 주문할 수 있습니다.");
+        }
         var now = clock.instant();
         var local = now.atZone(SEOUL);
         if (local.toLocalTime().isBefore(LocalTime.of(9, 0))
@@ -177,6 +180,9 @@ public class OrderExecutionService {
         }
         // 계좌 잠금·DB 조회를 기다리는 동안 담당이나 연결 세션이 바뀌었으면 자산을 변경하지 않는다.
         validate.run();
+        if (accounts.hasNonTradingCompetition(accountId, clock.instant().atZone(SEOUL))) {
+            throw new OrderException(HttpStatus.CONFLICT, "COMPETITION_NOT_IN_PROGRESS", "진행 중인 대결만 주문할 수 있습니다.");
+        }
         var order = orders.save(Order.pendingMarket(account, stockCode, side, quantity, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered, now));
         account.changeCash(cashDelta);
         var cost = BigDecimal.valueOf(amount);
@@ -263,6 +269,7 @@ public class OrderExecutionService {
         if (order.getStatus() != Order.Status.PENDING || order.getType() != Order.Type.LIMIT) return false;
         var now = clock.instant();
         var local = now.atZone(SEOUL);
+        if (accounts.hasNonTradingCompetition(accountId, local)) return false;
         if (order.getCreatedAt().atZone(SEOUL).toLocalDate().isBefore(local.toLocalDate())
                 || !local.toLocalTime().isBefore(LocalTime.of(15, 30))) {
             order.cancel(now);
@@ -277,6 +284,7 @@ public class OrderExecutionService {
         var cost = BigDecimal.valueOf(amount);
         var holding = holdings.findByAccountIdAndStockCode(accountId, order.getStockCode());
         validate.run();
+        if (accounts.hasNonTradingCompetition(accountId, clock.instant().atZone(SEOUL))) return false;
         BigDecimal pnl = null;
         BigDecimal returnPercent = null;
         if (order.getSide() == Order.Side.BUY) {

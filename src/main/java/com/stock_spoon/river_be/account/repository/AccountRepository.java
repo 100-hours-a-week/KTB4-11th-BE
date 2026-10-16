@@ -9,11 +9,21 @@ import jakarta.persistence.LockModeType;
 import com.stock_spoon.river_be.account.entity.Account;
 
 public interface AccountRepository extends JpaRepository<Account, Long> {
+    @Query("select p.competition from CompetitionParticipant p where p.account.id = :accountId")
+    Optional<com.stock_spoon.river_be.competition.entity.Competition> findCompetitionByAccountId(Long accountId);
+
+    default boolean hasNonTradingCompetition(Long accountId, java.time.ZonedDateTime now) {
+        return findCompetitionByAccountId(accountId).map(c -> !c.isTradingAt(now)).orElse(false);
+    }
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select a from Account a where a.id = :accountId")
     Optional<Account> findLockedById(@org.springframework.data.repository.query.Param("accountId") Long accountId);
 
     boolean existsByUserId(Long userId);
+
+    // 비활성 계좌도 DB의 이름 유일 제약에 포함되므로 이름을 재사용하지 않는다.
+    boolean existsByUserIdAndNameIgnoreCase(Long userId, String name);
+    boolean existsByUserIdAndNameIgnoreCaseAndIdNot(Long userId, String name, Long accountId);
 
     boolean existsByUserIdAndNameIgnoreCaseAndActiveTrue(Long userId, String name);
 
@@ -22,8 +32,21 @@ public interface AccountRepository extends JpaRepository<Account, Long> {
 
     Optional<Account> findByIdAndUserIdAndActiveTrue(Long accountId, Long userId);
 
+    @Query("select a from Account a where a.user.id = :userId and a.active = true "
+            + "and not exists (select p.id from CompetitionParticipant p where p.account = a and a.aiManaged = true) "
+            + "order by a.createdAt, a.id")
     List<Account> findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(Long userId);
 
-    @Query("select a from Account a join fetch a.user where a.active = true and a.aiManaged = true order by a.user.id, a.createdAt, a.id")
-    List<Account> findActiveAiManaged();
+    // 일반 v1 AI 계좌는 유지한다. 대결 계좌는 진행 중이고 기간 안인 경우에만 운용 대상으로 공개한다.
+    @Query("select a from Account a join fetch a.user where a.active = true and a.aiManaged = true "
+            + "and (not exists (select p.id from CompetitionParticipant p where p.account = a) "
+            + "or exists (select p.id from CompetitionParticipant p where p.account = a "
+            + "and p.competition.state = IN_PROGRESS "
+            + "and p.competition.startDate <= :today and p.competition.endDate >= :today)) "
+            + "order by a.user.id, a.createdAt, a.id")
+    List<Account> findActiveAiManagedOn(java.time.LocalDate today);
+
+    default List<Account> findActiveAiManaged() {
+        return findActiveAiManagedOn(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul")));
+    }
 }

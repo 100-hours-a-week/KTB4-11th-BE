@@ -11,6 +11,7 @@
 | `feat/123-competition/completion-scheduler` | 결과 확정·완료 처리 | [4. 종료 정산](#4-종료-정산) |
 | 같은 브랜치 | 마감 후 거래 차단 | [5. 주문 차단](#5-주문-차단) |
 | `feat/127-competition/daily-performance` | 일별 평가금·누적 수익률 저장 | [6. 일별 성적 저장](#6-일별-성적-저장) |
+| `feat/129-competition/detail` | 확정된 사용자 일별 수익률 상세 조회 | [7. 대결 상세 조회](#7-대결-상세-조회) |
 
 ## 1. 대결 생성
 
@@ -338,7 +339,7 @@ CompetitionDailyPerformanceService.recordFinalPerformances()
 최종 성적과 마지막 거래일 기록을 함께 커밋
 ```
 
-새 스케줄러나 컨트롤러는 추가하지 않았다. 현재 작업은 DB 기록까지이며 일별 그래프 조회 API는 다음 작업이다.
+127 브랜치에서는 새 스케줄러나 컨트롤러를 추가하지 않고 DB 기록까지 구현했다. 조회 API는 129 브랜치에서 연결했다.
 
 ### 단계별 전달값
 
@@ -391,6 +392,64 @@ CompetitionDailyPerformanceService.recordFinalPerformances()
 
 코드: [일별 서비스](../src/main/java/com/stock_spoon/river_be/competition/service/CompetitionDailyPerformanceService.java) · [Entity](../src/main/java/com/stock_spoon/river_be/competition/entity/CompetitionDailyPerformance.java) · [Repository](../src/main/java/com/stock_spoon/river_be/competition/repository/CompetitionDailyPerformanceRepository.java)
 
+## 7. 대결 상세 조회
+
+### 호출 흐름
+
+```text
+GET /api/v2/users/me/competitions/{competition_id}
+    ↓ JWT 사용자 ID + URL의 대결 ID
+CompetitionController.getCompetitionDetail()
+    ↓
+CompetitionService.getCompetitionDetail(userId, competitionId)
+    ├─ CompetitionRepository → 본인 대결 조회
+    ├─ CompetitionParticipantRepository → 참가자·계좌 조회
+    └─ CompetitionDailyPerformanceRepository → 사용자 확정 일별 기록 조회
+    ↓ CompetitionDetailResponse
+200 OK + JSON
+```
+
+### 단계별 전달값
+
+| 단계 | 실제 메서드 | 입력 → 결과 |
+|---|---|---|
+| 요청 수신 | `CompetitionController.getCompetitionDetail(jwt, competitionId)` | 인증 사용자·경로 ID → 서비스가 반환한 DTO |
+| 소유권 확인 | `CompetitionRepository.findByIdAndUserId(competitionId, userId)` | 대결·사용자 ID → 본인 대결 또는 없음 |
+| 참가자 조회 | `CompetitionParticipantRepository.findAllByCompetitionIdOrderByIdAsc(competitionId)` | 대결 ID → 사용자·AI 참가자와 계좌 |
+| 일별 기록 조회 | `CompetitionDailyPerformanceRepository.findAllByParticipantIdOrderByRecordDateAsc(participantId)` | 사용자 참가자 ID → 날짜 오름차순 확정 기록 |
+| 응답 구성 | `CompetitionService.getCompetitionDetail()` | 대결·참가자·사용자 기록 → `CompetitionDetailResponse` |
+
+### 표시 예시와 정책
+
+```text
+10월 15일 확정 기록: +2.0%
+
+10월 16일 장중 조회 → 그래프는 15일까지, 상단 수익률도 +2.0%
+16일 15:30 이후 기록 저장 전 조회 → 동일한 마지막 확정 기록 유지
+16일 기록 +2.9% 저장 후 조회 → 16일 점 추가, 상단도 +2.9%
+주말 조회 → 마지막 거래일 확정 기록 유지
+```
+
+- 오늘 장중 임시 점을 추가하지 않는다. 조회에서는 시세 API를 호출하거나 누락일을 생성하지 않는다.
+- 상단 `cumulative_return_percent`는 마지막 `daily_performances` 항목의 값과 같다. 첫 확정 기록 전에는 0과 빈 배열이다.
+- 상세는 완료 후에도 사용자 기록만 반환한다. AI 비교 성적은 후속 결과 조회 API에서 제공한다.
+- `participants`에는 사용자·AI 각각의 `participant_id`, `account_id`, `participant_type`, `display_name`을 넣는다. 성적은 넣지 않는다.
+- 하단 매매 내역은 이 `account_id`로 별도 API를 호출한다. 상세 응답에는 매매 내역을 포함하지 않는다.
+- `d_day`는 기존 목록과 같은 한국 날짜 기준 계산값이며 완료·취소는 null이다.
+- `@Transactional(readOnly = true)`로 조회하고 Entity 대신 `class + @Getter` DTO를 반환한다. 참가자·일별 항목은 같은 DTO 파일의 내부 클래스다.
+- 목록 API의 진행 중 수익률은 기존 현재 평가 기준을 유지한다. 상세 API는 이번에 확정한 장 마감 기준이므로 장중에 두 값이 다를 수 있다.
+
+### 예외 처리
+
+```text
+미인증 → 401
+없는 대결 / 다른 사용자의 대결 → 404 + COMPETITION_NOT_FOUND
+사용자 참가자 누락 → 500 + INVALID_COMPETITION_PARTICIPANTS
+확정 기록 없음 → 정상 200, 수익률 0 + daily_performances: []
+```
+
+코드: [컨트롤러](../src/main/java/com/stock_spoon/river_be/competition/controller/CompetitionController.java) · [서비스](../src/main/java/com/stock_spoon/river_be/competition/service/CompetitionService.java) · [상세 DTO](../src/main/java/com/stock_spoon/river_be/competition/dto/CompetitionDetailResponse.java)
+
 ## 설정과 DB 적용
 
 | 설정 키 | 기본값 | 역할 |
@@ -411,5 +470,5 @@ CompetitionDailyPerformanceService.recordFinalPerformances()
 - AI 서버 계좌 조회는 기간 내 진행 중 대결의 AI 계좌를 포함한다. 마감 직후 상태 변경 전에는 목록에 남을 수 있지만 주문은 종료 시각으로 차단한다.
 - 일반 계좌 생성·이름 변경은 대결 생성과 같은 사용자 잠금을 사용해 이름 중복 경쟁을 막는다.
 - 기존 v1 일반 AI 계좌와 저장 데이터는 유지한다. v2 일반 계좌의 사용자 운용 전환·사용자 직접 주문 지원은 별도 작업이다.
-- 일별 누적 수익률의 DB 기록은 구현했다. 상세 조회, 결과 상세 API, AI 리포트 조회는 아직 구현 전이다.
+- 일별 누적 수익률의 DB 기록과 사용자 상세 조회는 구현했다. 결과 상세 API, 매매 내역 조회 및 AI 리포트 조회는 후속 작업이다.
 - 새 기능도 **짧은 호출 흐름 → 전달값 표 → 계산·정책 예시 → 예외 처리**로 기록하고 구현된 내용과 계획을 구분한다.

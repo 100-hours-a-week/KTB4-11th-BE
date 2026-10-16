@@ -5,6 +5,12 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 // save(), findById() 등 기본 저장·조회 기능은 Spring Data JPA가 구현한다.
 public interface CompetitionRepository extends JpaRepository<Competition, Long> {
+    // 완료 대결도 포함해 서버 중단 중 누락된 과거 일별 성적을 복구한다.
+    @org.springframework.data.jpa.repository.Query("select c.id from Competition c "
+            + "where c.state in (IN_PROGRESS, COMPLETED) and c.startedAt is not null "
+            + "and c.startDate <= :today order by c.id")
+    java.util.List<Long> findDailyPerformanceCandidates(java.time.LocalDate today);
+
     @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
     @org.springframework.data.jpa.repository.Query("select c from Competition c where c.id = :id")
     java.util.Optional<Competition> findLockedById(Long id);

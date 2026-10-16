@@ -43,6 +43,7 @@ class CompetitionCreationTests {
     @Autowired com.stock_spoon.river_be.holding.repository.HoldingRepository holdings;
     @Autowired com.stock_spoon.river_be.competition.service.CompetitionCompletionService completion;
     @Autowired com.stock_spoon.river_be.order.repository.OrderRepository orders;
+    @Autowired com.stock_spoon.river_be.competition.service.CompetitionDailyPerformanceService dailyPerformances;
     private User user;
 
     @BeforeEach
@@ -76,7 +77,7 @@ class CompetitionCreationTests {
         assertThat(participants.findAllByCompetitionIdOrderByIdAsc(id))
                 .allSatisfy(p -> assertThat(p.getFinalAssetValue()).isNull());
         org.mockito.Mockito.doReturn(90_000L).when(market).closingPrice("005930", LocalDate.of(2026, 10, 16));
-        new com.stock_spoon.river_be.competition.service.CompetitionCompletionScheduler(competitions, completion, tradingHours)
+        new com.stock_spoon.river_be.competition.service.CompetitionCompletionScheduler(competitions, completion, tradingHours, dailyPerformances)
                 .completeExpiredCompetitions();
         assertThat(competitions.findById(id).orElseThrow().getWinner().name()).isEqualTo("AI");
         assertThat(service.listCompetitions(user.getId()).getCompetitions().getFirst().getCumulativeReturnPercent()).isEqualTo(-1.0);
@@ -150,6 +151,10 @@ class CompetitionCreationTests {
         assertThat(result.getOngoingCompetitionCount()).isZero();
         assertThat(result.getCompetitions().getFirst().getWinner()).isEqualTo("user");
         assertThat(result.getCompetitions().getFirst().getCumulativeReturnPercent()).isEqualTo(2.0);
+        var lastPoint = context.getBean(com.stock_spoon.river_be.competition.repository.CompetitionDailyPerformanceRepository.class)
+                .findByParticipantIdAndRecordDate(links.getFirst().getId(), LocalDate.of(2026, 10, 16)).orElseThrow();
+        assertThat(lastPoint.getAssetValue()).isEqualTo(10_200_000);
+        assertThat(lastPoint.getCumulativeReturnPercent()).isEqualByComparingTo("2.0");
         assertThat(result.getCompetitions().getFirst().getDDay()).isNull();
         assertThat(orders.findAllByAccountIdAndStatus(aiAccount.getId(),
                 com.stock_spoon.river_be.order.entity.Order.Status.PENDING)).isEmpty();

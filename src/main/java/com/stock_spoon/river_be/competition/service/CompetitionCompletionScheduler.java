@@ -14,9 +14,19 @@ public class CompetitionCompletionScheduler {
     private final CompetitionRepository competitions;
     private final CompetitionCompletionService completion;
     private final CompetitionTradingHours tradingHours;
+    private final CompetitionDailyPerformanceService dailyPerformances;
 
     @Scheduled(fixedDelayString = "${competition.completion.interval-ms:3600000}")
     public void completeExpiredCompetitions() {
+        // 같은 1시간 주기에 일별 기록도 실행한다. 완료 대결의 과거 누락분도 복구한다.
+        for (Long id : competitions.findDailyPerformanceCandidates(tradingHours.now().toLocalDate())) {
+            try {
+                dailyPerformances.recordMissingDays(id);
+            } catch (RuntimeException error) {
+                // 일별 기록이 실패해도 다른 대결과 종료 정산은 계속 처리한다.
+                log.warn("event=competition_daily_performance_failed competitionId={} causeType={}", id, error.getClass().getSimpleName());
+            }
+        }
         // 금요일에 일요일 종료 대결도 찾는다. 서버 재시작 후에는 과거 미처리 대결도 다시 찾는다.
         var latest = tradingHours.now().toLocalDate().plusDays(2);
         for (Long id : competitions.findCompletionCandidates(latest)) {

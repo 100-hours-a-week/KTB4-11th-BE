@@ -6,6 +6,24 @@ import com.stock_spoon.river_be.order.entity.Order;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface ExecutionRepository extends JpaRepository<Execution, Long> {
+    // 현재 잔액 대신 과거 체결을 날짜순으로 읽는다. 다음 날의 체결은 해당일 평가에 포함하지 않는다.
+    @org.springframework.data.jpa.repository.Query("""
+            select e.order.account.id as accountId, e.order.stockCode as stockCode,
+                   e.order.side as side, e.price as price, e.quantity as quantity, e.createdAt as createdAt
+            from Execution e where e.order.account.id in :accountIds and e.createdAt < :cutoff
+            order by e.createdAt, e.id
+            """)
+    java.util.List<PerformanceTrade> findPerformanceTrades(java.util.List<Long> accountIds, java.time.Instant cutoff);
+
+    interface PerformanceTrade {
+        Long getAccountId();
+        String getStockCode();
+        Order.Side getSide();
+        long getPrice();
+        long getQuantity();
+        java.time.Instant getCreatedAt();
+    }
+
     // 주문 생성시각이나 매도 체결을 제외하고, 종목별 마지막 매수 체결시각을 한 번에 읽는다.
     @org.springframework.data.jpa.repository.Query("""
             select e.order.stockCode as stockCode, max(e.createdAt) as lastPurchasedAt

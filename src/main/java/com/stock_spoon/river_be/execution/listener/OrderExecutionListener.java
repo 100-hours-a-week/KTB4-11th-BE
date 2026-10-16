@@ -25,7 +25,6 @@ public class OrderExecutionListener {
     private final OrderExecutionService execution;
     private final OrderSubscriptionService subscriptions;
     private final com.stock_spoon.river_be.market.MarketStream stream;
-    private final KiwoomMarketClient market;
     private final OrderBuyPriceService buyPrices;
 
     public OrderExecutionListener(OrderRepository orders, ExecutionRepository executions,
@@ -36,7 +35,6 @@ public class OrderExecutionListener {
         this.execution = execution;
         this.subscriptions = subscriptions;
         this.stream = stream;
-        this.market = market;
         this.buyPrices = buyPrices;
     }
 
@@ -44,24 +42,17 @@ public class OrderExecutionListener {
     // [체결 진입 A] Controller가 저장 후 직접 호출한다. 현재가 확보 후 attempt()로 이어진다.
     public void orderCreated(Order order) {
         try {
+            // 장외·이전 거래일의 예약은 새 이벤트로만 체결 판단한다.
+            if (!execution.isCurrentSession(order.getCreatedAt())) return;
             stream.assertAvailable(order.getStockCode());
             var latest = stream.latestQuote(order.getStockCode());
-            long price;
-            Runnable validate;
-            if (latest.isPresent()) {
-                var quote = latest.get();
-                price = quote.price().currentPrice().longValueExact();
-                validate = () -> stream.assertSource(order.getStockCode(), quote.source());
-            } else {
-                stream.assertRestFallbackAllowed();
-                long fetched = market.currentPrice(order.getStockCode());
-                // REST 조회 중 웹소켓 가격이 도착했다면 그 값을 우선한다. REST로 캐시를 덮어쓰지 않는다.
-                var arrived = stream.latestQuote(order.getStockCode());
-                price = arrived.map(value -> value.price().currentPrice().longValueExact()).orElse(fetched);
-                validate = arrived.<Runnable>map(quote -> () -> stream.assertSource(order.getStockCode(), quote.source()))
-                        .orElse(() -> stream.assertAvailable(order.getStockCode()));
-            }
-            attempt(order, price, validate);
+            if (latest.isEmpty() || !execution.isUsablePrice(latest.get().price())) return;
+            var quote = latest.get();
+            Runnable validate = () -> {
+                if (!execution.isUsablePrice(quote.price())) throw new IllegalStateException("유효한 장중 시세가 아닙니다.");
+                stream.assertSource(order.getStockCode(), quote.source());
+            };
+            attempt(order, quote.price().currentPrice().longValueExact(), validate);
         } catch (RuntimeException error) {
             log.warn("event=order_initial_price_failed orderId={} causeType={}", order.getId(), error.getClass().getSimpleName());
         } finally {
@@ -83,13 +74,18 @@ public class OrderExecutionListener {
     }
 
     private void processPrice(KiwoomStockStream.StockPrice price, Runnable validate) {
+        if (!execution.isUsablePrice(price)) return;
+        Runnable currentSource = () -> {
+            if (!execution.isUsablePrice(price)) throw new IllegalStateException("유효한 장중 시세가 아닙니다.");
+            validate.run();
+        };
         boolean executed = false;
         try {
-            validate.run();
+            currentSource.run();
             long currentPrice = price.currentPrice().longValueExact();
             for (Order order : orders.findPendingForPrice(price.stockCode(), Order.Status.PENDING, Order.Type.LIMIT)) {
                 // 주문 접수 전에 수신된 이벤트가 나중에 처리되어 새 주문을 체결하지 않게 한다.
-                if (!order.getCreatedAt().isAfter(price.receivedAt())) executed |= attempt(order, currentPrice, validate);
+                if (!order.getCreatedAt().isAfter(price.receivedAt())) executed |= attempt(order, currentPrice, currentSource);
             }
         } catch (RuntimeException error) {
             log.warn("event=order_price_processing_failed stockCode={} causeType={}",
@@ -101,7 +97,7 @@ public class OrderExecutionListener {
 
     private boolean attempt(Order order, long price, Runnable validate) {
         try {
-            // 가격 미충족 주문은 잠금을 생략한다. 만료 정리는 기존 구독 갱신 주기가 담당한다.
+            // 가격 미충족 주문은 잠금을 생략하고 예약 상태를 유지한다.
             if (price > 0 && (order.getSide() == Order.Side.BUY && price > order.getLimitPrice()
                     || order.getSide() == Order.Side.SELL && price < order.getLimitPrice())) return false;
             validate.run();

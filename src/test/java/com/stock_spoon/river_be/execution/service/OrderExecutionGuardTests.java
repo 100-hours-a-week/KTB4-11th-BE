@@ -24,6 +24,33 @@ import static org.mockito.Mockito.*;
 
 class OrderExecutionGuardTests {
     @Test
+    void reachingCloseDuringValidationKeepsPendingAndDoesNotChangeAssets() {
+        var accounts = mock(AccountRepository.class);
+        var orders = mock(OrderRepository.class);
+        var holdings = mock(HoldingRepository.class);
+        var executions = mock(ExecutionRepository.class);
+        var account = mock(Account.class);
+        var pending = mock(Order.class);
+        var clock = mock(Clock.class);
+        var now = new java.util.concurrent.atomic.AtomicReference<>(Instant.parse("2026-10-19T06:29:59Z"));
+        when(clock.instant()).thenAnswer(ignored -> now.get());
+        var service = new OrderExecutionService(accounts, orders, holdings, executions, clock);
+        when(accounts.findLockedById(1L)).thenReturn(Optional.of(account));
+        when(orders.findByIdAndAccountId(2L, 1L)).thenReturn(Optional.of(pending));
+        when(pending.getStatus()).thenReturn(Order.Status.PENDING);
+        when(pending.getType()).thenReturn(Order.Type.LIMIT);
+        when(pending.getSide()).thenReturn(Order.Side.BUY);
+        when(pending.getLimitPrice()).thenReturn(70000L);
+        when(pending.getQuantity()).thenReturn(1L);
+        assertThat(service.executeLimit(1L, 2L, 69000, Map.of(),
+                () -> now.set(Instant.parse("2026-10-19T06:30:00Z")))).isFalse();
+        verify(account, never()).changeCash(anyLong());
+        verify(pending, never()).cancel(any());
+        verify(pending, never()).execute();
+        verifyNoInteractions(executions);
+    }
+
+    @Test
     void sessionLostWhileAcquiringAccountLockStopsLimitAndMarketAssets() {
         var accounts = mock(AccountRepository.class);
         var orders = mock(OrderRepository.class);

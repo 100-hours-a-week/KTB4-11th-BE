@@ -80,15 +80,17 @@ class OrderServiceTests {
     }
 
     @Test
-    void previousDayPendingOrdersAreCancelledAndReservedCashIsReleased() {
+    void previousDayPendingOrdersKeepReservedCashUntilUserCancels() {
         Order staleOrder = orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY,
                 2, 70_000, Order.Source.AI, null, Instant.parse("2000-01-01T00:00:00Z")));
 
-        service.cancelExpiredPendingOrders();
+        new OrderSubscriptionService(orders, org.mockito.Mockito.mock(com.stock_spoon.river_be.market.MarketStream.class)).refresh();
 
-        assertThat(staleOrder.getStatus()).isEqualTo(Order.Status.CANCELLED);
-        assertThat(staleOrder.getReservedCash()).isZero();
-        assertThat(staleOrder.getCancelledAt()).isNotNull();
+        assertThat(staleOrder.getStatus()).isEqualTo(Order.Status.PENDING);
+        assertThat(staleOrder.getReservedCash()).isEqualTo(140_000);
+        assertThat(staleOrder.getCancelledAt()).isNull();
+        assertThat(service.availableCash(account.getId())).isEqualTo(860_000);
+        service.cancel(account.getId(), staleOrder.getId());
         assertThat(service.availableCash(account.getId())).isEqualTo(1_000_000);
     }
 

@@ -12,6 +12,19 @@ import static org.mockito.Mockito.*;
 
 class RedisMarketStreamTests {
     @Test
+    void subscriptionAckDoesNotReplayStoredPriceAsNewExecutionEvent() {
+        var quotes = mock(RedisQuoteStore.class);
+        var events = mock(org.springframework.context.ApplicationEventPublisher.class);
+        var stream = new RedisMarketStream(quotes, mock(RedisSubscriptionDemand.class),
+                mock(KiwoomStockStream.class), mock(RedisCollectorHeartbeat.class),
+                mock(RedisMessageListenerContainer.class), events, mock(OrderRepository.class));
+        try {
+            stream.onChannelSubscribed("quotes:005930".getBytes(java.nio.charset.StandardCharsets.UTF_8), 1);
+            verifyNoInteractions(quotes, events);
+        } finally { stream.close(); }
+    }
+
+    @Test
     void commitBetweenDemandAndPendingReadsDoesNotDropSubscription() {
         var quotes = mock(RedisQuoteStore.class);
         var demands = mock(RedisSubscriptionDemand.class);

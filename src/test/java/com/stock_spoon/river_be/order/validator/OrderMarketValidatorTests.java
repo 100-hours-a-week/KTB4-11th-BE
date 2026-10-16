@@ -3,30 +3,19 @@ package com.stock_spoon.river_be.order.validator;
 import com.stock_spoon.river_be.order.exception.OrderException;
 
 import com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient;
-import java.time.Clock;
-import java.time.Instant;
-import java.time.ZoneOffset;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class OrderMarketValidatorTests {
     private final KiwoomMarketClient client = mock(KiwoomMarketClient.class);
-    private final OrderMarketValidator validator = validatorAt("2026-09-28T01:00:00Z");
+    private final OrderMarketValidator validator = new OrderMarketValidator(client);
 
     @Test
-    void acceptsOnlySeoulTimeFromNineUntilBeforeFifteenThirtyRegardlessOfDate() {
-        assertThatThrownBy(() -> validatorAt("2026-09-26T23:59:59Z").validateLimit("005930", 70_000))
-                .isInstanceOfSatisfying(OrderException.class,
-                        error -> assertThat(error.code()).isEqualTo("ORDER_WINDOW_CLOSED"));
-        assertThatThrownBy(() -> validatorAt("2026-09-27T06:30:00Z").validateLimit("005930", 70_000))
-                .isInstanceOfSatisfying(OrderException.class,
-                        error -> assertThat(error.code()).isEqualTo("ORDER_WINDOW_CLOSED"));
-        verifyNoInteractions(client);
+    void validatesStockAndTickWithoutDependingOnMarketHours() {
         when(client.stockInfo("005930")).thenReturn(
                 new KiwoomMarketClient.StockInfo("005930", "0", "증거금20%|담보대출|신용가능", "0"));
-        validatorAt("2026-09-26T00:00:00Z").validateLimit("005930", 70_000);
-        validatorAt("2026-09-26T06:29:59Z").validateLimit("005930", 70_000);
+        validator.validateLimit("005930", 70_000);
     }
 
     @Test
@@ -66,7 +55,4 @@ class OrderMarketValidatorTests {
         }
     }
 
-    private OrderMarketValidator validatorAt(String instant) {
-        return new OrderMarketValidator(client, Clock.fixed(Instant.parse(instant), ZoneOffset.UTC));
-    }
 }

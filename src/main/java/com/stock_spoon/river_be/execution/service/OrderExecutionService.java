@@ -51,6 +51,36 @@ public class OrderExecutionService {
         this.clock = clock;
     }
 
+    /** 체결 시각은 한국 시간 평일 09:00 이상 15:30 미만이다. */
+    public boolean isTradingTime() {
+        return inTradingHours(clock.instant().atZone(SEOUL));
+    }
+
+    private static boolean inTradingHours(java.time.ZonedDateTime time) {
+        return time.getDayOfWeek() != java.time.DayOfWeek.SATURDAY
+                && time.getDayOfWeek() != java.time.DayOfWeek.SUNDAY
+                && !time.toLocalTime().isBefore(LocalTime.of(9, 0))
+                && time.toLocalTime().isBefore(LocalTime.of(15, 30));
+    }
+
+    public boolean isCurrentSession(java.time.Instant timestamp) {
+        if (timestamp == null) return false;
+        var now = clock.instant();
+        var local = timestamp.atZone(SEOUL);
+        return inTradingHours(now.atZone(SEOUL)) && inTradingHours(local)
+                && !timestamp.isAfter(now)
+                && local.toLocalDate().equals(now.atZone(SEOUL).toLocalDate());
+    }
+
+    /** 초 단위 만료를 추가하지 않고 당일 장중 시세 및 미래 시각 여부를 확인한다. */
+    public boolean isUsablePrice(com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.StockPrice price) {
+        if (price == null || price.tradeTime() == null || !isCurrentSession(price.receivedAt())) return false;
+        var received = price.receivedAt().atZone(SEOUL);
+        var traded = received.toLocalDate().atTime(price.tradeTime()).atZone(SEOUL);
+        return inTradingHours(traded) && !traded.toInstant().isAfter(price.receivedAt().plusSeconds(1))
+                && !traded.toInstant().isAfter(clock.instant().plusSeconds(1));
+    }
+
     @Transactional
     public Order executeMarketBuy(long userId, long accountId, String stockCode, long quantity,
             String reason, OrderBook book) {
@@ -270,12 +300,7 @@ public class OrderExecutionService {
         var now = clock.instant();
         var local = now.atZone(SEOUL);
         if (accounts.hasNonTradingCompetition(accountId, local)) return false;
-        if (order.getCreatedAt().atZone(SEOUL).toLocalDate().isBefore(local.toLocalDate())
-                || !local.toLocalTime().isBefore(LocalTime.of(15, 30))) {
-            order.cancel(now);
-            return false;
-        }
-        if (local.toLocalTime().isBefore(LocalTime.of(9, 0))) return false;
+        if (!isTradingTime()) return false;
         if (order.getSide() == Order.Side.BUY ? currentPrice > order.getLimitPrice()
                 : currentPrice < order.getLimitPrice()) return false;
         long quantity = order.getQuantity();
@@ -284,7 +309,9 @@ public class OrderExecutionService {
         var cost = BigDecimal.valueOf(amount);
         var holding = holdings.findByAccountIdAndStockCode(accountId, order.getStockCode());
         validate.run();
-        if (accounts.hasNonTradingCompetition(accountId, clock.instant().atZone(SEOUL))) return false;
+        now = clock.instant();
+        if (!inTradingHours(now.atZone(SEOUL))
+                || accounts.hasNonTradingCompetition(accountId, now.atZone(SEOUL))) return false;
         BigDecimal pnl = null;
         BigDecimal returnPercent = null;
         if (order.getSide() == Order.Side.BUY) {

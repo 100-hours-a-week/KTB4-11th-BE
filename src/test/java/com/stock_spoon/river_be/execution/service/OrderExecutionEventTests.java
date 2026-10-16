@@ -37,7 +37,7 @@ import static org.mockito.Mockito.*;
 @SpringBootTest(properties = "spring.datasource.url=jdbc:h2:mem:execution-events;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE")
 @Import(OrderExecutionEventTests.FixedTime.class)
 class OrderExecutionEventTests {
-    private static final Instant NOW = Instant.parse("2026-10-01T01:00:00Z");
+    private static final Instant NOW = Instant.parse("2026-10-19T01:00:00Z");
     @Autowired UserRepository users;
     @Autowired AccountRepository accounts;
     @Autowired OrderRepository orders;
@@ -196,7 +196,7 @@ class OrderExecutionEventTests {
     }
 
     @Test
-    void initialRestFailureLeavesPendingThenWebsocketPriceExecutes() {
+    void missingInitialPriceLeavesPendingThenWebsocketPriceExecutes() {
         var account = account("첫 가격 대기");
         var order = order(account);
         when(stream.latest("005930")).thenReturn(Optional.empty());
@@ -212,5 +212,30 @@ class OrderExecutionEventTests {
         assertThat(response.executions()).hasSize(1);
         assertThat(response.executions().getFirst().executionPrice()).isEqualTo(69000);
         assertThat(response.executions().getFirst().realizedPnl()).isNull();
+    }
+
+    @Test
+    void fridayAndWeekendOrdersIgnoreOldPriceAndExecuteOnMondayNewEventOnlyOnce() {
+        var firstAccount = account("금요일 예약");
+        var secondAccount = account("주말 예약");
+        var friday = orders.save(Order.pendingLimit(firstAccount, "005930", Order.Side.BUY, 1, 70000,
+                Order.Source.AI, null, Instant.parse("2026-10-16T12:00:00Z")));
+        var weekend = orders.save(Order.pendingLimit(secondAccount, "005930", Order.Side.BUY, 1, 70000,
+                Order.Source.AI, null, Instant.parse("2026-10-17T12:00:00Z")));
+        // 재시작 후 최초 판단은 장외 예약에 대해 저장 시세를 조회하지 않는다.
+        listener.orderCreated(friday);
+        listener.orderCreated(weekend);
+        verify(stream, never()).latestQuote(anyString());
+        verifyNoInteractions(market);
+        events.publishEvent(new KiwoomStockStream.StockPrice("005930", BigDecimal.valueOf(69000),
+                BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(10, 0), Instant.parse("2026-10-16T01:00:00Z")));
+        assertThat(executions.count()).isZero();
+        assertThat(orders.findById(friday.getId()).orElseThrow().getStatus()).isEqualTo(Order.Status.PENDING);
+        events.publishEvent(price());
+        events.publishEvent(price());
+        assertThat(executions.count()).isEqualTo(2);
+        assertThat(orders.findById(friday.getId()).orElseThrow().getStatus()).isEqualTo(Order.Status.EXECUTED);
+        assertThat(orders.findById(weekend.getId()).orElseThrow().getStatus()).isEqualTo(Order.Status.EXECUTED);
+        assertThat(accounts.findById(firstAccount.getId()).orElseThrow().getCashBalance()).isEqualTo(931000);
     }
 }

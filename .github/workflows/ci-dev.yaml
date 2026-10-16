@@ -103,7 +103,7 @@ jobs:
       image_tag: ${{ github.sha }}
     secrets: inherit
 
-  # V2 개발 EC2 배포가 성공한 이미지만 운영 ECS(V1 DB 사용)에 배포한다.
+  # 개발 EC2 배포가 성공한 동일 이미지를 운영 ECS에 배포한다.
   deploy-ecs:
     needs: deploy-dev
     if: github.event_name == 'push' && github.ref == 'refs/heads/dev'

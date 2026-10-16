@@ -567,6 +567,46 @@ READY / IN_PROGRESS / CANCELLED → 409 + COMPETITION_NOT_COMPLETED
 
 코드: [컨트롤러](../src/main/java/com/stock_spoon/river_be/competition/controller/CompetitionController.java) · [서비스](../src/main/java/com/stock_spoon/river_be/competition/service/CompetitionService.java) · [결과 DTO](../src/main/java/com/stock_spoon/river_be/competition/dto/CompetitionResultResponse.java)
 
+### 이전 매매 내역 브랜치에서 확인한 내용 — 현재 브랜치에는 미포함
+
+`feat/137-competition/trade-history`에서 독립 구현으로 변경한 뒤 `CompetitionTradeHistoryTests` 5개, `OrderHistoryTests` 13개, `OrderControllerTests` 30개가 통과했다. AI 조회 제한은 조회 권한만 검사하며 AI 주문 생성이나 판단 근거 저장을 중단하지 않는다. 아래 주문 상태 필터 논의도 해당 브랜치에서 이어진 기록이다.
+
+### 검토 중인 후속 변경: 기존 주문 내역의 상태 필터
+
+현재 기존 `/api/v1/accounts/{account_id}/orders` 구현은 AI의 체결 완료 주문만 반환한다. 대기 주문 조회는 별도 API를 만들지, 기존 API에 조건을 추가할지 아직 확정하지 않았다. 논의에서는 `?order_status=pending`, `executed`, `cancelled`로 필터링하는 방식을 제안했으며 **구현하지 않았다**. 필터 생략 시 전체 주문으로 바꾸는 경우 기존 FE와 응답 정책을 맞춰야 한다. 대기 주문은 `executions: []`, `execution_summary: null` 형태를 제안했다.
+
+대결 매매 내역 API는 현재 체결 완료 주문만 반환한다. 기존 주문 API의 상태 필터 논의와 AI 계좌의 완료 전 공개 제한은 별개의 정책이다.
+
+## 대결 AI 리포트 조회
+
+```text
+GET /api/v2/users/me/competitions/{competition_id}/report
+  → CompetitionReportController.get(jwt, competitionId)
+  → CompetitionReportService.get(userId, competitionId)
+      → CompetitionRepository.findById(): 본인 소유 대결인지 검사
+      → CompetitionMarketAnalysisRepository.findAllByCompetitionIdOrderByDateDescIdDesc()
+      → CompetitionJudgmentSummaryRepository.findAllByCompetitionIdOrderByIdAsc()
+  → CompetitionReportResponse: 대결 정보 + 시장 분석 + 판단 요약 → 200
+```
+
+| 단계 | 입력 | 결과 |
+|---|---|---|
+| 컨트롤러 | JWT subject, competition_id | 인증된 사용자와 대결 ID 전달 |
+| 서비스 | 대결 ID와 소유자 | 타인 대결과 없는 대결은 모두 404 COMPETITION_NOT_FOUND |
+| 시장 분석 | competition_id | analysis_id·date·title·content, 날짜 내림차순·동률은 ID 내림차순 |
+| 판단 요약 | competition_id | title·content, 저장 ID 오름차순 |
+| 응답 | 조회된 대결·분석·요약 | competition_id·competition_name·start_date·end_date·state·market_analyses·judgment_summaries |
+
+사용자가 확정한 정책에 따라 **READY / IN_PROGRESS / COMPLETED / CANCELLED 상태와 관계없이 본인의 리포트를 공개**한다. 이 조회에는 AI 매매 내역의 완료 후 공개 검사를 적용하지 않는다. AI 매매 내역 및 주문별 판단 근거의 공개 제한은 별도 매매 내역 브랜치에서 구현한 정책이며 현재 브랜치에는 아직 포함되지 않았다.
+
+시장 분석 본문을 최초 응답에 포함하므로 화면의 접기·펼치기는 FE에서 처리한다. 데이터가 아직 없으면 `market_analyses: []`, `judgment_summaries: []`를 반환한다. 예시 문구나 주문별 판단 근거를 대신 채우지 않는다. 페이지네이션 없이 저장된 전체를 반환한다.
+
+저장 구조는 `competition_market_analyses`와 `competition_judgment_summaries` 두 테이블이며 각각 대결 ID로 연결한다. v2는 대결당 AI 하나이므로 대결별로 저장한다. 주문별 `ai_order_reports`와는 별개다. 신규 DDL은 `db/competition-reports.sql`이며 실제 DB에는 실행하지 않았다.
+
+**범위:** 이번 구현은 DB 저장 구조와 GET 조회다. AI 서버가 데이터를 보내고 BE가 저장한다는 방향은 정해졌지만 전송 URI·인증·갱신/중복 정책은 아직 정해지지 않아 수신 API는 구현하지 않았다. 수신 연동 전에는 별도로 저장된 데이터만 조회되며, 미저장 상태는 빈 배열이다.
+
+검증 항목: 실제 HTTP로 모든 대결 상태 공개, 빈 배열, 날짜 정렬, 본문 전체 반환, 다른 대결 데이터 분리, 미인증 401·타인/없는 대결 404를 확인한다. 최초 구현한 매매 내역 브랜치에서는 매매 내역 테스트도 함께 통과했다. 현재 `feat/139-competition/ai-report` 브랜치는 상세·결과 구현이 포함된 dev 기반이며, 매매 내역 구현과 테스트는 아직 미포함이다.
+
 ## 설정과 DB 적용
 
 | 설정 키 | 기본값 | 역할 |
@@ -579,6 +619,7 @@ READY / IN_PROGRESS / CANCELLED → 409 + COMPETITION_NOT_COMPLETED
 - 신규 DB: 기존 `users`, `accounts` 테이블을 준비한 뒤 [competition.sql](../db/competition.sql)을 적용한다.
 - 기존 대결 테이블이 있는 DB: [competition-completion.sql](../db/competition-completion.sql)로 정산 컬럼만 추가한다. 두 SQL을 중복 적용하지 않는다.
 - 일별 성적 테이블: 위 대결 테이블 준비 후 [competition-daily-performance.sql](../db/competition-daily-performance.sql)을 한 번 추가 적용한다.
+- 대결 시장 분석·판단 요약 테이블: [competition-reports.sql](../db/competition-reports.sql)을 한 번 추가 적용한다.
 - SQL 파일은 실제 DB에 자동 실행하지 않았다. 운영 스키마 확인 후 적용해야 한다.
 
 ## 기존 기능 연결과 후속 작업
@@ -587,5 +628,5 @@ READY / IN_PROGRESS / CANCELLED → 409 + COMPETITION_NOT_COMPLETED
 - AI 서버 계좌 조회는 기간 내 진행 중 대결의 AI 계좌를 포함한다. 마감 직후 상태 변경 전에는 목록에 남을 수 있지만 주문은 종료 시각으로 차단한다.
 - 일반 계좌 생성·이름 변경은 대결 생성과 같은 사용자 잠금을 사용해 이름 중복 경쟁을 막는다.
 - 기존 v1 일반 AI 계좌와 저장 데이터는 유지한다. v2 일반 계좌의 사용자 운용 전환·사용자 직접 주문 지원은 별도 작업이다.
-- 일별 누적 수익률의 DB 기록, 사용자 상세 조회와 결과 조회는 구현했다. 매매 내역 조회 및 AI 리포트 조회는 후속 작업이다.
+- 이 브랜치에는 일별 누적 수익률 DB 기록, 사용자 상세 조회, 결과 조회와 대결 AI 리포트 조회가 포함된다. 대결 매매 내역은 별도 브랜치에 있으며, AI 시장 분석·판단 요약 수신 연동은 후속 작업이다.
 - 새 기능도 **짧은 호출 흐름 → 전달값 표 → 계산·정책 예시 → 예외 처리**로 기록하고 구현된 내용과 계획을 구분한다.

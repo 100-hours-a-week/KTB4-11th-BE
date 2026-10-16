@@ -8,6 +8,7 @@ import com.stock_spoon.river_be.execution.repository.ExecutionRepository;
 import com.stock_spoon.river_be.order.repository.OrderRepository;
 
 import com.stock_spoon.river_be.account.repository.AccountRepository;
+import com.stock_spoon.river_be.competition.service.CompetitionHistoryAccess;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,17 +19,21 @@ public class AiReportService {
     private final AccountRepository accounts;
     private final OrderRepository orders;
     private final ExecutionRepository executions;
+    private final CompetitionHistoryAccess competitionAccess;
 
-    public AiReportService(AccountRepository accounts, OrderRepository orders, ExecutionRepository executions) {
+    public AiReportService(AccountRepository accounts, OrderRepository orders, ExecutionRepository executions,
+            CompetitionHistoryAccess competitionAccess) {
         this.accounts = accounts;
         this.orders = orders;
         this.executions = executions;
+        this.competitionAccess = competitionAccess;
     }
 
     @Transactional(readOnly = true)
     public AiReportResponse get(long userId, long accountId, long orderId) {
         accounts.findByIdAndUserIdAndActiveTrue(accountId, userId).orElseThrow(() ->
                 new OrderException(HttpStatus.FORBIDDEN, "FORBIDDEN_ACCOUNT", "이 계좌를 조회할 권한이 없습니다."));
+        competitionAccess.check(userId, accountId, false);
         var order = orders.findByIdAndAccountId(orderId, accountId).orElseThrow(AiReportService::notFound);
         if (order.getSource() != Order.Source.AI || order.getReport() == null
                 || order.getStatus() != Order.Status.EXECUTED) throw notFound();

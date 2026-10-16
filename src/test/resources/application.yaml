@@ -18,3 +18,7 @@ jwt:
 market:
   kospi:
     refresh-enabled: false
+
+competition:
+  start:
+    enabled: false

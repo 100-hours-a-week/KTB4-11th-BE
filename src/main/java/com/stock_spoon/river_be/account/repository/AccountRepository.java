@@ -15,6 +15,14 @@ public interface AccountRepository extends JpaRepository<Account, Long> {
 
     boolean existsByUserId(Long userId);
 
+    // 비활성 계좌도 DB의 이름 유일 제약에 포함되므로 이름을 재사용하지 않는다.
+    boolean existsByUserIdAndNameIgnoreCase(Long userId, String name);
+    boolean existsByUserIdAndNameIgnoreCaseAndIdNot(Long userId, String name, Long accountId);
+
+    @Query("select count(p) > 0 from CompetitionParticipant p where p.account.id = :accountId "
+            + "and (p.competition.state <> IN_PROGRESS or p.competition.startDate > :today or p.competition.endDate < :today)")
+    boolean hasNonTradingCompetition(Long accountId, java.time.LocalDate today);
+
     boolean existsByUserIdAndNameIgnoreCaseAndActiveTrue(Long userId, String name);
 
     boolean existsByUserIdAndNameIgnoreCaseAndActiveTrueAndIdNot(
@@ -22,8 +30,21 @@ public interface AccountRepository extends JpaRepository<Account, Long> {
 
     Optional<Account> findByIdAndUserIdAndActiveTrue(Long accountId, Long userId);
 
+    @Query("select a from Account a where a.user.id = :userId and a.active = true "
+            + "and not exists (select p.id from CompetitionParticipant p where p.account = a and a.aiManaged = true) "
+            + "order by a.createdAt, a.id")
     List<Account> findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(Long userId);
 
-    @Query("select a from Account a join fetch a.user where a.active = true and a.aiManaged = true order by a.user.id, a.createdAt, a.id")
-    List<Account> findActiveAiManaged();
+    // 일반 v1 AI 계좌는 유지한다. 대결 계좌는 진행 중이고 기간 안인 경우에만 운용 대상으로 공개한다.
+    @Query("select a from Account a join fetch a.user where a.active = true and a.aiManaged = true "
+            + "and (not exists (select p.id from CompetitionParticipant p where p.account = a) "
+            + "or exists (select p.id from CompetitionParticipant p where p.account = a "
+            + "and p.competition.state = IN_PROGRESS "
+            + "and p.competition.startDate <= :today and p.competition.endDate >= :today)) "
+            + "order by a.user.id, a.createdAt, a.id")
+    List<Account> findActiveAiManagedOn(java.time.LocalDate today);
+
+    default List<Account> findActiveAiManaged() {
+        return findActiveAiManagedOn(java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul")));
+    }
 }

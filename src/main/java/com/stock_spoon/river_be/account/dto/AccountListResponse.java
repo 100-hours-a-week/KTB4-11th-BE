@@ -12,14 +12,17 @@ public record AccountListResponse(
         @JsonProperty("return_percent") double returnPercent) {
 
     public static AccountListResponse from(Account account, long holdingsMarketValue) {
-        // ponytail: 대결 계좌 상태는 임시값. 대결 계좌 연동 시 교체한다.
+        return from(account, holdingsMarketValue, false);
+    }
+
+    public static AccountListResponse from(Account account, long holdingsMarketValue, boolean duelAccount) {
         long totalAssets = Math.addExact(account.getCashBalance(), holdingsMarketValue);
         double returnPercent = java.math.BigDecimal.valueOf(totalAssets)
                 .subtract(java.math.BigDecimal.valueOf(account.getInitialCapital()))
                 .multiply(java.math.BigDecimal.valueOf(100))
                 .divide(java.math.BigDecimal.valueOf(account.getInitialCapital()), 4, java.math.RoundingMode.HALF_UP)
                 .doubleValue();
-        return new AccountListResponse(account.getId(), account.getName(), false,
+        return new AccountListResponse(account.getId(), account.getName(), duelAccount,
                 account.getCashBalance(), totalAssets, returnPercent);
     }
 }

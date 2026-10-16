@@ -17,14 +17,17 @@ public record AccountDetailResponse(
         @JsonProperty("executed_trade_count") long executedTradeCount) {
 
     public static AccountDetailResponse from(Account account, long availableCash, long holdingsMarketValue, long executedTradeCount) {
-        // ponytail: 대결 계좌 상태는 임시값. 대결 계좌 연동 시 교체한다.
+        return from(account, availableCash, holdingsMarketValue, executedTradeCount, false);
+    }
+
+    public static AccountDetailResponse from(Account account, long availableCash, long holdingsMarketValue, long executedTradeCount, boolean duelAccount) {
         long totalAssets = Math.addExact(account.getCashBalance(), holdingsMarketValue);
         double returnPercent = java.math.BigDecimal.valueOf(totalAssets)
                 .subtract(java.math.BigDecimal.valueOf(account.getInitialCapital()))
                 .multiply(java.math.BigDecimal.valueOf(100))
                 .divide(java.math.BigDecimal.valueOf(account.getInitialCapital()), 4, java.math.RoundingMode.HALF_UP)
                 .doubleValue();
-        return new AccountDetailResponse("success", account.getId(), account.getName(), false,
+        return new AccountDetailResponse("success", account.getId(), account.getName(), duelAccount,
                 account.getInitialCapital(), account.getCashBalance(), availableCash,
                 holdingsMarketValue, totalAssets, returnPercent, executedTradeCount);
     }

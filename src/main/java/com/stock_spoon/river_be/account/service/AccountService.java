@@ -130,6 +130,19 @@ public class AccountService {
                 values.getOrDefault(a.getId(), 0L), snapshot.competitionAccountIds().contains(a.getId()))).toList();
     }
 
+    // 호출 서비스가 소유권을 확인한 계좌만 전달한다. 시세 요청은 DB 트랜잭션 밖에서 수행한다.
+    public Map<Long, Double> returnPercents(List<Account> accounts) {
+        if (accounts.isEmpty()) return Map.of();
+        var snapshot = read.execute(status -> snapshot(accounts, false));
+        var values = evaluate(snapshot);
+        var result = new HashMap<Long, Double>();
+        for (var account : snapshot.accounts()) {
+            result.put(account.getId(), AccountListResponse.from(account,
+                    values.getOrDefault(account.getId(), 0L)).returnPercent());
+        }
+        return result;
+    }
+
     public AccountDetailResponse get(long userId, long accountId) {
         var snapshot = read.execute(status -> {
             var account = accountRepository.findByIdAndUserIdAndActiveTrue(accountId, userId)

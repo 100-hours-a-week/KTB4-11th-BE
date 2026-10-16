@@ -38,6 +38,9 @@ class CompetitionCreationTests {
     @Autowired com.stock_spoon.river_be.account.service.AccountService accountService;
     @Autowired org.springframework.web.context.WebApplicationContext context;
     @Autowired com.stock_spoon.river_be.auth.token.JwtTokenProvider tokens;
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient market;
+    @Autowired com.stock_spoon.river_be.holding.repository.HoldingRepository holdings;
     private User user;
 
     @BeforeEach
@@ -47,6 +50,68 @@ class CompetitionCreationTests {
         user = new User("대결" + UUID.randomUUID().toString().substring(0, 4));
         user.completeOnboarding();
         user = users.save(user);
+    }
+
+    @Test
+    void listValuesUserHoldingsAndLeavesUnsettledResultsNull() {
+        var first = service.createCompetition(user.getId(), request("수익률", 3, 1));
+        var second = service.createCompetition(user.getId(), request("종료", 3, 1));
+        var tx = new org.springframework.transaction.support.TransactionTemplate(transactions);
+        tx.executeWithoutResult(status -> {
+            var live = competitions.findById(first.getCompetitionId()).orElseThrow();
+            live.start(tradingHours.now().toInstant());
+            var account = participants.findAllByCompetitionIdOrderByIdAsc(live.getId()).getFirst().getAccount();
+            account.changeCash(-1_000_000);
+            holdings.save(new com.stock_spoon.river_be.holding.entity.Holding(account, "005930", 10,
+                    java.math.BigDecimal.valueOf(1_000_000)));
+            ReflectionTestUtils.setField(competitions.findById(second.getCompetitionId()).orElseThrow(),
+                    "state", com.stock_spoon.river_be.competition.entity.Competition.State.COMPLETED);
+        });
+        org.mockito.Mockito.when(market.currentPrice("005930")).thenReturn(120_000L);
+        var response = service.listCompetitions(user.getId());
+        assertThat(response.getOngoingCompetitionCount()).isEqualTo(1);
+        assertThat(response.getCompetitions().get(0).getDDay()).isNull();
+        assertThat(response.getCompetitions().get(0).getCumulativeReturnPercent()).isNull();
+        assertThat(response.getCompetitions().get(0).getWinner()).isNull();
+        assertThat(response.getCompetitions().get(1).getCumulativeReturnPercent()).isEqualTo(2.0);
+        org.mockito.Mockito.when(market.currentPrice("005930")).thenThrow(new IllegalStateException("시세 장애"));
+        assertThatThrownBy(() -> service.listCompetitions(user.getId()))
+                .isInstanceOf(com.stock_spoon.river_be.account.exception.AccountException.class);
+    }
+
+    @Test
+    void listReturnsOnlyOwnedCompetitionsNewestFirstWithoutPagination() throws Exception {
+        var other = new User("다른" + UUID.randomUUID().toString().substring(0, 4));
+        other.completeOnboarding();
+        other = users.save(other);
+        service.createCompetition(other.getId(), request("다른 사용자 대결", 3, 1));
+        var ids = new java.util.ArrayList<Long>();
+        for (int i = 0; i < 12; i++) {
+            ids.add(service.createCompetition(user.getId(), request("목록" + i, 3, 1)).getCompetitionId());
+        }
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup(context)
+                .apply(org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity()).build();
+        var auth = new jakarta.servlet.http.Cookie("access_token", tokens.issue(user.getId()).accessToken());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v2/users/me/competitions").cookie(auth))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.ongoing_competition_count").value(0))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.competitions.length()").value(12))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.competitions[0].competition_id").value(ids.getLast().intValue()))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.competitions[11].competition_id").value(ids.getFirst().intValue()))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.competitions[0].d_day").value(3))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.competitions[0].cumulative_return_percent").value(0.0))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.competitions[0].winner").value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    @Test
+    void listReturnsEmptyArrayForUserWithoutCompetitions() throws Exception {
+        var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup(context)
+                .apply(org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity()).build();
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v2/users/me/competitions")
+                        .cookie(new jakarta.servlet.http.Cookie("access_token", tokens.issue(user.getId()).accessToken())))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.ongoing_competition_count").value(0))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.competitions").isEmpty());
     }
 
     @Test

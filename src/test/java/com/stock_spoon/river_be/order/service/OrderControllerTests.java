@@ -52,14 +52,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @Transactional
 class OrderControllerTests {
-    // 주문 접수 테스트는 장중으로 고정한다. 실제 시각이 15:30 이후면 구독 갱신이 주문을 취소한다.
+    // 체결 및 대회 정책 검증을 위한 고정 시각.
     @org.springframework.boot.test.context.TestConfiguration
     static class MarketHours {
+        static final java.util.concurrent.atomic.AtomicReference<Instant> now =
+                new java.util.concurrent.atomic.AtomicReference<>(Instant.parse("2026-10-01T01:00:00Z"));
         @org.springframework.context.annotation.Bean
         @org.springframework.context.annotation.Primary
         OrderService marketHoursOrderService(AccountRepository accounts, OrderRepository orders, HoldingRepository holdings) {
-            return new OrderService(accounts, orders, holdings,
-                    java.time.Clock.fixed(Instant.parse("2026-10-01T01:00:00Z"), java.time.ZoneOffset.UTC));
+            var clock = org.mockito.Mockito.mock(java.time.Clock.class);
+            when(clock.instant()).thenAnswer(ignored -> now.get());
+            return new OrderService(accounts, orders, holdings, clock);
         }
     }
 
@@ -91,6 +94,7 @@ class OrderControllerTests {
 
     @BeforeEach
     void setup() {
+        MarketHours.now.set(Instant.parse("2026-10-01T01:00:00Z"));
         org.mockito.Mockito.doCallRealMethod().when(stream).latestQuote(anyString());
         org.mockito.Mockito.doCallRealMethod().when(stream).latestBookQuote(anyString());
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
@@ -164,7 +168,27 @@ class OrderControllerTests {
     }
 
     @Test
-    void subscriptionFailureReturns503WithoutAnOrderOrReservation() throws Exception {
+    void acceptsBeforeOpenAfterCloseAtNightAndOnWeekendWithoutLiveQuotes() throws Exception {
+        org.mockito.Mockito.doThrow(new IllegalStateException("Redis down"))
+                .when(stream).updateSymbols(org.mockito.ArgumentMatchers.anySet());
+        for (String instant : java.util.List.of("2026-10-01T23:59:59Z", "2026-10-02T06:30:00Z",
+                "2026-10-16T12:00:00Z", "2026-10-17T01:00:00Z")) {
+            MarketHours.now.set(Instant.parse(instant));
+            mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                            .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                            .content(reportInputBody("buy", "limit", ",\"holding_weight_limit_percent\":30")))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.order_status").value("pending"));
+        }
+        assertThat(orders.count()).isEqualTo(4);
+        assertThat(orders.reservedCash(account.getId(), Order.Status.PENDING)).isEqualTo(280000);
+        assertThat(account.getCashBalance()).isEqualTo(1000000);
+        assertThat(executions.count()).isZero();
+        org.mockito.Mockito.verify(stream, org.mockito.Mockito.never()).latestQuote(anyString());
+    }
+
+    @Test
+    void subscriptionFailureStillAcceptsPendingOrderAndReservesCash() throws Exception {
         when(stream.whenSubscribed("005930")).thenReturn(java.util.concurrent.CompletableFuture.failedFuture(
                 new IllegalStateException("registration rejected")));
         mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
@@ -174,10 +198,10 @@ class OrderControllerTests {
                                  "limit_price":70000,"quantity":1,
                                  "reason":"매수 판단"}
                                 """))
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.code").value("MARKET_STREAM_UNAVAILABLE"));
-        assertThat(orders.count()).isZero();
-        assertThat(orders.reservedCash(account.getId(), Order.Status.PENDING)).isZero();
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.order_status").value("pending"));
+        assertThat(orders.count()).isEqualTo(1);
+        assertThat(orders.reservedCash(account.getId(), Order.Status.PENDING)).isEqualTo(70000);
         assertThat(accounts.findById(account.getId()).orElseThrow().getCashBalance()).isEqualTo(1_000_000);
     }
 
@@ -305,173 +329,18 @@ class OrderControllerTests {
     }
 
     @Test
-    void marketBuyRejectsPreviousSessionBookWithoutSaving() throws Exception {
-        marketBook(Instant.parse("2026-10-01T01:00:00Z"), java.time.LocalTime.of(10, 0));
-        var source = new com.stock_spoon.river_be.market.QuoteStore.Source("owner", "previous-session");
-        var book = stream.latestOrderBook("005930").orElseThrow();
-        org.mockito.Mockito.doReturn(java.util.Optional.of(
-                new com.stock_spoon.river_be.market.RedisQuoteStore.QuoteEvent("005930", "orderbook",
-                        book.receivedAt(), source, null, book))).when(stream).latestBookQuote("005930");
-        org.mockito.Mockito.doThrow(new IllegalStateException("previous session"))
-                .when(stream).assertSource("005930", source);
-        marketRequest(1, "null").andExpect(status().isServiceUnavailable());
-        assertThat(orders.count()).isZero();
-        assertThat(executions.count()).isZero();
-        assertThat(account.getCashBalance()).isEqualTo(1000000);
-    }
-
-    @Test
-    void marketBuyConsumesLowestAsksAndUpdatesAssets() throws Exception {
-        marketBook(Instant.parse("2026-10-01T01:00:00Z"), java.time.LocalTime.of(10, 0));
-        holdings.save(new Holding(account, "005930", 2, new java.math.BigDecimal("120000")));
-        marketRequest(10, "null").andExpect(status().isCreated())
-                .andExpect(jsonPath("$.order_type").value("market"))
-                .andExpect(jsonPath("$.order_status").value("executed"))
-                .andExpect(jsonPath("$.reserved_cash").value(0))
-                .andExpect(jsonPath("$.limit_price").isEmpty())
-                .andExpect(jsonPath("$.executions.length()").value(3))
-                .andExpect(jsonPath("$.executions[0].execution_price").value(70000))
-                .andExpect(jsonPath("$.executions[0].execution_quantity").value(3))
-                .andExpect(jsonPath("$.executions[1].execution_quantity").value(4))
-                .andExpect(jsonPath("$.executions[2].execution_quantity").value(3))
-                .andExpect(jsonPath("$.executions[0].realized_pnl").isEmpty());
-        assertThat(account.getCashBalance()).isEqualTo(299000);
-        var held = holdings.findByAccountIdAndStockCode(account.getId(), "005930").orElseThrow();
-        assertThat(held.getQuantity()).isEqualTo(12);
-        assertThat(held.getTotalCost()).isEqualByComparingTo("821000");
-    }
-
-    @Test
-    void marketBuyRejectsMissingBookWithoutSaving() throws Exception {
-        marketRequest(1, "null").andExpect(status().isServiceUnavailable());
-        assertThat(orders.count()).isZero();
-        assertThat(executions.count()).isZero();
-        assertThat(account.getCashBalance()).isEqualTo(1000000);
-    }
-
-    @Test
-    void marketBuyRejectsInsufficientLiquidityWithoutPartialFills() throws Exception {
-        marketBook(Instant.parse("2026-10-01T01:00:00Z"), java.time.LocalTime.of(10, 0));
-        marketRequest(13, "null").andExpect(status().isBadRequest());
-        assertThat(orders.count()).isZero();
-        assertThat(executions.count()).isZero();
-        assertThat(holdings.count()).isZero();
-        assertThat(account.getCashBalance()).isEqualTo(1000000);
-    }
-
-    @Test
-    void marketBuyAccountsForPendingReservations() throws Exception {
-        orders.save(Order.pendingLimit(account, "000660", Order.Side.BUY, 3, 100000,
-                Order.Source.AI, "예약", Instant.parse("2026-10-01T01:00:00Z")));
-        marketBook(Instant.parse("2026-10-01T01:00:00Z"), java.time.LocalTime.of(10, 0));
-        marketRequest(10, "null").andExpect(status().isBadRequest());
-        assertThat(orders.count()).isEqualTo(1);
-        assertThat(executions.count()).isZero();
-        assertThat(account.getCashBalance()).isEqualTo(1000000);
-    }
-
-    @Test
-    void marketBuyRejectsOldOrFutureBookAndNonNullLimit() throws Exception {
-        for (var received : java.util.List.of(Instant.parse("2026-10-01T00:59:54Z"),
-                Instant.parse("2026-10-01T01:00:01Z"))) {
-            marketBook(received, java.time.LocalTime.of(10, 0));
-            marketRequest(1, "null").andExpect(status().isServiceUnavailable());
+    void marketBuyAndSellAreRejectedWithoutChangingOrdersOrAssets() throws Exception {
+        for (String side : java.util.List.of("buy", "sell")) {
+            mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                            .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                            .content(marketBody(1, "null").replace("buy", side)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("MARKET_ORDER_DISABLED"));
         }
-        for (var quote : java.util.List.of(java.time.LocalTime.of(9, 59, 54), java.time.LocalTime.of(10, 0, 2))) {
-            marketBook(Instant.parse("2026-10-01T01:00:00Z"), quote);
-            marketRequest(1, "null").andExpect(status().isServiceUnavailable());
-        }
-        marketRequest(1, "0").andExpect(status().isBadRequest());
-        marketRequest(1, "70000").andExpect(status().isBadRequest());
         assertThat(orders.count()).isZero();
         assertThat(executions.count()).isZero();
-    }
-
-    private void sellBook() {
-        var levels = java.util.List.of(
-                new KiwoomStockStream.QuoteLevel(new java.math.BigDecimal("70000"), 5),
-                new KiwoomStockStream.QuoteLevel(new java.math.BigDecimal("70200"), 3),
-                new KiwoomStockStream.QuoteLevel(new java.math.BigDecimal("70100"), 4));
-        when(stream.latestOrderBook("005930")).thenReturn(java.util.Optional.of(
-                new KiwoomStockStream.OrderBook("005930", java.util.List.of(), levels,
-                        java.time.LocalTime.of(10, 0), Instant.parse("2026-10-01T01:00:00Z"))));
-    }
-
-    private org.springframework.test.web.servlet.ResultActions sellRequest(long quantity, String price) throws Exception {
-        return mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
-                .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
-                .content(marketBody(quantity, price).replace("\"buy\"", "\"sell\"")));
-    }
-
-    @Test
-    void marketSellConsumesHighestBidsAndUsesOriginalAverageCost() throws Exception {
-        sellBook();
-        holdings.save(new Holding(account, "005930", 20, new java.math.BigDecimal("1200000")));
-        sellRequest(10, "null").andExpect(status().isCreated())
-                .andExpect(jsonPath("$.order_side").value("sell"))
-                .andExpect(jsonPath("$.order_type").value("market"))
-                .andExpect(jsonPath("$.order_status").value("executed"))
-                .andExpect(jsonPath("$.reserved_cash").value(0))
-                .andExpect(jsonPath("$.limit_price").isEmpty())
-                .andExpect(jsonPath("$.executions.length()").value(3))
-                .andExpect(jsonPath("$.executions[0].execution_price").value(70200))
-                .andExpect(jsonPath("$.executions[0].execution_quantity").value(3))
-                .andExpect(jsonPath("$.executions[0].realized_pnl").value(30600))
-                .andExpect(jsonPath("$.executions[0].realized_return_percent").value(17.0000))
-                .andExpect(jsonPath("$.executions[1].execution_price").value(70100))
-                .andExpect(jsonPath("$.executions[1].execution_quantity").value(4))
-                .andExpect(jsonPath("$.executions[1].realized_pnl").value(40400))
-                .andExpect(jsonPath("$.executions[1].realized_return_percent").value(16.8333))
-                .andExpect(jsonPath("$.executions[2].execution_price").value(70000))
-                .andExpect(jsonPath("$.executions[2].execution_quantity").value(3))
-                .andExpect(jsonPath("$.executions[2].realized_pnl").value(30000))
-                .andExpect(jsonPath("$.executions[2].realized_return_percent").value(16.6667));
-        assertThat(account.getCashBalance()).isEqualTo(1701000);
-        var held = holdings.findByAccountIdAndStockCode(account.getId(), "005930").orElseThrow();
-        assertThat(held.getQuantity()).isEqualTo(10);
-        assertThat(held.getTotalCost()).isEqualByComparingTo("600000");
-        assertThat(orders.findAll()).allSatisfy(order ->
-                assertThat(order.getReport().getReason()).isEqualTo("매수 판단"));
-    }
-
-    @Test
-    void marketSellRejectsReservedSharesAndInsufficientBidLiquidity() throws Exception {
-        sellBook();
-        var held = holdings.save(new Holding(account, "005930", 20, new java.math.BigDecimal("1200000")));
-        orders.save(Order.pendingLimit(account, "005930", Order.Side.SELL, 15, 80000,
-                Order.Source.AI, "예약", Instant.parse("2026-10-01T01:00:00Z")));
-        sellRequest(10, "null").andExpect(status().isBadRequest());
-        sellRequest(13, "null").andExpect(status().isBadRequest());
-        assertThat(held.getQuantity()).isEqualTo(20);
-        assertThat(held.getTotalCost()).isEqualByComparingTo("1200000");
-        assertThat(account.getCashBalance()).isEqualTo(1000000);
-        assertThat(orders.count()).isEqualTo(1);
-        assertThat(executions.count()).isZero();
-    }
-
-    @Test
-    void marketSellRejectsMissingAndStaleBookAndNonNullLimit() throws Exception {
-        holdings.save(new Holding(account, "005930", 20, new java.math.BigDecimal("1200000")));
-        sellRequest(1, "null").andExpect(status().isServiceUnavailable());
-        when(stream.latestOrderBook("005930")).thenReturn(java.util.Optional.of(
-                new KiwoomStockStream.OrderBook("005930", java.util.List.of(), java.util.List.of(),
-                        java.time.LocalTime.of(9, 59, 54), Instant.parse("2026-10-01T00:59:54Z"))));
-        sellRequest(1, "null").andExpect(status().isServiceUnavailable());
-        sellRequest(1, "0").andExpect(status().isBadRequest());
-        sellRequest(1, "70000").andExpect(status().isBadRequest());
-        assertThat(orders.count()).isZero();
-        assertThat(executions.count()).isZero();
-        assertThat(account.getCashBalance()).isEqualTo(1000000);
-    }
-
-    @Test
-    void marketSellWithoutHoldingFailsWithoutSaving() throws Exception {
-        sellBook();
-        sellRequest(1, "null").andExpect(status().isBadRequest());
-        assertThat(orders.count()).isZero();
-        assertThat(executions.count()).isZero();
-        assertThat(holdings.count()).isZero();
-        assertThat(account.getCashBalance()).isEqualTo(1000000);
+        assertThat(account.getCashBalance()).isEqualTo(1_000_000);
+        org.mockito.Mockito.verifyNoInteractions(market);
     }
 
     @Test
@@ -540,13 +409,13 @@ class OrderControllerTests {
     }
 
     @Test
-    void limitAndMarketBuySellReturnSavedNameAndReasoning() throws Exception {
+    void limitBuySellReturnSavedNameAndReasoning() throws Exception {
         holdings.save(new Holding(account, "005930", 10, new java.math.BigDecimal("700000")));
         var levels = java.util.List.of(new KiwoomStockStream.QuoteLevel(new java.math.BigDecimal("70000"), 100));
         when(stream.latestOrderBook("005930")).thenReturn(java.util.Optional.of(
                 new KiwoomStockStream.OrderBook("005930", levels, levels, java.time.LocalTime.of(10, 0),
                         Instant.parse("2026-10-01T01:00:00Z"))));
-        for (String type : java.util.List.of("limit", "market")) {
+        for (String type : java.util.List.of("limit")) {
             for (String side : java.util.List.of("buy", "sell")) {
                 String name = type + "-" + side + " 종목명";
                 String body = """
@@ -698,21 +567,20 @@ class OrderControllerTests {
 
     @Test
     void buyWeightIsSavedAtExecutionAndDoesNotChangeAfterLaterBuy() throws Exception {
-        for (String type : java.util.List.of("market", "limit")) {
-            if ("market".equals(type)) marketBook(Instant.parse("2026-10-01T01:00:00Z"), java.time.LocalTime.of(10, 0));
-            else when(stream.latest("005930")).thenReturn(java.util.Optional.of(
+        for (int purchase = 1; purchase <= 2; purchase++) {
+            when(stream.latest("005930")).thenReturn(java.util.Optional.of(
                     new KiwoomStockStream.StockPrice("005930", new java.math.BigDecimal("70000"),
                             java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO,
                             java.time.LocalTime.of(10, 0), Instant.parse("2026-10-01T01:00:00Z"))));
             var result = mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
                             .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
-                            .content(reportInputBody("buy", type, ",\"holding_weight_limit_percent\":0")))
+                            .content(reportInputBody("buy", "limit", ",\"holding_weight_limit_percent\":0")))
                     .andExpect(status().isCreated()).andReturn();
             long id = tools.jackson.databind.json.JsonMapper.builder().build()
                     .readTree(result.getResponse().getContentAsString()).path("order_id").asLong();
             entityManager.flush();
             entityManager.clear();
-            var expected = "market".equals(type) ? 7 : 14;
+            var expected = purchase * 7;
             mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
                             "/api/v1/accounts/{account}/orders/{order}/ai-report", account.getId(), id)
                             .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
@@ -737,7 +605,7 @@ class OrderControllerTests {
                         java.time.LocalTime.of(10, 0), Instant.parse("2026-10-01T01:00:00Z"))));
         when(stream.latest("000660")).thenReturn(java.util.Optional.empty());
         int buyCount = 0;
-        for (String type : java.util.List.of("market", "limit")) {
+        for (String type : java.util.List.of("limit")) {
             for (boolean available : java.util.List.of(false, true)) {
                 org.mockito.Mockito.reset(marketClient);
                 if (available) when(marketClient.currentPrice("000660")).thenReturn(10000L);
@@ -754,7 +622,7 @@ class OrderControllerTests {
                 var saved = orders.findById(id).orElseThrow();
                 assertThat(saved.getStatus()).isEqualTo(Order.Status.EXECUTED);
                 Double weight = saved.getReport().getHoldingWeightAfterTradePercent();
-                if (available) assertThat(weight).isEqualTo(buyCount == 2 ? 13.3333 : 26.6667);
+                if (available) assertThat(weight).isEqualTo(13.3333);
                 else assertThat(weight).isNull();
                 org.mockito.Mockito.verify(marketClient).currentPrice("000660");
                 org.mockito.Mockito.verify(marketClient, org.mockito.Mockito.never()).currentPrice("005930");
@@ -772,7 +640,7 @@ class OrderControllerTests {
     @Test
     void reportInputsRequireBuyLimitAndSellLossResult() throws Exception {
         holdings.save(new Holding(account, "005930", 20, new java.math.BigDecimal("1400000")));
-        for (String type : java.util.List.of("limit", "market")) {
+        for (String type : java.util.List.of("limit")) {
             for (String side : java.util.List.of("buy", "sell")) {
                 for (String fields : java.util.List.of("", ",\"holding_weight_limit_percent\":null,\"is_lower_triggered\":null")) {
                     mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
@@ -804,13 +672,13 @@ class OrderControllerTests {
     }
 
     @Test
-    void reportInputsPersistBothValuesForLimitAndMarketInBothDirections() throws Exception {
+    void reportInputsPersistBothValuesForLimitInBothDirections() throws Exception {
         holdings.save(new Holding(account, "005930", 10, new java.math.BigDecimal("700000")));
         var levels = java.util.List.of(new KiwoomStockStream.QuoteLevel(new java.math.BigDecimal("70000"), 100));
         when(stream.latestOrderBook("005930")).thenReturn(java.util.Optional.of(
                 new KiwoomStockStream.OrderBook("005930", levels, levels, java.time.LocalTime.of(10, 0),
                         Instant.parse("2026-10-01T01:00:00Z"))));
-        for (String type : java.util.List.of("limit", "market")) {
+        for (String type : java.util.List.of("limit")) {
             for (String side : java.util.List.of("buy", "sell")) {
                 boolean triggered = "sell".equals(side);
                 var result = mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())

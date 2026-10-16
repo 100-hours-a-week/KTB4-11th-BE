@@ -3,32 +3,18 @@ package com.stock_spoon.river_be.order.validator;
 import com.stock_spoon.river_be.order.exception.OrderException;
 
 import com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient;
-import java.time.Clock;
-import java.time.LocalTime;
-import java.time.ZoneId;
 import java.util.Set;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
-/** 주문 생성 시간과 키움 종목정보·호가단위를 확인한다. 실제 주문은 키움에 보내지 않는다. */
+/** 키움 종목정보·호가단위를 확인한다. 실제 주문은 키움에 보내지 않는다. */
 @Component
 public class OrderMarketValidator {
     private static final Set<String> SUPPORTED_MARKETS = Set.of("0", "8");
-    private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
-    private static final LocalTime OPEN = LocalTime.of(9, 0);
-    private static final LocalTime CLOSE = LocalTime.of(15, 30);
     private final KiwoomMarketClient market;
-    private final Clock clock;
 
-    @Autowired
     public OrderMarketValidator(KiwoomMarketClient market) {
-        this(market, Clock.systemUTC());
-    }
-
-    OrderMarketValidator(KiwoomMarketClient market, Clock clock) {
         this.market = market;
-        this.clock = clock;
     }
 
     public void validateLimit(String stockCode, long limitPrice) {
@@ -40,11 +26,6 @@ public class OrderMarketValidator {
     }
 
     public KiwoomMarketClient.StockInfo validateMarket(String stockCode) {
-        LocalTime now = LocalTime.ofInstant(clock.instant(), SEOUL);
-        if (now.isBefore(OPEN) || !now.isBefore(CLOSE)) {
-            throw new OrderException(HttpStatus.CONFLICT, "ORDER_WINDOW_CLOSED",
-                    "주문 생성은 한국 시간 09:00부터 15:30 전까지 가능합니다.");
-        }
         KiwoomMarketClient.StockInfo info;
         try {
             info = market.stockInfo(stockCode);

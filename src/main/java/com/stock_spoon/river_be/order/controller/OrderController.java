@@ -7,8 +7,6 @@ import com.stock_spoon.river_be.order.dto.OrderHistoryResponse;
 import com.stock_spoon.river_be.order.entity.Order;
 import com.stock_spoon.river_be.order.exception.OrderException;
 import com.stock_spoon.river_be.execution.listener.OrderExecutionListener;
-import com.stock_spoon.river_be.execution.service.OrderBuyPriceService;
-import com.stock_spoon.river_be.execution.service.OrderExecutionService;
 import com.stock_spoon.river_be.order.service.OrderHistoryService;
 import com.stock_spoon.river_be.order.service.OrderService;
 import com.stock_spoon.river_be.order.service.OrderSubscriptionService;
@@ -29,9 +27,6 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/accounts/{accountId}/orders")
 public class OrderController {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OrderController.class);
-    private final OrderBuyPriceService buyPrices;
-    private final OrderExecutionService marketExecution;
-    private final com.stock_spoon.river_be.market.MarketStream stream;
     private final OrderHistoryService history;
     private final OrderService orders;
     private final OrderMarketValidator market;
@@ -41,12 +36,7 @@ public class OrderController {
     // Spring이 생성자에 서비스 객체를 넣어 준다(의존성 주입).
     // orders.reserveLimit()을 따라갈 때는 orders의 타입인 OrderService를 연다.
     public OrderController(OrderService orders, OrderMarketValidator market,
-            OrderSubscriptionService subscriptions, OrderExecutionListener execution, OrderHistoryService history,
-            OrderExecutionService marketExecution,
-            com.stock_spoon.river_be.market.MarketStream stream, OrderBuyPriceService buyPrices) {
-        this.buyPrices = buyPrices;
-        this.marketExecution = marketExecution;
-        this.stream = stream;
+            OrderSubscriptionService subscriptions, OrderExecutionListener execution, OrderHistoryService history) {
         this.history = history;
         this.orders = orders;
         this.market = market;
@@ -99,6 +89,9 @@ public class OrderController {
         if (!marketOrder && !"limit".equalsIgnoreCase(request.orderType())) {
             throw new OrderException("주문 유형을 확인하세요.");
         }
+        if (marketOrder) {
+            throw new OrderException(HttpStatus.BAD_REQUEST, "MARKET_ORDER_DISABLED", "시장가 주문은 지원하지 않습니다. 지정가 주문을 사용하세요.");
+        }
         Order.Side side;
         try {
             side = Order.Side.valueOf(request.orderSide().toUpperCase(java.util.Locale.ROOT));
@@ -106,10 +99,7 @@ public class OrderController {
             throw new OrderException("매수·매도 구분을 확인하세요.");
         }
         request.validateReportInputs(side);
-        if (marketOrder && request.limitPrice() != null) {
-            throw new OrderException("시장가 주문의 지정가는 null이어야 합니다.");
-        }
-        if (!marketOrder && (request.limitPrice() == null || request.limitPrice() <= 0)) {
+        if (request.limitPrice() == null || request.limitPrice() <= 0) {
             throw new OrderException("지정가를 입력하세요.");
         }
         if (request.reason() == null) {
@@ -123,42 +113,13 @@ public class OrderController {
         }
         // [2. 계좌 검사] 토큰의 사용자 ID로 계좌 소유권·활성 상태·AI 운용 여부를 확인한다.
         orders.assertOrderableAccount(userId, accountId);
-        // 시장가는 구독 확보 후 현재 호가로 주문 생성과 전량 모의 체결을 함께 처리한다.
-        if (marketOrder) {
-            market.validateMarket(request.stockCode());
-            var prices = side == Order.Side.BUY ? buyPrices.fetch(accountId, request.stockCode())
-                    : java.util.Map.<String, java.math.BigDecimal>of();
-            var order = subscriptions.create(request.stockCode(), () -> {
-                com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.OrderBook book;
-                com.stock_spoon.river_be.market.RedisQuoteStore.QuoteEvent quote;
-                try {
-                    quote = stream.latestBookQuote(request.stockCode()).orElse(null);
-                    book = quote == null ? null : quote.orderBook();
-                } catch (RuntimeException error) {
-                    throw new OrderException(HttpStatus.SERVICE_UNAVAILABLE, "MARKET_STREAM_UNAVAILABLE",
-                            "사용 가능한 최신 호가를 확인할 수 없습니다.");
-                }
-                Runnable validate = () -> {
-                    try {
-                        if (quote == null) stream.assertAvailable(request.stockCode());
-                        else stream.assertSource(request.stockCode(), quote.source());
-                    } catch (RuntimeException error) {
-                        throw new OrderException(HttpStatus.SERVICE_UNAVAILABLE, "MARKET_STREAM_UNAVAILABLE",
-                                "사용 가능한 최신 호가를 확인할 수 없습니다.");
-                    }
-                };
-                validate.run();
-                return marketExecution.executeMarket(userId, accountId, request, book, prices, validate);
-            });
-            return execution.response(accountId, order.getId());
-        }
-        // [3. 지정가 경로] 시간·종목·가격 단위를 검사한 뒤 구독과 주문 예약을 진행한다.
+        // 지정가는 시세 연결 여부와 무관하게 예약하고 커밋 후 시세를 구독한다.
         market.validateLimit(request.stockCode(), request.limitPrice());
         // 람다 () -> ... 는 지금 저장하지 않고 '나중에 실행할 저장 작업'을 전달한다.
         // OrderSubscriptionService.create()의 saveOrder.get()에서 reserveLimit()이 실행된다.
         Order order = subscriptions.create(request.stockCode(), () -> orders.reserveLimit(userId, accountId, request));
         // [4. 최초 체결 판단] 예약이 커밋된 주문을 현재가와 비교한다. 체결은 별도 트랜잭션이다.
-        // 최초 시세 조회 실패로 이미 저장된 주문 예약까지 되돌리지는 않는다.
+        // 장외 예약은 새 장중 시세가 들어올 때까지 대기한다.
         execution.orderCreated(order);
         // [5. 응답] 주문·체결을 다시 읽어 즉시 체결됐으면 결과를, 대기 중이면 빈 체결 목록을 반환한다.
         return execution.response(accountId, order.getId());

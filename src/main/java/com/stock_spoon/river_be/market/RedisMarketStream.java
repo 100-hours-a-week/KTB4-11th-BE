@@ -164,21 +164,7 @@ public class RedisMarketStream implements MarketStream, MessageListener, Subscri
 
     @Override
     public void onChannelSubscribed(byte[] channel, long count) {
-        String name = new String(channel, StandardCharsets.UTF_8);
-        if (!name.startsWith("quotes:")) return;
-        String code = name.substring("quotes:".length());
-        // 재구독 후 최신 값만 재판단한다. ACK 수신 스레드에서 DB 처리를 실행하지 않는다.
-        try {
-            callbacks.execute(() -> {
-                try {
-                    if (desired.contains(code)) quotes.usablePriceEvent(code).ifPresent(events::publishEvent);
-                } catch (RuntimeException error) {
-                    log.warn("event=shared_quote_recovery_failed causeType={}", error.getClass().getSimpleName());
-                }
-            });
-        } catch (java.util.concurrent.RejectedExecutionException error) {
-            log.warn("event=shared_quote_recovery_overloaded");
-        }
+        // 구독 ACK는 새로운 시세가 아니다. 저장 스냅샷으로 예약 주문을 체결하지 않는다.
     }
 
     @PreDestroy

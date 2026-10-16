@@ -31,6 +31,8 @@ class OrderExecutionListenerTests {
     @org.junit.jupiter.api.BeforeEach
     void setupQuoteAdapter() {
         doCallRealMethod().when(stream).latestQuote(anyString());
+        when(execution.isCurrentSession(any())).thenReturn(true);
+        when(execution.isUsablePrice(any())).thenReturn(true);
     }
 
     private Order order(long id) {
@@ -58,10 +60,12 @@ class OrderExecutionListenerTests {
         when(orders.findPendingForPrice("005930", Order.Status.PENDING, Order.Type.LIMIT))
                 .thenReturn(List.of(buy, sell));
         listener.onPrice(price(69000));
-        verifyNoInteractions(execution, buyPrices);
+        verifyNoInteractions(buyPrices);
+        verify(execution, never()).executeLimit(anyLong(), anyLong(), anyLong(), anyMap(), any(Runnable.class));
         when(stream.latest("005930")).thenReturn(Optional.of(price(69000)));
         listener.orderCreated(buy);
-        verifyNoInteractions(execution, buyPrices);
+        verifyNoInteractions(buyPrices);
+        verify(execution, never()).executeLimit(anyLong(), anyLong(), anyLong(), anyMap(), any(Runnable.class));
         verify(subscriptions).refresh();
     }
 
@@ -96,7 +100,8 @@ class OrderExecutionListenerTests {
         doThrow(new IllegalStateException("previous session")).when(stream).assertSource("005930", source);
         listener.orderCreated(order(1));
         verify(stream).assertSource("005930", source);
-        verifyNoInteractions(execution, market);
+        verifyNoInteractions(market);
+        verify(execution, never()).executeLimit(anyLong(), anyLong(), anyLong(), anyMap(), any(Runnable.class));
     }
 
     @Test
@@ -107,25 +112,26 @@ class OrderExecutionListenerTests {
                 data.receivedAt(), source, data, null);
         doThrow(new IllegalStateException("previous session")).when(stream).assertSource("005930", source);
         listener.onQuote(event);
-        verifyNoInteractions(execution, orders);
+        verifyNoInteractions(orders);
+        verify(execution, never()).executeLimit(anyLong(), anyLong(), anyLong(), anyMap(), any(Runnable.class));
     }
 
     @Test
-    void initialPriceUsesCacheThenRestAndFailureWaitsForWebsocket() {
-        when(stream.latest("005930")).thenReturn(Optional.of(price(69000)));
-        listener.orderCreated(order(1));
-        verify(execution).executeLimit(eq(1L), eq(1L), eq(69000L), anyMap(), any(Runnable.class));
-        verifyNoInteractions(market);
-
+    void missingInitialPriceWaitsForNewEventWithoutRest() {
         when(stream.latest("005930")).thenReturn(Optional.empty());
-        when(market.currentPrice("005930")).thenReturn(68000L);
-        listener.orderCreated(order(2));
-        verify(execution).executeLimit(eq(1L), eq(2L), eq(68000L), anyMap(), any(Runnable.class));
+        listener.orderCreated(order(1));
+        verifyNoInteractions(market);
+        verify(execution, never()).executeLimit(anyLong(), anyLong(), anyLong(), anyMap(), any(Runnable.class));
+    }
 
-        when(market.currentPrice("005930")).thenThrow(new IllegalStateException());
-        listener.orderCreated(order(3));
-        verify(execution, never()).executeLimit(eq(1L), eq(3L), anyLong(), anyMap(), any(Runnable.class));
-        verify(subscriptions, times(3)).refresh();
+    @Test
+    void outsideSessionNeverReadsStoredPriceAndOldEventsNeverReachOrders() {
+        when(execution.isCurrentSession(any())).thenReturn(false);
+        when(execution.isUsablePrice(any())).thenReturn(false);
+        listener.orderCreated(order(1));
+        listener.onPrice(price(69000));
+        verifyNoInteractions(stream, market, orders);
+        verify(execution, never()).executeLimit(anyLong(), anyLong(), anyLong(), anyMap(), any(Runnable.class));
     }
 
     @Test
@@ -144,11 +150,4 @@ class OrderExecutionListenerTests {
         verify(subscriptions).refresh();
     }
 
-    @Test
-    void websocketPriceArrivingDuringRestLookupTakesPrecedence() {
-        when(stream.latest("005930")).thenReturn(Optional.empty(), Optional.of(price(69000)));
-        when(market.currentPrice("005930")).thenReturn(68000L);
-        listener.orderCreated(order(1));
-        verify(execution).executeLimit(eq(1L), eq(1L), eq(69000L), anyMap(), any(Runnable.class));
-    }
 }

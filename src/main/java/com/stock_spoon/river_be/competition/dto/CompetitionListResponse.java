@@ -38,7 +38,7 @@ public class CompetitionListResponse {
 
         // 완료된 대결은 null을 반환하므로 기본형 int 대신 Integer 사용
         @JsonProperty("d_day")
-        private Integer dDay;
+        private Integer remainingDays;
 
         @JsonProperty("cumulative_return_percent")
         private Double cumulativeReturnPercent;

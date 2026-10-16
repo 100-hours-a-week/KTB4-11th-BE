@@ -155,7 +155,7 @@ class CompetitionCreationTests {
                 .findByParticipantIdAndRecordDate(links.getFirst().getId(), LocalDate.of(2026, 10, 16)).orElseThrow();
         assertThat(lastPoint.getAssetValue()).isEqualTo(10_200_000);
         assertThat(lastPoint.getCumulativeReturnPercent()).isEqualByComparingTo("2.0");
-        assertThat(result.getCompetitions().getFirst().getDDay()).isNull();
+        assertThat(result.getCompetitions().getFirst().getRemainingDays()).isNull();
         assertThat(orders.findAllByAccountIdAndStatus(aiAccount.getId(),
                 com.stock_spoon.river_be.order.entity.Order.Status.PENDING)).isEmpty();
         org.mockito.Mockito.doReturn(close.plusDays(3)).when(tradingHours).now();
@@ -183,7 +183,7 @@ class CompetitionCreationTests {
         org.mockito.Mockito.when(market.currentPrice("005930")).thenReturn(120_000L);
         var response = service.listCompetitions(user.getId());
         assertThat(response.getOngoingCompetitionCount()).isEqualTo(1);
-        assertThat(response.getCompetitions().get(0).getDDay()).isNull();
+        assertThat(response.getCompetitions().get(0).getRemainingDays()).isNull();
         assertThat(response.getCompetitions().get(0).getCumulativeReturnPercent()).isNull();
         assertThat(response.getCompetitions().get(0).getWinner()).isNull();
         assertThat(response.getCompetitions().get(1).getCumulativeReturnPercent()).isEqualTo(2.0);

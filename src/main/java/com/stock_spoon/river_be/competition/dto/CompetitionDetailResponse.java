@@ -24,7 +24,7 @@ public class CompetitionDetailResponse {
     @JsonProperty("end_date")
     private LocalDate endDate;
     @JsonProperty("d_day")
-    private Integer dDay;
+    private Integer remainingDays;
     @JsonProperty("cumulative_return_percent")
     private BigDecimal cumulativeReturnPercent;
     private List<ParticipantItem> participants;

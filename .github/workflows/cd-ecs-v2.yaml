@@ -1,7 +1,6 @@
 name: Backend Dev CD (V2 ECS)
 
 # dev 이미지를 운영 ECS 클러스터의 backend 서비스(Service ASG)에 배포한다.
-# 인프라(환경변수·Secret·용량 등)는 Cloud 레포 ecs root가 관리하고, 이 워크플로는 이미지만 바꾼다.
 # 주의: V1 DB 사용 기간에는 이 서비스가 운영 DB(V1 MySQL)에 연결된다.
 
 on:
@@ -47,35 +46,38 @@ jobs:
           [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid image tag: $IMAGE_TAG" >&2; exit 1; }
           echo "IMAGE=${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}" >> "$GITHUB_ENV"
 
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.image_tag }}
+          persist-credentials: false
+
+      - name: Verify deployment source
+        run: |
+          set -Eeuo pipefail
+          [[ "$(git rev-parse HEAD)" == "$IMAGE_TAG" ]] || { echo "Checkout does not match image SHA" >&2; exit 1; }
+          [[ -f .aws/ecs/backend.json ]] || { echo "Task Definition template is missing at $IMAGE_TAG" >&2; exit 1; }
+
       - name: Configure AWS credentials with OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_V2_ECS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # Terraform이 관리하는 최신 리비전을 기준으로 이미지만 바꾼다.
-      # (Terraform이 환경변수 등을 바꿔 등록한 리비전도 다음 배포에 반영된다)
       - name: Register task definition revision
         id: register
         run: |
           set -Eeuo pipefail
-          aws ecs describe-task-definition \
-            --task-definition "$TASK_FAMILY" \
-            --query taskDefinition > current.json
+          template=".aws/ecs/backend.json"
+          jq -e --arg family "$TASK_FAMILY" '.family == $family' "$template" > /dev/null
 
-          echo "Base revision: $(jq -r .taskDefinitionArn current.json)"
-
-          if [[ "$(jq --arg name "$CONTAINER_NAME" '[.containerDefinitions[] | select(.name == $name)] | length' current.json)" != "1" ]]; then
+          if [[ "$(jq --arg name "$CONTAINER_NAME" '[.containerDefinitions[] | select(.name == $name)] | length' "$template")" != "1" ]]; then
             echo "Container '$CONTAINER_NAME' not found in $TASK_FAMILY" >&2
             exit 1
           fi
 
-          # describe 결과의 읽기 전용 필드는 register에서 받지 않으므로 제거한다.
           jq --arg name "$CONTAINER_NAME" --arg image "$IMAGE" '
             .containerDefinitions |= map(if .name == $name then .image = $image else . end)
-            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities,
-                  .registeredAt, .registeredBy, .deregisteredAt)
-          ' current.json > next.json
+          ' "$template" > next.json
 
           TASK_DEFINITION_ARN="$(aws ecs register-task-definition \
             --cli-input-json file://next.json \

@@ -391,6 +391,63 @@ CompetitionDailyPerformanceService.recordFinalPerformances()
 
 코드: [일별 서비스](../src/main/java/com/stock_spoon/river_be/competition/service/CompetitionDailyPerformanceService.java) · [Entity](../src/main/java/com/stock_spoon/river_be/competition/entity/CompetitionDailyPerformance.java) · [Repository](../src/main/java/com/stock_spoon/river_be/competition/repository/CompetitionDailyPerformanceRepository.java)
 
+## 대결 매매 내역 조회 — feat/137-competition/trade-history
+
+```text
+GET /api/v2/accounts/{account_id}/executions
+  → CompetitionTradeHistoryController.list(jwt, accountId)
+  → CompetitionTradeHistoryService.list(userId, accountId)
+      → 계좌 소유권·활성 여부 확인
+      → CompetitionHistoryAccess.check(userId, accountId, true)
+      → CompetitionTradeHistoryRepository.findExecutedTrades(accountId)
+      → 대결 서비스의 summarize()로 주문별 체결 합산
+  → CompetitionTradeHistoryResponse 생성 → 200
+```
+
+| 단계 | 전달값 | 처리·결과 |
+|---|---|---|
+| 컨트롤러 | JWT subject, URL account_id | 로그인 사용자 ID와 계좌 ID를 서비스에 전달 |
+| 공통 접근 검사 | 사용자 ID, 계좌 ID | 본인 대결 참가 계좌인지 확인, AI 계좌는 COMPLETED에서만 공개 |
+| 주문 조회 | account_id, EXECUTED | 대결 전용 조회 쿼리로 사용자·AI 주문 모두 조회, 최근 체결 시각 내림차순·동률은 주문 ID 내림차순 |
+| 체결 합산 | 주문별 체결 행 | 수량·금액·손익 합산, 마지막 체결 시각 사용 |
+| 대결 DTO | 대결 서비스에서 계산한 합산 값 | 화면용 9개 필드만 반환 |
+
+기존 주문 조회 코드는 계산 방식만 참고했다. 대결 서비스는 `OrderHistoryService`, `OrderHistoryResponse`, `OrderRepository`를 참조하지 않으며 조회 쿼리와 합산 로직을 자체적으로 가진다. 공통 DB의 주문·체결 엔티티 매핑은 사용한다. 향후 계산 정책을 바꿀 때 주문 조회와 대결 조회를 각각 검토해야 한다.
+
+URI와 배열명 `executions`는 확정 명세대로 유지하지만, 항목 하나는 **주문 하나의 합산 결과**다. 한 주문이 여러 호가에서 전량 체결되어도 카드 하나가 된다. `execution_id`는 제외하고 `order_id`로 식별한다. 페이지네이션 없이 전체를 반환한다.
+
+```json
+{
+  "account_id": 2,
+  "executions": [{
+    "order_id": 1001,
+    "stock_code": "005930",
+    "stock_name": "삼성전자",
+    "order_side": "sell",
+    "executed_at": "2026-10-16T15:01:00+09:00",
+    "execution_quantity": 10,
+    "execution_amount": 1260,
+    "realized_profit_amount": 200.00,
+    "realized_return_percent": 18.8679
+  }]
+}
+```
+
+예: 120원 × 4주 + 130원 × 6주 = 1,260원. 저장된 실현손익이 합계 200원이면 취득원가는 1,060원이며 합산 수익률은 `200 / 1060 × 100 = 18.8679%`다. 매수는 실현손익·수익률을 `null`로 반환한다. 체결이 없는 계좌는 빈 배열이며, 대기·취소 주문은 제외한다.
+
+판단 근거는 목록에서 생성 상태를 반환하지 않는다. `account_id`와 `order_id`로 기존 `GET /api/v1/accounts/{account_id}/orders/{order_id}/ai-report`를 호출한다. 기존 `/orders`와 리포트 조회에도 같은 AI 공개 검사를 적용해 진행 중 우회 조회를 막는다. 일반 계좌의 기존 조회 정책은 유지한다.
+
+| 상황 | 응답 |
+|---|---|
+| 미인증 | 401 |
+| 타인·없는·비활성 계좌 | 404 ACCOUNT_NOT_FOUND |
+| 일반 계좌 또는 본인 대결 참가 계좌가 아님 | 404 COMPETITION_ACCOUNT_NOT_FOUND |
+| AI 계좌의 대결이 READY / IN_PROGRESS / CANCELLED | 403 COMPETITION_AI_HISTORY_HIDDEN |
+| 체결 완료 주문에 체결 행 누락 | 500 INVALID_ORDER_DATA |
+| 기존 종목명 조회 실패 | 503 ORDER_DATA_UNAVAILABLE |
+
+검증: 별도 H2 DB와 실제 HTTP 서버에서 사용자 주문 합산·미체결/취소 제외·빈 목록·타인 접근·AI 공개 제한·완료 후 매매 내역 → 판단 근거 조회를 테스트한다. 외부 종목정보는 테스트 값으로 대체한다. 현재 브랜치는 상세·결과 API가 포함되기 전 dev에서 시작했으므로, 결과 API 응답부터 연결하는 검증은 브랜치 통합 후 수행한다.
+
 ## 설정과 DB 적용
 
 | 설정 키 | 기본값 | 역할 |

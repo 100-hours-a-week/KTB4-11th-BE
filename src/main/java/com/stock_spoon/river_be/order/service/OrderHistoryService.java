@@ -8,6 +8,7 @@ import com.stock_spoon.river_be.execution.repository.ExecutionRepository;
 import com.stock_spoon.river_be.order.repository.OrderRepository;
 
 import com.stock_spoon.river_be.account.repository.AccountRepository;
+import com.stock_spoon.river_be.competition.service.CompetitionHistoryAccess;
 import com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient;
 import java.time.Instant;
 import java.math.BigDecimal;
@@ -35,13 +36,16 @@ public class OrderHistoryService {
     private final ExecutionRepository executions;
     private final KiwoomMarketClient market;
     private final TransactionTemplate read;
+    private final CompetitionHistoryAccess competitionAccess;
 
     public OrderHistoryService(AccountRepository accounts, OrderRepository orders,
-            ExecutionRepository executions, KiwoomMarketClient market, PlatformTransactionManager transactions) {
+            ExecutionRepository executions, KiwoomMarketClient market, PlatformTransactionManager transactions,
+            CompetitionHistoryAccess competitionAccess) {
         this.accounts = accounts;
         this.orders = orders;
         this.executions = executions;
         this.market = market;
+        this.competitionAccess = competitionAccess;
         read = new TransactionTemplate(transactions);
         read.setReadOnly(true);
     }
@@ -66,6 +70,7 @@ public class OrderHistoryService {
                 log.warn("주문내역 계좌 접근 실패 accountId={} code=ACCOUNT_NOT_FOUND", accountId);
                 throw new OrderException(HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND", "계좌를 찾을 수 없습니다.");
             }
+            competitionAccess.check(userId, accountId, false);
             long total = pageNumber == null ? 0
                     : orders.countHistory(accountId, Order.Status.EXECUTED, Order.Source.AI, selectedSide);
             long offset = pageNumber == null ? 0 : (long) pageNumber * count;

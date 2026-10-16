@@ -10,6 +10,8 @@ CREATE TABLE competitions (
     end_date DATE NOT NULL,
     state ENUM('READY', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED') NOT NULL,
     started_at DATETIME(6) NULL,
+    completed_at DATETIME(6) NULL,
+    winner ENUM('USER', 'AI', 'DRAW') NULL,
     created_at DATETIME(6) NOT NULL,
     updated_at DATETIME(6) NOT NULL,
     KEY ix_competitions_state_dates (state, start_date, end_date),
@@ -20,6 +22,8 @@ CREATE TABLE competition_participants (
     participant_id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     competition_id BIGINT NOT NULL,
     account_id BIGINT NOT NULL,
+    final_asset_value BIGINT NULL,
+    final_return_percent DECIMAL(19,4) NULL,
     UNIQUE KEY uk_competition_participant_account (account_id),
     CONSTRAINT fk_participants_competition FOREIGN KEY (competition_id) REFERENCES competitions(competition_id),
     CONSTRAINT fk_participants_account FOREIGN KEY (account_id) REFERENCES accounts(account_id)

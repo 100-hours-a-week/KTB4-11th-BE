@@ -20,5 +20,7 @@ market:
     refresh-enabled: false
 
 competition:
+  completion:
+    enabled: false
   start:
     enabled: false

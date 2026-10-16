@@ -41,6 +41,8 @@ class CompetitionCreationTests {
     @org.springframework.test.context.bean.override.mockito.MockitoBean
     com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient market;
     @Autowired com.stock_spoon.river_be.holding.repository.HoldingRepository holdings;
+    @Autowired com.stock_spoon.river_be.competition.service.CompetitionCompletionService completion;
+    @Autowired com.stock_spoon.river_be.order.repository.OrderRepository orders;
     private User user;
 
     @BeforeEach
@@ -50,6 +52,112 @@ class CompetitionCreationTests {
         user = new User("대결" + UUID.randomUUID().toString().substring(0, 4));
         user.completeOnboarding();
         user = users.save(user);
+    }
+
+    @Test
+    void failedClosingPriceLeavesResultsUnchangedAndSchedulerRetriesAfterRestart() {
+        var start = java.time.ZonedDateTime.parse("2026-10-12T10:00:00+09:00[Asia/Seoul]");
+        org.mockito.Mockito.doReturn(start).when(tradingHours).now();
+        var req = request("정산 재시도", 4, 1);
+        ReflectionTestUtils.setField(req, "startDate", start.toLocalDate());
+        ReflectionTestUtils.setField(req, "endDate", LocalDate.of(2026, 10, 16));
+        var id = service.createCompetition(user.getId(), req).getCompetitionId();
+        var account = participants.findAllByCompetitionIdOrderByIdAsc(id).getFirst().getAccount();
+        new org.springframework.transaction.support.TransactionTemplate(transactions).executeWithoutResult(status -> {
+            accounts.findById(account.getId()).orElseThrow().changeCash(-1_000_000);
+            holdings.save(new com.stock_spoon.river_be.holding.entity.Holding(account, "005930", 10,
+                    java.math.BigDecimal.valueOf(1_000_000)));
+        });
+        org.mockito.Mockito.doReturn(start.plusDays(7)).when(tradingHours).now();
+        org.mockito.Mockito.when(market.closingPrice("005930", LocalDate.of(2026, 10, 16)))
+                .thenThrow(new IllegalStateException("종가 미제공"));
+        assertThatThrownBy(() -> completion.completeCompetition(id)).isInstanceOf(IllegalStateException.class);
+        assertThat(competitions.findById(id).orElseThrow().getState().name()).isEqualTo("IN_PROGRESS");
+        assertThat(participants.findAllByCompetitionIdOrderByIdAsc(id))
+                .allSatisfy(p -> assertThat(p.getFinalAssetValue()).isNull());
+        org.mockito.Mockito.doReturn(90_000L).when(market).closingPrice("005930", LocalDate.of(2026, 10, 16));
+        new com.stock_spoon.river_be.competition.service.CompetitionCompletionScheduler(competitions, completion, tradingHours)
+                .completeExpiredCompetitions();
+        assertThat(competitions.findById(id).orElseThrow().getWinner().name()).isEqualTo("AI");
+        assertThat(service.listCompetitions(user.getId()).getCompetitions().getFirst().getCumulativeReturnPercent()).isEqualTo(-1.0);
+    }
+
+    @Test
+    void equalFinalAssetsProduceDraw() {
+        var start = java.time.ZonedDateTime.parse("2026-10-12T10:00:00+09:00[Asia/Seoul]");
+        org.mockito.Mockito.doReturn(start).when(tradingHours).now();
+        var req = request("무승부", 4, 1);
+        ReflectionTestUtils.setField(req, "startDate", start.toLocalDate());
+        ReflectionTestUtils.setField(req, "endDate", LocalDate.of(2026, 10, 16));
+        var id = service.createCompetition(user.getId(), req).getCompetitionId();
+        org.mockito.Mockito.doReturn(start.plusDays(4).withHour(15).withMinute(30)).when(tradingHours).now();
+        completion.completeCompetition(id);
+        assertThat(service.listCompetitions(user.getId()).getCompetitions().getFirst().getWinner()).isEqualTo("draw");
+        assertThat(participants.findAllByCompetitionIdOrderByIdAsc(id))
+                .allSatisfy(p -> assertThat(p.getFinalReturnPercent()).isEqualByComparingTo("0"));
+    }
+
+    @Test
+    void completesAtFridayCloseForSundayEndAndKeepsHistoricalResult() {
+        var start = java.time.ZonedDateTime.parse("2026-10-12T10:00:00+09:00[Asia/Seoul]");
+        org.mockito.Mockito.doReturn(start).when(tradingHours).now();
+        var req = request("마감 정산", 6, 1);
+        ReflectionTestUtils.setField(req, "startDate", start.toLocalDate());
+        ReflectionTestUtils.setField(req, "endDate", LocalDate.of(2026, 10, 18));
+        var id = service.createCompetition(user.getId(), req).getCompetitionId();
+        var links = participants.findAllByCompetitionIdOrderByIdAsc(id);
+        var userAccount = links.getFirst().getAccount();
+        var aiAccount = links.getLast().getAccount();
+        var tx = new org.springframework.transaction.support.TransactionTemplate(transactions);
+        tx.executeWithoutResult(status -> {
+            accounts.findById(userAccount.getId()).orElseThrow().changeCash(-1_000_000);
+            holdings.save(new com.stock_spoon.river_be.holding.entity.Holding(userAccount, "005930", 10,
+                    java.math.BigDecimal.valueOf(1_000_000)));
+            orders.save(com.stock_spoon.river_be.order.entity.Order.pendingLimit(aiAccount, "005930",
+                    com.stock_spoon.river_be.order.entity.Order.Side.BUY, 1, 100_000,
+                    com.stock_spoon.river_be.order.entity.Order.Source.AI, "대기", start.toInstant()));
+        });
+        var before = java.time.ZonedDateTime.parse("2026-10-16T15:29:59+09:00[Asia/Seoul]");
+        org.mockito.Mockito.doReturn(before).when(tradingHours).now();
+        completion.completeCompetition(id);
+        assertThat(competitions.findById(id).orElseThrow().getState().name()).isEqualTo("IN_PROGRESS");
+        var close = before.plusSeconds(1);
+        org.mockito.Mockito.doReturn(close).when(tradingHours).now();
+        // 정산이 늦어져도 반드시 금요일 종가를 사용한다.
+        org.mockito.Mockito.when(market.closingPrice("005930", LocalDate.of(2026, 10, 16))).thenReturn(120_000L);
+        Boolean blocked = tx.execute(status -> accounts.hasNonTradingCompetition(aiAccount.getId(), close));
+        assertThat(blocked).isTrue();
+        // 스케줄러가 아직 완료 처리하지 않았어도 생성·체결 경로에서 마감 시각을 검사한다.
+        var orderService = new com.stock_spoon.river_be.order.service.OrderService(accounts, orders, holdings);
+        ReflectionTestUtils.setField(orderService, "clock", java.time.Clock.fixed(close.toInstant(), ZoneId.of("Asia/Seoul")));
+        assertThatThrownBy(() -> tx.executeWithoutResult(status -> orderService.reserveLimit(
+                user.getId(), aiAccount.getId(), "005930", com.stock_spoon.river_be.order.entity.Order.Side.BUY,
+                1, 100_000, "마감 후 주문")))
+                .isInstanceOf(com.stock_spoon.river_be.order.exception.OrderException.class);
+        var executionService = new com.stock_spoon.river_be.execution.service.OrderExecutionService(accounts, orders,
+                holdings, context.getBean(com.stock_spoon.river_be.execution.repository.ExecutionRepository.class));
+        ReflectionTestUtils.setField(executionService, "clock", java.time.Clock.fixed(close.toInstant(), ZoneId.of("Asia/Seoul")));
+        var pending = orders.findAllByAccountIdAndStatus(aiAccount.getId(),
+                com.stock_spoon.river_be.order.entity.Order.Status.PENDING).getFirst();
+        Boolean executed = tx.execute(status -> executionService.executeLimit(aiAccount.getId(), pending.getId(), 90_000));
+        assertThat(executed).isFalse();
+        assertThatThrownBy(() -> tx.executeWithoutResult(status -> executionService.executeMarketBuy(
+                user.getId(), aiAccount.getId(), "005930", 1, "마감 후 시장가", null)))
+                .isInstanceOf(com.stock_spoon.river_be.order.exception.OrderException.class);
+        completion.completeCompetition(id);
+        assertThat(competitions.findById(id).orElseThrow().getState().name()).isEqualTo("COMPLETED");
+        var result = service.listCompetitions(user.getId());
+        assertThat(result.getOngoingCompetitionCount()).isZero();
+        assertThat(result.getCompetitions().getFirst().getWinner()).isEqualTo("user");
+        assertThat(result.getCompetitions().getFirst().getCumulativeReturnPercent()).isEqualTo(2.0);
+        assertThat(result.getCompetitions().getFirst().getDDay()).isNull();
+        assertThat(orders.findAllByAccountIdAndStatus(aiAccount.getId(),
+                com.stock_spoon.river_be.order.entity.Order.Status.PENDING)).isEmpty();
+        org.mockito.Mockito.doReturn(close.plusDays(3)).when(tradingHours).now();
+        completion.completeCompetition(id);
+        assertThat(service.listCompetitions(user.getId()).getCompetitions().getFirst().getCumulativeReturnPercent()).isEqualTo(2.0);
+        org.mockito.Mockito.verify(market, org.mockito.Mockito.times(1))
+                .closingPrice("005930", LocalDate.of(2026, 10, 16));
     }
 
     @Test

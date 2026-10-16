@@ -5,6 +5,9 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 // save(), findById() 등 기본 저장·조회 기능은 Spring Data JPA가 구현한다.
 public interface CompetitionRepository extends JpaRepository<Competition, Long> {
+    // 소유자를 함께 조건으로 걸어 타인의 대결을 상세 조회하지 못하게 한다.
+    java.util.Optional<Competition> findByIdAndUserId(Long id, Long userId);
+
     // 완료 대결도 포함해 서버 중단 중 누락된 과거 일별 성적을 복구한다.
     @org.springframework.data.jpa.repository.Query("select c.id from Competition c "
             + "where c.state in (IN_PROGRESS, COMPLETED) and c.startedAt is not null "

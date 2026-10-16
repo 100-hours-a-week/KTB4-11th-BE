@@ -3,6 +3,10 @@ package com.stock_spoon.river_be.competition.service;
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateRequest;
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateResponse;
 import com.stock_spoon.river_be.competition.dto.CompetitionListResponse;
+import com.stock_spoon.river_be.competition.dto.CompetitionDetailResponse;
+import com.stock_spoon.river_be.competition.dto.CompetitionResultResponse;
+import com.stock_spoon.river_be.competition.repository.CompetitionDailyPerformanceRepository;
+import java.math.BigDecimal;
 import com.stock_spoon.river_be.account.service.AccountService;
 import java.util.stream.Collectors;
 import com.stock_spoon.river_be.account.entity.Account;
@@ -29,6 +33,92 @@ public class CompetitionService {
     private final CompetitionParticipantRepository participants;
     private final CompetitionTradingHours tradingHours;
     private final AccountService accountService;
+    private final CompetitionDailyPerformanceRepository dailyPerformances;
+
+    @Transactional(readOnly = true)
+    public CompetitionResultResponse getCompetitionResult(Long userId, Long competitionId) {
+        // 1. 소유권부터 확인한 뒤 완료 상태를 검사한다. 날짜가 지났어도 정산 전이면 결과를 공개하지 않는다.
+        var competition = competitions.findByIdAndUserId(competitionId, userId)
+                .orElseThrow(() -> new CompetitionException(HttpStatus.NOT_FOUND,
+                        "COMPETITION_NOT_FOUND", "대결을 찾을 수 없습니다."));
+        if (competition.getState() != Competition.State.COMPLETED) {
+            throw new CompetitionException(HttpStatus.CONFLICT, "COMPETITION_NOT_COMPLETED", "아직 완료되지 않은 대결입니다.");
+        }
+
+        // 2. 참가자 저장 순서와 관계없이 계좌의 AI 운용 여부로 사용자·AI를 구분한다.
+        var links = participants.findAllByCompetitionIdOrderByIdAsc(competitionId);
+        if (links.size() != 2 || links.stream().filter(p -> p.getAccount().isAiManaged()).count() != 1) {
+            throw resultUnavailable();
+        }
+        var user = links.stream().filter(p -> !p.getAccount().isAiManaged()).findFirst().orElseThrow();
+        var ai = links.stream().filter(p -> p.getAccount().isAiManaged()).findFirst().orElseThrow();
+        if (competition.getWinner() == null || user.getFinalReturnPercent() == null || ai.getFinalReturnPercent() == null) {
+            throw resultUnavailable();
+        }
+
+        // 3. {날짜: {참가자 ID: 수익률}}로 묶는다. TreeMap은 날짜가 빠른 순서로 정렬해 준다.
+        // 없는 쪽의 값은 Map.get()이 null을 반환한다. 기록을 만들어 넣거나 현재가로 계산하지 않는다.
+        var byDate = new java.util.TreeMap<java.time.LocalDate, java.util.Map<Long, BigDecimal>>();
+        for (var record : dailyPerformances.findAllByParticipantCompetitionId(competitionId)) {
+            byDate.computeIfAbsent(record.getRecordDate(), date -> new java.util.HashMap<>())
+                    .put(record.getParticipant().getId(), record.getCumulativeReturnPercent());
+        }
+        var history = byDate.entrySet().stream().map(day -> new CompetitionResultResponse.DailyPerformanceItem(
+                day.getKey(), day.getValue().get(user.getId()), day.getValue().get(ai.getId()))).toList();
+
+        // 4. account_id는 결과 화면 하단에서 참가 계좌의 매매 내역을 조회할 때 사용한다.
+        var participantItems = links.stream().map(link -> {
+            boolean isAi = link.getAccount().isAiManaged();
+            return new CompetitionResultResponse.ParticipantItem(link.getId(), isAi ? "ai" : "user",
+                    link.getAccount().getId(), isAi ? "AI" : "나");
+        }).toList();
+        return new CompetitionResultResponse(competition.getId(), competition.getCompetitionName(),
+                competition.getCompetitionType().name().toLowerCase(Locale.ROOT), "completed",
+                competition.getStartDate(), competition.getEndDate(), null,
+                competition.getWinner().name().toLowerCase(Locale.ROOT), user.getFinalReturnPercent(),
+                ai.getFinalReturnPercent(), participantItems, history);
+    }
+
+    private CompetitionException resultUnavailable() {
+        return new CompetitionException(HttpStatus.INTERNAL_SERVER_ERROR,
+                "COMPETITION_RESULT_UNAVAILABLE", "확정된 대결 결과를 확인할 수 없습니다.");
+    }
+
+    @Transactional(readOnly = true) // 저장된 성적만 읽으므로 시세 API 호출이나 DB 갱신은 하지 않는다.
+    public CompetitionDetailResponse getCompetitionDetail(Long userId, Long competitionId) {
+        // 1. 대결 ID와 로그인 사용자 ID를 함께 확인한다. 타인의 대결과 없는 대결은 같은 404로 응답한다.
+        var competition = competitions.findByIdAndUserId(competitionId, userId)
+                .orElseThrow(() -> new CompetitionException(HttpStatus.NOT_FOUND,
+                        "COMPETITION_NOT_FOUND", "대결을 찾을 수 없습니다."));
+
+        // 2. 두 참가자의 계좌 ID는 매매 내역 조회에 필요하다. 수익률 기록은 사용자 것만 읽는다.
+        var links = participants.findAllByCompetitionIdOrderByIdAsc(competitionId);
+        var userParticipant = links.stream().filter(p -> !p.getAccount().isAiManaged()).findFirst()
+                .orElseThrow(() -> new CompetitionException(HttpStatus.INTERNAL_SERVER_ERROR,
+                        "INVALID_COMPETITION_PARTICIPANTS", "대결 참가자 정보를 확인할 수 없습니다."));
+        var records = dailyPerformances.findAllByParticipantIdOrderByRecordDateAsc(userParticipant.getId());
+
+        // 3. 장중에도 전일까지 확정된 기록만 사용한다. 오늘 마감 후 저장된 행이 있어야 오늘 점이 추가된다.
+        // 상단 수익률은 그래프의 마지막 점과 일치시킨다. 첫 마감 기록 전에는 0%다.
+        BigDecimal latestReturn = records.isEmpty() ? BigDecimal.ZERO : records.getLast().getCumulativeReturnPercent();
+        var history = records.stream().map(record -> new CompetitionDetailResponse.DailyPerformanceItem(
+                record.getRecordDate(), record.getCumulativeReturnPercent())).toList();
+        var participantItems = links.stream().map(link -> {
+            boolean ai = link.getAccount().isAiManaged();
+            return new CompetitionDetailResponse.ParticipantItem(link.getId(), link.getAccount().getId(),
+                    ai ? "ai" : "user", ai ? "AI" : "나");
+        }).toList();
+
+        // 4. 남은 일수는 DB에 저장하지 않고 한국 날짜 기준으로 계산한다.
+        boolean closed = competition.getState() == Competition.State.COMPLETED
+                || competition.getState() == Competition.State.CANCELLED;
+        Integer dDay = closed ? null : Math.toIntExact(Math.max(0,
+                ChronoUnit.DAYS.between(tradingHours.now().toLocalDate(), competition.getEndDate())));
+        return new CompetitionDetailResponse(competition.getId(), competition.getCompetitionName(),
+                competition.getCompetitionType().name().toLowerCase(Locale.ROOT),
+                competition.getState().name().toLowerCase(Locale.ROOT), competition.getStartDate(),
+                competition.getEndDate(), dDay, latestReturn, participantItems, history);
+    }
 
     public CompetitionListResponse listCompetitions(Long userId) {
         // 1. 한국 시간의 오늘 날짜를 구하고, 요청한 사용자의 대결 전체를 최신 생성 순으로 조회한다.

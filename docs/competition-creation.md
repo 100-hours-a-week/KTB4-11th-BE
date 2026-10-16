@@ -10,6 +10,7 @@
 | `feat/121-competition/competition-list` | 내 대결 전체 조회 | [3. 목록 조회](#3-목록-조회) |
 | `feat/123-competition/completion-scheduler` | 결과 확정·완료 처리 | [4. 종료 정산](#4-종료-정산) |
 | 같은 브랜치 | 마감 후 거래 차단 | [5. 주문 차단](#5-주문-차단) |
+| `feat/127-competition/daily-performance` | 일별 평가금·누적 수익률 저장 | [6. 일별 성적 저장](#6-일별-성적-저장) |
 
 ## 1. 대결 생성
 
@@ -206,6 +207,7 @@ KiwoomMarketClient.currentPrice() → 종목별 현재가
 Spring 예약 실행: 기본 1시간 간격
     ↓
 CompetitionCompletionScheduler.completeExpiredCompetitions()
+    ├─ 일별 성적 서비스 → 누락된 거래일 기록 저장 (127 브랜치 추가)
     ├─ CompetitionRepository → 종료 후보 ID 조회
     └─ 각 대결의 CompetitionCompletionService.completeCompetition()
            ├─ 대결·계좌 잠금, 자산 조회
@@ -315,17 +317,92 @@ Competition.isTradingAt(now)
 
 코드: [주문 서비스](../src/main/java/com/stock_spoon/river_be/order/service/OrderService.java) · [체결 서비스](../src/main/java/com/stock_spoon/river_be/execution/service/OrderExecutionService.java)
 
+## 6. 일별 성적 저장
+
+### 호출 흐름
+
+```text
+기존 1시간 주기의 CompetitionCompletionScheduler.completeExpiredCompetitions()
+    ↓ CompetitionRepository.findDailyPerformanceCandidates(today)
+CompetitionDailyPerformanceService.recordMissingDays(competitionId)
+    ├─ 대결 잠금 → 실제 시작일 ~ 이미 마감한 거래일 중 누락 날짜 확인
+    ├─ 계좌 잠금 → ExecutionRepository.findPerformanceTrades()
+    ├─ 체결 날짜순으로 현금·보유 수량 복원
+    ├─ KiwoomMarketClient.closingPrice() → 평가 날짜의 종가
+    └─ CompetitionDailyPerformanceRepository.save() → 날짜별 새 행 추가
+    ↓
+기존 종료 정산 계속 실행
+    ↓ 대결 완료 시
+CompetitionDailyPerformanceService.recordFinalPerformances()
+    ↓
+최종 성적과 마지막 거래일 기록을 함께 커밋
+```
+
+새 스케줄러나 컨트롤러는 추가하지 않았다. 현재 작업은 DB 기록까지이며 일별 그래프 조회 API는 다음 작업이다.
+
+### 단계별 전달값
+
+| 단계 | 실제 메서드 | 입력 → 결과 |
+|---|---|---|
+| 대상 조회 | `CompetitionRepository.findDailyPerformanceCandidates(today)` | 오늘 → 실제 시작한 진행 중·완료 대결 ID |
+| 누락 기록 저장 | `CompetitionDailyPerformanceService.recordMissingDays(id)` | 대결 ID → 없는 날짜의 기록 저장 |
+| 기존 날짜 조회 | `CompetitionDailyPerformanceRepository.findAllByParticipantCompetitionId(id)` | 대결 ID → 참가자별 기존 기록 |
+| 과거 체결 조회 | `ExecutionRepository.findPerformanceTrades(accountIds, cutoff)` | 계좌 ID·마지막 평가 시각 → 날짜순 체결 내역 |
+| 날짜별 자산 복원 | `CompetitionDailyPerformanceService.applyTrade(...)` [private] | 체결 한 건 → 그 시점의 현금·보유 수량 변경 |
+| 평가·저장 | `KiwoomMarketClient.closingPrice(code, date)` / `performances.save(...)` | 종목·평가일 → 종가 → 참가자별 평가금·수익률 새 행 |
+| 마지막 날 기록 | `CompetitionDailyPerformanceService.recordFinalPerformances(id)` | 완료 대결 ID → 최종 평가금과 동일한 날짜별 기록 |
+
+### 계산 예시와 저장 기준
+
+```text
+초기 자금: 1,000만 원
+월요일: 10주 × 10만 원 매수 → 현금 900만 원, 보유 10주
+월요일 종가 12만 원 → 평가금 900만 + 120만 = 1,020만 원 (+2.0%)
+
+화요일: 4주 × 13만 원 매도 → 현금 952만 원, 보유 6주
+화요일 종가 11만 원 → 평가금 952만 + 66만 = 1,018만 원 (+1.8%)
+```
+
+화요일에 월요일 누락분을 저장해도 월요일 마감 전 체결만 반영하므로 화요일 매도는 월요일 평가에 섞이지 않는다.
+현재 구현의 계좌 자금 변화는 초기 자금과 매수·매도 체결을 기준으로 복원한다. 추후 입출금·수수료 기능이 생기면 해당 자금 이력도 계산에 반영해야 한다.
+
+- `CompetitionDailyPerformance`는 DB의 `competition_daily_performances` 테이블과 연결된다.
+- Java 필드 `participant`는 `CompetitionParticipant` 객체이며 DB에는 `participant_id` 외래 키로 저장된다.
+- `record_date`, `asset_value`, `cumulative_return_percent`로 하루의 확정 성적을 보관한다.
+- `{participant_id, record_date}` 유일 제약과 대결 잠금으로 중복 저장을 방지한다. 이미 있는 기록은 덮어쓰지 않는다.
+- 누적 수익률은 `(해당일 평가금 - 초기 자금) / 초기 자금 × 100`이며 소수점 4자리로 반올림한다.
+- 사용자·AI 모두 저장한다. 조회 시 AI 공개 권한 처리는 후속 조회 API에서 구현한다.
+- 실제 시작일보다 앞선 날짜, 주말, 아직 15:30이 되지 않은 오늘은 기록하지 않는다. 공휴일은 기존 정책대로 아직 고려하지 않는다.
+- 거래하지 않은 날도 기록한다. 보유 주식이 없다면 현금만으로 평가하며 종가 API는 호출하지 않는다.
+- 체결 내역은 한 번 읽어 날짜순으로 누적 적용한다. 같은 종목·날짜의 종가는 두 참가자 평가에서 재사용한다.
+- 마지막 거래일은 종료 정산이 먼저 결과를 확정하고 같은 트랜잭션에서 기록한다. 마지막 그래프 점과 최종 수익률이 일치한다.
+- 이미 완료된 대결도 누락일을 복구한다. 이때 마지막 날은 저장된 `finalAssetValue`를 사용한다.
+
+### 예외·재시도 처리
+
+```text
+시작 전 / 기록할 마감일 없음 / 모두 기록됨 → 처리 생략
+종가 미제공 / 잘못된 자산 / 저장 실패 → 해당 대결의 이번 새 기록 전체 롤백
+                                  → 로그 기록 → 다음 1시간 주기에 재시도
+다른 대결의 일별 기록·종료 정산 → 계속 실행
+```
+
+여러 날짜를 복구하던 중 한 날짜가 실패하면 해당 호출에서 새로 저장한 날짜들도 롤백한다. 이전에 확정해 저장한 기록은 유지한다.
+
+코드: [일별 서비스](../src/main/java/com/stock_spoon/river_be/competition/service/CompetitionDailyPerformanceService.java) · [Entity](../src/main/java/com/stock_spoon/river_be/competition/entity/CompetitionDailyPerformance.java) · [Repository](../src/main/java/com/stock_spoon/river_be/competition/repository/CompetitionDailyPerformanceRepository.java)
+
 ## 설정과 DB 적용
 
 | 설정 키 | 기본값 | 역할 |
 |---|---|---|
 | `competition.start.enabled` | `true` | 자동 시작 활성화 |
 | `competition.start.interval-ms` | `10000` | 이전 실행 종료 후 10초 대기 |
-| `competition.completion.enabled` | `true` | 자동 종료 정산 활성화 |
+| `competition.completion.enabled` | `true` | 일별 기록·자동 종료 정산 활성화 |
 | `competition.completion.interval-ms` | `3600000` | 이전 실행 종료 후 1시간 대기 |
 
 - 신규 DB: 기존 `users`, `accounts` 테이블을 준비한 뒤 [competition.sql](../db/competition.sql)을 적용한다.
 - 기존 대결 테이블이 있는 DB: [competition-completion.sql](../db/competition-completion.sql)로 정산 컬럼만 추가한다. 두 SQL을 중복 적용하지 않는다.
+- 일별 성적 테이블: 위 대결 테이블 준비 후 [competition-daily-performance.sql](../db/competition-daily-performance.sql)을 한 번 추가 적용한다.
 - SQL 파일은 실제 DB에 자동 실행하지 않았다. 운영 스키마 확인 후 적용해야 한다.
 
 ## 기존 기능 연결과 후속 작업
@@ -334,5 +411,5 @@ Competition.isTradingAt(now)
 - AI 서버 계좌 조회는 기간 내 진행 중 대결의 AI 계좌를 포함한다. 마감 직후 상태 변경 전에는 목록에 남을 수 있지만 주문은 종료 시각으로 차단한다.
 - 일반 계좌 생성·이름 변경은 대결 생성과 같은 사용자 잠금을 사용해 이름 중복 경쟁을 막는다.
 - 기존 v1 일반 AI 계좌와 저장 데이터는 유지한다. v2 일반 계좌의 사용자 운용 전환·사용자 직접 주문 지원은 별도 작업이다.
-- 일별 누적 수익률 기록·상세 조회, 결과 상세 API, AI 리포트 조회는 아직 구현 전이다.
+- 일별 누적 수익률의 DB 기록은 구현했다. 상세 조회, 결과 상세 API, AI 리포트 조회는 아직 구현 전이다.
 - 새 기능도 **짧은 호출 흐름 → 전달값 표 → 계산·정책 예시 → 예외 처리**로 기록하고 구현된 내용과 계획을 구분한다.

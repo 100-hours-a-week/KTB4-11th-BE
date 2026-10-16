@@ -23,6 +23,7 @@ public class CompetitionCompletionService {
     private final OrderRepository orders;
     private final KiwoomMarketClient market;
     private final CompetitionTradingHours tradingHours;
+    private final CompetitionDailyPerformanceService dailyPerformances;
     @jakarta.persistence.PersistenceContext
     private jakarta.persistence.EntityManager entityManager;
 
@@ -68,5 +69,6 @@ public class CompetitionCompletionService {
             pending.cancel(now.toInstant());
         }
         competition.complete(winner, now.toInstant());
+        dailyPerformances.recordFinalPerformances(competitionId);
     }
 }

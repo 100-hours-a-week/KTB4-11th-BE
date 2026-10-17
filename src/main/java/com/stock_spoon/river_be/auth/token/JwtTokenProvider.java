@@ -62,6 +62,7 @@ public class JwtTokenProvider {
                 .expiresAt(expiresAt)
                 .id(UUID.randomUUID().toString())
                 .claim("type", type)
+                .claim("actor", "USER")
                 .build();
         JwsHeader header = JwsHeader.with(MacAlgorithm.HS256).type("JWT").build();
         return encoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();

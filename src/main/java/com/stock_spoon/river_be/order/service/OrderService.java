@@ -39,12 +39,15 @@ public class OrderService {
 
     @Transactional(readOnly = true)
     public void assertOrderableAccount(long userId, long accountId) {
+        assertOrderableAccount(userId, accountId, Order.Source.AI);
+    }
+
+    @Transactional(readOnly = true)
+    public void assertOrderableAccount(long userId, long accountId, Order.Source source) {
         Account account = accounts.findByIdAndUserIdAndActiveTrue(accountId, userId)
                 .orElseThrow(() -> new OrderException(HttpStatus.FORBIDDEN,
                         "FORBIDDEN_ACCOUNT", "이 계좌에 주문할 권한이 없습니다."));
-        if (!account.isAiManaged()) {
-            throw new OrderException("운용 가능한 자동매매 계좌가 아닙니다.");
-        }
+        assertAccountSource(account, source);
         assertCompetitionStarted(accountId);
     }
 
@@ -66,20 +69,26 @@ public class OrderService {
     // [예약 진입점] DTO를 내부 메서드에 전달한다. Spring 프록시를 거쳐 들어올 때 트랜잭션이 시작된다.
     // 아래 private 메서드는 같은 트랜잭션 안에서 실행되고 정상 종료 시 커밋한다.
     public Order reserveLimit(long userId, long accountId, OrderCreateRequest request) {
+        return reserveLimit(userId, accountId, request, Order.Source.AI);
+    }
+
+    @Transactional
+    public Order reserveLimit(long userId, long accountId, OrderCreateRequest request, Order.Source source) {
         return reserveLimit(Long.valueOf(userId), accountId, request.stockCode(),
                 Order.Side.valueOf(request.orderSide().toUpperCase(java.util.Locale.ROOT)),
-                request.quantity(), request.limitPrice(), request.reason(), request.stockName(), request.reasoning(),
-                request.holdingWeightLimitPercent(), request.isLowerTriggered());
+                request.quantity(), request.limitPrice(), source == Order.Source.AI ? request.reason() : null,
+                request.stockName(), request.reasoning(),
+                request.holdingWeightLimitPercent(), request.isLowerTriggered(), source);
     }
 
     private Order reserveLimit(Long userId, long accountId, String stockCode, Order.Side side,
             long quantity, long limitPrice, String reason) {
-        return reserveLimit(userId, accountId, stockCode, side, quantity, limitPrice, reason, null, java.util.List.of(), null, null);
+        return reserveLimit(userId, accountId, stockCode, side, quantity, limitPrice, reason, null, java.util.List.of(), null, null, Order.Source.AI);
     }
 
     private Order reserveLimit(Long userId, long accountId, String stockCode, Order.Side side,
             long quantity, long limitPrice, String reason, String stockName, java.util.List<ReportReasoning> reasoning,
-            Double holdingWeightLimitPercent, Boolean isLowerTriggered) {
+            Double holdingWeightLimitPercent, Boolean isLowerTriggered, Order.Source source) {
         if (side == null || quantity <= 0 || limitPrice <= 0 || stockCode == null
                 || !stockCode.matches("[0-9]{6}")) {
             throw new OrderException("주문 입력값을 확인하세요.");
@@ -88,6 +97,7 @@ public class OrderService {
             throw new OrderException("AI 판단 근거는 공백이 아닌 100,000자 이하의 텍스트여야 합니다.");
         }
         Account account = lockedAccount(accountId);
+        assertAccountSource(account, source);
         if (userId != null && !account.belongsTo(userId)) {
             throw new OrderException(HttpStatus.FORBIDDEN, "FORBIDDEN_ACCOUNT",
                     "이 계좌에 주문할 권한이 없습니다.");
@@ -108,7 +118,7 @@ public class OrderService {
         // 여기의 orders는 OrderRepository이며 Controller의 orders(OrderService)와 타입이 다르다.
         // 예약금은 주문에 기록한다. 이 단계에서는 실제 현금이나 보유량을 차감하지 않는다.
         return orders.save(Order.pendingLimit(account, stockCode, side, quantity,
-                limitPrice, Order.Source.AI, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered, clock.instant()));
+                limitPrice, source, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered, clock.instant()));
     }
 
     @Transactional
@@ -159,8 +169,8 @@ public class OrderService {
     private Account lockedAccount(long accountId) {
         Account account = accounts.findLockedById(accountId)
                 .orElseThrow(() -> new OrderException("계좌를 찾을 수 없습니다."));
-        if (!account.isActive() || !account.isAiManaged()) {
-            throw new OrderException("운용 가능한 자동매매 계좌가 아닙니다.");
+        if (!account.isActive()) {
+            throw new OrderException("활성 계좌가 아닙니다.");
         }
         assertCompetitionStarted(accountId);
         return account;
@@ -170,6 +180,13 @@ public class OrderService {
         // 계좌 ID로 직접 주문해도 시작 대기·종료된 대결의 운용을 우회할 수 없게 한다.
         if (accounts.hasNonTradingCompetition(accountId, clock.instant().atZone(SEOUL))) {
             throw new OrderException(HttpStatus.CONFLICT, "COMPETITION_NOT_IN_PROGRESS", "진행 중인 대결만 주문할 수 있습니다.");
+        }
+    }
+
+    private void assertAccountSource(Account account, Order.Source source) {
+        if (source == null || account.isAiManaged() != (source == Order.Source.AI)) {
+            throw new OrderException(HttpStatus.FORBIDDEN, "FORBIDDEN_ACCOUNT",
+                    "주문 주체와 계좌 운용 유형이 일치하지 않습니다.");
         }
     }
 

@@ -66,18 +66,19 @@ public class OrderHistoryService {
         final Order.Side selectedSide = side;
         log.debug("주문내역 조회 시작 accountId={} limit={}", accountId, count);
         Snapshot snapshot = read.execute(status -> {
-            if (accounts.findByIdAndUserIdAndActiveTrue(accountId, userId).isEmpty()) {
+            var account = accounts.findByIdAndUserIdAndActiveTrue(accountId, userId).orElseThrow(() -> {
                 log.warn("주문내역 계좌 접근 실패 accountId={} code=ACCOUNT_NOT_FOUND", accountId);
-                throw new OrderException(HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND", "계좌를 찾을 수 없습니다.");
-            }
+                return new OrderException(HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND", "계좌를 찾을 수 없습니다.");
+            });
             competitionAccess.check(userId, accountId, false);
+            var source = account.isAiManaged() ? Order.Source.AI : Order.Source.USER;
             long total = pageNumber == null ? 0
-                    : orders.countHistory(accountId, Order.Status.EXECUTED, Order.Source.AI, selectedSide);
+                    : orders.countHistory(accountId, Order.Status.EXECUTED, source, selectedSide);
             long offset = pageNumber == null ? 0 : (long) pageNumber * count;
             // JPA의 offset은 int 범위다. 전체 개수 밖 요청은 DB 페이지 조회 없이 빈 결과로 반환한다.
             if (pageNumber != null && offset >= total) return new Snapshot(List.of(), total);
             if (offset > Integer.MAX_VALUE) throw invalidQuery();
-            var candidates = orders.findHistory(accountId, Order.Status.EXECUTED, Order.Source.AI, selectedSide,
+            var candidates = orders.findHistory(accountId, Order.Status.EXECUTED, source, selectedSide,
                     pageNumber == null ? Pageable.unpaged() : PageRequest.of(pageNumber, count));
             if (candidates.isEmpty()) return new Snapshot(List.of(), total);
             var byOrder = executions.findForOrders(candidates.stream().map(Order::getId).toList()).stream()

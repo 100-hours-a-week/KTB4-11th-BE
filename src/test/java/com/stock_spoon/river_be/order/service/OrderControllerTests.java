@@ -153,7 +153,7 @@ class OrderControllerTests {
     }
 
     @Test
-    void regularUserTokenCannotCreateOrder() throws Exception {
+    void userCannotOrderOnAiAccount() throws Exception {
         mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
                         .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken()))
                         .with(csrf()).contentType(MediaType.APPLICATION_JSON)
@@ -163,8 +163,91 @@ class OrderControllerTests {
                                  "reason":"매수 판단"}
                                 """))
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("AI_ORDER_ONLY"));
+                .andExpect(jsonPath("$.code").value("FORBIDDEN_ACCOUNT"));
         assertThat(orders.count()).isZero();
+    }
+
+    @Test
+    void userCreatesBuyAndSellWithoutReportAndCanCancel() throws Exception {
+        var manual = accounts.save(new Account(user, "수동 계좌", 1_000_000, false));
+        holdings.save(new Holding(manual, "005930", 10, new java.math.BigDecimal("650000")));
+        for (String side : java.util.List.of("buy", "sell")) {
+            mvc.perform(post("/api/v1/accounts/{accountId}/orders", manual.getId())
+                            .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken()))
+                            .with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"stock_code":"005930","order_side":"%s","order_type":"limit",
+                                     "limit_price":70000,"quantity":2,"reason":null,
+                                     "reasoning":null,"holding_weight_limit_percent":null,"is_lower_triggered":null}
+                                    """.formatted(side)))
+                    .andExpect(status().isCreated())
+                    .andExpect(jsonPath("$.order_status").value("pending"));
+        }
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(orders.findAll()).hasSize(2).allSatisfy(order -> {
+            assertThat(order.getSource()).isEqualTo(Order.Source.USER);
+            assertThat(order.getReport()).isNull();
+        });
+        assertThat(((Number) entityManager.createNativeQuery("select count(*) from ai_order_reports")
+                .getSingleResult()).longValue()).isZero();
+        for (var order : orders.findAll()) {
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch(
+                            "/api/v1/accounts/{account}/orders/{order}", manual.getId(), order.getId())
+                            .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken()))
+                            .with(csrf()).contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"cancelled\"}"))
+                    .andExpect(status().isNoContent());
+        }
+        assertThat(orders.reservedCash(manual.getId(), Order.Status.PENDING)).isZero();
+        assertThat(orders.pendingSellQuantity(manual.getId(), "005930", Order.Side.SELL, Order.Status.PENDING)).isZero();
+    }
+
+    @Test
+    void rejectsMissingUnknownActorAndAiOrderOnManualAccount() throws Exception {
+        var manual = accounts.save(new Account(user, "수동 계좌", 1_000_000, false));
+        String body = reportInputBody("buy", "limit", ",\"holding_weight_limit_percent\":30");
+        for (String actor : java.util.List.of("", "ADMIN")) {
+            mvc.perform(post("/api/v1/accounts/{accountId}/orders", manual.getId())
+                            .cookie(actorCookie(user, actor.isEmpty() ? null : actor)).with(csrf())
+                            .contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.code").value("INVALID_ORDER_ACTOR"));
+        }
+        mvc.perform(post("/api/v1/accounts/{accountId}/orders", manual.getId())
+                        .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN_ACCOUNT"));
+        assertThat(orders.count()).isZero();
+    }
+
+    @Autowired OrderExecutionService orderExecution;
+
+    @Test
+    void userOrderExecutesWithoutReportAndAppearsInHistory() throws Exception {
+        var manual = accounts.save(new Account(user, "수동 계좌", 1_000_000, false));
+        mvc.perform(post("/api/v1/accounts/{accountId}/orders", manual.getId())
+                        .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken()))
+                        .with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content(reportInputBody("buy", "limit", "")))
+                .andExpect(status().isCreated());
+        var order = orders.findAll().getFirst();
+        assertThat(order.getReport()).isNull();
+        assertThat(orderExecution.executeLimit(manual.getId(), order.getId(), 69000)).isTrue();
+        entityManager.flush();
+        entityManager.clear();
+        assertThat(accounts.findById(manual.getId()).orElseThrow().getCashBalance()).isEqualTo(931000);
+        assertThat(holdings.findByAccountIdAndStockCode(manual.getId(), "005930").orElseThrow().getQuantity()).isEqualTo(1);
+        when(marketClient.stockDetails("005930")).thenReturn(
+                new com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient.StockDetails("005930", "삼성전자", "전기전자"));
+        for (String query : java.util.List.of("", "?page=0&limit=10")) {
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+                            "/api/v1/accounts/" + manual.getId() + "/orders" + query)
+                            .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.orders.length()").value(1))
+                    .andExpect(jsonPath("$.orders[0].order_source").value("USER"))
+                    .andExpect(jsonPath("$.orders[0].reason.summary").value(org.hamcrest.Matchers.nullValue()));
+        }
     }
 
     @Test
@@ -820,11 +903,17 @@ class OrderControllerTests {
 
 
     private Cookie aiCookie(User owner) {
+        return actorCookie(owner, "AI");
+    }
+
+    private Cookie actorCookie(User owner, String actor) {
         Instant now = Instant.now();
         JwtClaimsSet claims = JwtClaimsSet.builder()
                 .issuer(jwtProperties.issuer()).subject(owner.getId().toString())
                 .issuedAt(now).expiresAt(now.plusSeconds(900))
-                .claim("type", "access").claim("actor", "AI").build();
+                .claim("type", "access").claims(values -> {
+                    if (actor != null) values.put("actor", actor);
+                }).build();
         String token = encoder.encode(JwtEncoderParameters.from(
                 JwsHeader.with(MacAlgorithm.HS256).type("JWT").build(), claims)).getTokenValue();
         return new Cookie("access_token", token);

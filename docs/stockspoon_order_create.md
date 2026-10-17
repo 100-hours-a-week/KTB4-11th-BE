@@ -1,6 +1,7 @@
 # 지정가 주문 생성 API
 
 `POST /api/v1/accounts/{accountId}/orders`는 키움에 실제 주문을 보내지 않고 BE의 모의 주문을 생성한다.
+사용자 직접 주문 지원의 클래스·메서드별 수정 사항은 [사용자 주문 생성 지원 변경 내역](user-order-create-changes.md)에 정리했다.
 구현 순서, 정책 결정 과정과 시장 검증의 자세한 설명은 [주문 생성 구현 흐름](stockspoon_order_create_flow.md)에 기록했다.
 종목별 WebSocket 구독, 장 마감 취소와 재기동 복구는 [주문 종목 WebSocket 생명주기](stockspoon_order_websocket_lifecycle.md)에 기록했다.
 요청 인증은 기존 access JWT 쿠키와 CSRF 토큰을 사용한다. 검증된 JWT의 `actor`는 `AI` 또는

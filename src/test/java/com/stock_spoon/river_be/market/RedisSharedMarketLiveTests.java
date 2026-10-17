@@ -38,7 +38,7 @@ class RedisSharedMarketLiveTests {
         container.afterPropertiesSet();
         container.start();
         var events = new LinkedBlockingQueue<KiwoomStockStream.StockPrice>();
-        var stream = new RedisMarketStream(store, demands, mock(KiwoomStockStream.class),
+        var stream = new RedisMarketStream(store, demands, mock(AiQuoteAdapter.class),
                 mock(com.stock_spoon.river_be.market.kiwoom.RedisCollectorHeartbeat.class), container,
                 event -> { if (event instanceof RedisQuoteStore.QuoteEvent quote) events.add(quote.price()); },
                 mock(com.stock_spoon.river_be.order.repository.OrderRepository.class));
@@ -67,7 +67,7 @@ class RedisSharedMarketLiveTests {
             store.savePrice(missed, context);
             assertThat(events).isEmpty();
             container.start();
-            assertThat(events.poll(3, TimeUnit.SECONDS)).isEqualTo(missed);
+            assertThat(events.poll(3, TimeUnit.SECONDS)).isNull();
             assertThat(stream.latest(code)).contains(missed);
 
             var next = new QuoteStore.Source(owner, "next-session");

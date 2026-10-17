@@ -4,6 +4,7 @@ Redis 전환의 로컬 검증 후 인프라의 Serverless IAM 환경변수를 �
 
 | 목적 | 문서 |
 |---|---|
+| AI 현재가·호가 키·JSON·체결 경계 | [AI Valkey 호환](ai-quotes.md) |
 | 최신 검증 결과와 남은 단계 | [배포 준비](redis-deployment-checklist.md) |
 | 인프라 인계·설정·배포·장애 복구 | [운영 인계](operations-handoff.md) |
 | IAM 토큰·TLS·클러스터 연결 및 환경변수 | [IAM 연결](iam-connection.md) |

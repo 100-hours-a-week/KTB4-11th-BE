@@ -34,7 +34,7 @@ returnCode/detailCode는 숫자만 허용하며 공급자 return_msg 원문은 �
 
 ```text
 fields @timestamp, @message
-| filter @message like /event=kiwoom_query_failed|event=kiwoom_query_rejected|event=kospi_refresh_failed/
+| filter @message like /event=kiwoom_query_failed|event=kiwoom_query_rejected|event=ai_quote_rejected/
 | sort @timestamp desc
 | limit 100
 ```

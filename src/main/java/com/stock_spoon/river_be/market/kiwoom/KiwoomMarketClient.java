@@ -1,7 +1,7 @@
 package com.stock_spoon.river_be.market.kiwoom;
 
 import java.math.BigDecimal;
-import java.time.Instant;
+
 import java.util.Map;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
@@ -23,28 +23,6 @@ public class KiwoomMarketClient {
     public KiwoomMarketClient(KiwoomRestTransport transport, StockMetadataCache metadata) {
         this.transport = transport;
         this.metadata = metadata;
-    }
-
-    public KospiIndex kospi() {
-        Map<String, Object> response;
-        try {
-            response = transport.query("ka20001", "/api/dostk/sect", Map.of("mrkt_tp", "0", "inds_cd", "001"));
-        } catch (RestClientException error) {
-            throw new IllegalStateException("키움 코스피 지수 조회에 실패했습니다.");
-        }
-        if (response == null || !"0".equals(String.valueOf(response.get("return_code")))) {
-            throw new IllegalStateException("키움 코스피 지수 조회가 거부되었습니다.");
-        }
-        try {
-            return new KospiIndex(
-                    number(response.get("cur_prc")).abs(),
-                    number(response.get("pred_pre")),
-                    number(response.get("flu_rt")),
-                    Instant.now());
-        } catch (RuntimeException error) {
-            log.warn("event=kiwoom_response_invalid apiId=ka20001");
-            throw new IllegalStateException("키움 코스피 지수 응답 형식이 올바르지 않습니다.");
-        }
     }
 
     /** ka10100: 주문 대상의 상장 시장과 종목 상태를 조회한다. */
@@ -174,9 +152,6 @@ public class KiwoomMarketClient {
         return new BigDecimal(value.toString().trim().replace(",", ""));
     }
 
-    public record KospiIndex(BigDecimal value, BigDecimal change,
-                             BigDecimal changeRate, Instant fetchedAt) {
-    }
 
     public record StockInfo(String stockCode, String marketCode, String state,
                             String orderWarning) {}

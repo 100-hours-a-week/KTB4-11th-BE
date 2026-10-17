@@ -40,7 +40,7 @@ class RedisAclLiveTests {
         String tokenKey = "token:kiwoom:development-test:" + suffix;
         String sessionKey = "session:development:" + suffix;
         var keys = List.of("quote:TST010:price", "quote:TST010:orderbook", "quote:TST010:subscription",
-                "quote:TST010:metadata", "quote:kospi:recent", "quote:kospi:last-success", tokenKey, sessionKey,
+                "quote:TST010:metadata", tokenKey, sessionKey,
                 "coord:kiwoom:{accepting}:request:" + requestId);
         try {
             assertThat(admin.hasKey("coord:kiwoom:collector")).isFalse();
@@ -107,11 +107,6 @@ class RedisAclLiveTests {
             assertThat(tokens.read()).contains(token);
             tokens.invalidate("dummy-token");
             assertThat(tokens.read()).isEmpty();
-            var index = new KiwoomMarketClient.KospiIndex(new BigDecimal("2500"), BigDecimal.ONE,
-                    BigDecimal.ZERO, Instant.now());
-            var kospi = new RedisKospiStore(restricted);
-            kospi.save(index);
-            assertThat(kospi.read(true)).contains(index);
             restricted.opsForValue().set(sessionKey, "temporary", Duration.ofSeconds(60));
             assertThat(restricted.opsForValue().get(sessionKey)).isEqualTo("temporary");
             assertThat(execute(restricted, "SCRIPT", "LOAD", "return 1")).isNotNull();

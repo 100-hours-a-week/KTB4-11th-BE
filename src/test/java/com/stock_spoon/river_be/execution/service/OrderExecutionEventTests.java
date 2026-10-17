@@ -139,7 +139,7 @@ class OrderExecutionEventTests {
                 containers.add(channel);
                 var handler = new java.util.concurrent.atomic.AtomicReference<OrderExecutionListener>();
                 var shared = new com.stock_spoon.river_be.market.RedisMarketStream(store, demand,
-                        mock(KiwoomStockStream.class), mock(com.stock_spoon.river_be.market.kiwoom.RedisCollectorHeartbeat.class),
+                        mock(com.stock_spoon.river_be.market.AiQuoteAdapter.class), mock(com.stock_spoon.river_be.market.kiwoom.RedisCollectorHeartbeat.class),
                         channel, event -> {
                             if (!(event instanceof com.stock_spoon.river_be.market.RedisQuoteStore.QuoteEvent quote)) return;
                             ready.countDown();

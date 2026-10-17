@@ -320,12 +320,22 @@ public class KiwoomStockStream implements com.stock_spoon.river_be.market.Market
     }
 
     public record StockPrice(String stockCode, BigDecimal currentPrice, BigDecimal change,
-            BigDecimal changeRate, LocalTime tradeTime, Instant receivedAt) {}
+            BigDecimal changeRate, LocalTime tradeTime, Instant receivedAt,
+            Instant exchangeTimestamp, Long volume) {
+        public StockPrice(String stockCode, BigDecimal currentPrice, BigDecimal change,
+                BigDecimal changeRate, LocalTime tradeTime, Instant receivedAt) {
+            this(stockCode, currentPrice, change, changeRate, tradeTime, receivedAt, null, null);
+        }
+    }
 
     public record QuoteLevel(BigDecimal price, long quantity) {}
 
     public record OrderBook(String stockCode, List<QuoteLevel> asks, List<QuoteLevel> bids,
-            LocalTime quoteTime, Instant receivedAt) {
+            LocalTime quoteTime, Instant receivedAt, Instant exchangeTimestamp) {
+        public OrderBook(String stockCode, List<QuoteLevel> asks, List<QuoteLevel> bids,
+                LocalTime quoteTime, Instant receivedAt) {
+            this(stockCode, asks, bids, quoteTime, receivedAt, null);
+        }
         public OrderBook {
             asks = List.copyOf(asks);
             bids = List.copyOf(bids);

@@ -39,7 +39,7 @@ public class MultiProcessRedisNode {
                 "--spring.data.redis.timeout=3s", "--spring.data.redis.connect-timeout=3s",
                 "--kiwoom.collector.enabled=" + args[0], "--kiwoom.stream.enabled=true",
                 "--kiwoom.collector.url=" + args[2], "--kiwoom.collector.secret=test-only-process-secret",
-                "--kiwoom.app-key=", "--kiwoom.app-secret=", "--market.kospi.refresh-enabled=false",
+                "--kiwoom.app-key=", "--kiwoom.app-secret=",
                 "--kakao.client-id=test", "--kakao.client-secret=test", "--kakao.redirect-uri=http://localhost/callback",
                 "--kakao.frontend-origin=http://localhost", "--jwt.secret=test-jwt-secret-that-is-longer-than-32-bytes")) {
             var fixture = context.getBean(Fixture.class);

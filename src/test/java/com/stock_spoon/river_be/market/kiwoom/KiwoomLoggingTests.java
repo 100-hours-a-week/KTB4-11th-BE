@@ -27,22 +27,22 @@ class KiwoomLoggingTests {
         logs.start();
         logger.addAppender(logs);
         try {
-            server.expect(requestTo("https://api.kiwoom.com/api/dostk/sect"))
+            server.expect(requestTo("https://api.kiwoom.com/api/dostk/stkinfo"))
                     .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE).body("secret-body"));
-            server.expect(requestTo("https://api.kiwoom.com/api/dostk/sect"))
+            server.expect(requestTo("https://api.kiwoom.com/api/dostk/stkinfo"))
                     .andRespond(withSuccess("{\"return_code\":3,\"return_msg\":\"[8005:secret-token]\"}", MediaType.APPLICATION_JSON));
-            server.expect(requestTo("https://api.kiwoom.com/api/dostk/sect"))
+            server.expect(requestTo("https://api.kiwoom.com/api/dostk/stkinfo"))
                     .andRespond(withSuccess("{\"return_code\":3,\"return_msg\":\"[8005:secret-token]\"}", MediaType.APPLICATION_JSON));
-            assertThatThrownBy(client::kospi).isInstanceOf(IllegalStateException.class);
-            assertThatThrownBy(client::kospi).isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(() -> client.currentPrice("005930")).isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(() -> client.currentPrice("005930")).isInstanceOf(IllegalStateException.class);
             assertThat(logs.list).anySatisfy(event -> assertThat(event.getFormattedMessage())
-                    .contains("event=kiwoom_query_failed", "apiId=ka20001", "httpStatus=503", "elapsedMs="));
+                    .contains("event=kiwoom_query_failed", "apiId=ka10001", "httpStatus=503", "elapsedMs="));
             assertThat(logs.list).anySatisfy(event -> assertThat(event.getFormattedMessage())
                     .contains("event=kiwoom_query_rejected", "returnCode=3", "detailCode=8005"));
             assertThat(logs.list.toString()).doesNotContain("secret-token", "secret-body");
             assertThat(logs.list).allSatisfy(event -> assertThat(event.getThrowableProxy()).isNull());
             assertThat(logs.list).anySatisfy(event -> assertThat(event.getFormattedMessage())
-                    .contains("event=kiwoom_query_auth_retry", "apiId=ka20001"));
+                    .contains("event=kiwoom_query_auth_retry", "apiId=ka10001"));
             verify(tokens).invalidate("secret-token");
             server.verify();
         } finally {

@@ -50,6 +50,20 @@ class OrderExecutionListenerTests {
     }
 
     @Test
+    void delayedAiEventCannotExecuteOrderCreatedAfterExchangeTick() {
+        var order = order(1);
+        when(orders.findPendingForPrice("005930", Order.Status.PENDING, Order.Type.LIMIT))
+                .thenReturn(List.of(order));
+        var data = new KiwoomStockStream.StockPrice("005930", BigDecimal.valueOf(69000),
+                BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(9, 59, 59), now.plusSeconds(1),
+                now.minusSeconds(1), 100L);
+        listener.onQuote(new com.stock_spoon.river_be.market.RedisQuoteStore.QuoteEvent(
+                "005930", "price", data.receivedAt(),
+                new com.stock_spoon.river_be.market.QuoteStore.Source("relay", "session"), data, null));
+        verify(execution, never()).executeLimit(anyLong(), anyLong(), anyLong(), anyMap(), any(Runnable.class));
+    }
+
+    @Test
     void nonMatchingBuyAndSellSkipExecutionAndValuation() {
         var buy = order(1);
         when(buy.getSide()).thenReturn(Order.Side.BUY);

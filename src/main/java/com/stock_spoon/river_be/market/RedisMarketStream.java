@@ -3,7 +3,6 @@ package com.stock_spoon.river_be.market;
 import com.stock_spoon.river_be.order.entity.Order;
 import com.stock_spoon.river_be.order.repository.OrderRepository;
 
-import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream;
 import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.StockPrice;
 import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.OrderBook;
 import com.stock_spoon.river_be.market.kiwoom.RedisCollectorHeartbeat;
@@ -31,7 +30,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
 
-/** 일반 BE는 채널·시세를 공유하며, 고정 담당만 키움 구독을 변경한다. */
+/** 일반 BE는 채널·시세를 공유하며, 고정 담당만 AI 시세 채널을 구독해 중계한다. */
 @Component
 @Primary
 @ConditionalOnProperty(name = "kiwoom.stream.enabled", havingValue = "true")
@@ -40,13 +39,13 @@ public class RedisMarketStream implements MarketStream, MessageListener, Subscri
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private final RedisQuoteStore quotes;
     private final RedisSubscriptionDemand demands;
-    private final KiwoomStockStream collector;
+    private final AiQuoteAdapter collector;
     private final RedisCollectorHeartbeat heartbeat;
     private final RedisMessageListenerContainer channels;
     private final ApplicationEventPublisher events;
     private final com.stock_spoon.river_be.order.repository.OrderRepository orders;
     private final ConcurrentHashMap<String, CompletableFuture<Void>> waiting = new ConcurrentHashMap<>();
-    private final ThreadPoolExecutor callbacks = new ThreadPoolExecutor(2, 2, 0, TimeUnit.SECONDS,
+    private final ThreadPoolExecutor callbacks = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS,
             new ArrayBlockingQueue<>(256), runnable -> {
                 var thread = new Thread(runnable, "shared-quotes");
                 thread.setDaemon(true);
@@ -56,7 +55,7 @@ public class RedisMarketStream implements MarketStream, MessageListener, Subscri
     private final Set<String> attached = new HashSet<>();
 
     public RedisMarketStream(RedisQuoteStore quotes, RedisSubscriptionDemand demands,
-            KiwoomStockStream collector, RedisCollectorHeartbeat heartbeat,
+            AiQuoteAdapter collector, RedisCollectorHeartbeat heartbeat,
             @org.springframework.beans.factory.annotation.Qualifier("quoteListenerContainer")
             RedisMessageListenerContainer channels, ApplicationEventPublisher events,
             com.stock_spoon.river_be.order.repository.OrderRepository orders) {
@@ -100,6 +99,8 @@ public class RedisMarketStream implements MarketStream, MessageListener, Subscri
                 var combined = new HashSet<>(demands.symbols());
                 combined.addAll(orders.findStockCodesByStatus(com.stock_spoon.river_be.order.entity.Order.Status.PENDING));
                 collector.updateSymbols(combined);
+            } else {
+                collector.updateSymbols(Set.of());
             }
             for (var entry : waiting.entrySet()) {
                 if (quotes.activeSource(entry.getKey()).isPresent()) {
@@ -123,9 +124,9 @@ public class RedisMarketStream implements MarketStream, MessageListener, Subscri
         }
     }
 
-    public Optional<StockPrice> latest(String code) { return quotes.usablePrice(code); }
+    public Optional<StockPrice> latest(String code) { return quotes.usablePrice(code).or(() -> collector.latestPrice(code)); }
     public Optional<RedisQuoteStore.QuoteEvent> latestQuote(String code) { return quotes.usablePriceEvent(code); }
-    public Optional<OrderBook> latestOrderBook(String code) { return quotes.usableOrderBook(code); }
+    public Optional<OrderBook> latestOrderBook(String code) { return quotes.usableOrderBook(code).or(() -> collector.latestOrderBook(code)); }
     public Optional<RedisQuoteStore.QuoteEvent> latestBookQuote(String code) { return quotes.usableBookEvent(code); }
     public void retainRequest(String id, String code) { demands.retain(id, code); }
     public void renewRequest(String id, String code) { demands.renew(id, code); }

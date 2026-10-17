@@ -283,7 +283,7 @@ build의 spotbugsMain도 통과했다. 이는 2026-10-01 구현 완료 시 실�
 
 건너뛴 테스트는 키움 실연동 테스트 5건이다.
 
-- KiwoomMarketLiveTests: retrievesSamsungCurrentPrice, checksStockInfoMarketAndStatusFields, retrievesKospiIndex
+- KiwoomMarketLiveTests: retrievesSamsungCurrentPrice, checksStockInfoMarketAndStatusFields
 - KiwoomStockStreamLiveTests: authenticatesAndSubscribesSamsung
 - KiwoomTokenLiveTests: issuesAndReusesProductionToken
 

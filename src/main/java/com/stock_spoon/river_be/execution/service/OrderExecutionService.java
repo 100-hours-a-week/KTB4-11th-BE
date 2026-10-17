@@ -72,9 +72,13 @@ public class OrderExecutionService {
                 && local.toLocalDate().equals(now.atZone(SEOUL).toLocalDate());
     }
 
-    /** 초 단위 만료를 추가하지 않고 당일 장중 시세 및 미래 시각 여부를 확인한다. */
+    /** AI 시세는 전체 거래소시각과 5초 신선도를 추가 검증한다. 기존 직접 수신 정책은 유지한다. */
     public boolean isUsablePrice(com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.StockPrice price) {
         if (price == null || price.tradeTime() == null || !isCurrentSession(price.receivedAt())) return false;
+        if (price.exchangeTimestamp() != null && (!isCurrentSession(price.exchangeTimestamp())
+                || !price.exchangeTimestamp().atZone(SEOUL).toLocalTime().equals(price.tradeTime())
+                || price.exchangeTimestamp().isBefore(clock.instant().minusSeconds(5))
+                || price.receivedAt().isBefore(clock.instant().minusSeconds(5)))) return false;
         var received = price.receivedAt().atZone(SEOUL);
         var traded = received.toLocalDate().atTime(price.tradeTime()).atZone(SEOUL);
         return inTradingHours(traded) && !traded.toInstant().isAfter(price.receivedAt().plusSeconds(1))
@@ -151,6 +155,9 @@ public class OrderExecutionService {
             throw unavailableBook();
         }
         var quotedAt = local.toLocalDate().atTime(book.quoteTime()).atZone(SEOUL).toInstant();
+        if (book.exchangeTimestamp() != null && !book.exchangeTimestamp().equals(quotedAt)) {
+            throw unavailableBook();
+        }
         if (!book.receivedAt().atZone(SEOUL).toLocalDate().equals(local.toLocalDate())
                 || quotedAt.isBefore(now.minusSeconds(5)) || quotedAt.isAfter(now.plusSeconds(1))) {
             throw unavailableBook();

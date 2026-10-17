@@ -16,7 +16,7 @@ class RedisMarketStreamTests {
         var quotes = mock(RedisQuoteStore.class);
         var events = mock(org.springframework.context.ApplicationEventPublisher.class);
         var stream = new RedisMarketStream(quotes, mock(RedisSubscriptionDemand.class),
-                mock(KiwoomStockStream.class), mock(RedisCollectorHeartbeat.class),
+                mock(AiQuoteAdapter.class), mock(RedisCollectorHeartbeat.class),
                 mock(RedisMessageListenerContainer.class), events, mock(OrderRepository.class));
         try {
             stream.onChannelSubscribed("quotes:005930".getBytes(java.nio.charset.StandardCharsets.UTF_8), 1);
@@ -28,7 +28,7 @@ class RedisMarketStreamTests {
     void commitBetweenDemandAndPendingReadsDoesNotDropSubscription() {
         var quotes = mock(RedisQuoteStore.class);
         var demands = mock(RedisSubscriptionDemand.class);
-        var collector = mock(KiwoomStockStream.class);
+        var collector = mock(AiQuoteAdapter.class);
         var heartbeat = mock(RedisCollectorHeartbeat.class);
         var orders = mock(OrderRepository.class);
         var committed = new AtomicBoolean();

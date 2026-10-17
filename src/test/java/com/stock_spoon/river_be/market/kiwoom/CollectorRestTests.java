@@ -84,8 +84,8 @@ class CollectorRestTests {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new CollectorQuery("ka10100", "bad", "owner").body())
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThat(new CollectorQuery("ka20001", null, "owner").body())
-                .containsExactlyInAnyOrderEntriesOf(Map.of("mrkt_tp", "0", "inds_cd", "001"));
+        assertThatThrownBy(() -> new CollectorQuery("ka20001", null, "owner").body())
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

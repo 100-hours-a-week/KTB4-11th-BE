@@ -241,43 +241,6 @@ class KiwoomMarketClientTests {
     }
 
     @Test
-    void requestsKospiIndexWithBearerTokenAndParsesSignedNumbers() {
-        server.expect(requestTo("https://api.kiwoom.com/api/dostk/sect"))
-                .andExpect(method(HttpMethod.POST))
-                .andExpect(header("api-id", "ka20001"))
-                .andExpect(header(HttpHeaders.AUTHORIZATION, "Bearer test-token"))
-                .andExpect(content().json("""
-                        {"mrkt_tp":"0","inds_cd":"001"}
-                        """))
-                .andRespond(withSuccess("""
-                        {"return_code":0,"cur_prc":"-2,817.42","pred_pre":"-12.50","flu_rt":"-0.44"}
-                        """, MediaType.APPLICATION_JSON));
-        var index = client.kospi();
-        assertThat(index.value()).isEqualByComparingTo(new BigDecimal("2817.42"));
-        assertThat(index.change()).isEqualByComparingTo(new BigDecimal("-12.50"));
-        assertThat(index.changeRate()).isEqualByComparingTo(new BigDecimal("-0.44"));
-        assertThat(index.fetchedAt()).isNotNull();
-        server.verify();
-    }
-
-    @Test
-    void rejectsProviderErrorAndMissingValueWithoutLeakingResponse() {
-        server.expect(requestTo("https://api.kiwoom.com/api/dostk/sect"))
-                .andRespond(withSuccess("""
-                        {"return_code":3,"return_msg":"test-secret"}
-                        """, MediaType.APPLICATION_JSON));
-        server.expect(requestTo("https://api.kiwoom.com/api/dostk/sect"))
-                .andRespond(withSuccess("""
-                        {"return_code":0,"pred_pre":"+1","flu_rt":"+0.1"}
-                        """, MediaType.APPLICATION_JSON));
-        for (int i = 0; i < 2; i++) {
-            assertThatThrownBy(client::kospi).isInstanceOf(IllegalStateException.class)
-                    .hasMessageNotContaining("test-secret");
-        }
-        server.verify();
-    }
-
-    @Test
     void requestsStockInfoForOrderValidation() {
         server.expect(requestTo("https://api.kiwoom.com/api/dostk/stkinfo"))
                 .andExpect(method(HttpMethod.POST))

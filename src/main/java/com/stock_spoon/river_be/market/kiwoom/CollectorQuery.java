@@ -12,7 +12,6 @@ public record CollectorQuery(String apiId, String stockCode, String collectorId,
 
     public String path() {
         if ("ka10081".equals(apiId)) return "/api/dostk/chart";
-        if ("ka20001".equals(apiId)) return "/api/dostk/sect";
         if ("ka10001".equals(apiId) || "ka10100".equals(apiId)) return "/api/dostk/stkinfo";
         throw new IllegalArgumentException("허용되지 않은 조회 TR입니다.");
     }
@@ -20,10 +19,6 @@ public record CollectorQuery(String apiId, String stockCode, String collectorId,
     public Map<String, String> body() {
         path();
         if (!"ka10081".equals(apiId) && baseDate != null) throw new IllegalArgumentException("거래일을 지정할 수 없는 조회입니다.");
-        if ("ka20001".equals(apiId)) {
-            if (stockCode != null) throw new IllegalArgumentException("코스피 조회에는 종목코드를 지정하지 않습니다.");
-            return Map.of("mrkt_tp", "0", "inds_cd", "001");
-        }
         if (stockCode == null || !stockCode.matches("[0-9A-Z]{6}")) {
             throw new IllegalArgumentException("종목코드를 확인하세요.");
         }

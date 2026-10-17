@@ -85,7 +85,10 @@ public class OrderExecutionListener {
             long currentPrice = price.currentPrice().longValueExact();
             for (Order order : orders.findPendingForPrice(price.stockCode(), Order.Status.PENDING, Order.Type.LIMIT)) {
                 // 주문 접수 전에 수신된 이벤트가 나중에 처리되어 새 주문을 체결하지 않게 한다.
-                if (!order.getCreatedAt().isAfter(price.receivedAt())) executed |= attempt(order, currentPrice, currentSource);
+                if (!order.getCreatedAt().isAfter(price.receivedAt())
+                        && (price.exchangeTimestamp() == null || !order.getCreatedAt().isAfter(price.exchangeTimestamp()))) {
+                    executed |= attempt(order, currentPrice, currentSource);
+                }
             }
         } catch (RuntimeException error) {
             log.warn("event=order_price_processing_failed stockCode={} causeType={}",

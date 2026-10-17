@@ -37,7 +37,7 @@ class KiwoomRedisLiveTests {
         boolean acquired = false;
         boolean keysOwned = false;
         var testKeys = List.of("quote:005930:price", "quote:005930:orderbook", "quote:005930:subscription",
-                "quote:005930:metadata", "quote:kospi:recent", "quote:kospi:last-success");
+                "quote:005930:metadata");
         try {
             assertThat(redis.hasKey("coord:kiwoom:collector")).as("실행 중인 담당이 없어야 함").isFalse();
             for (String key : testKeys) assertThat(redis.hasKey(key)).as("기존 키 보호: %s", key).isFalse();
@@ -67,19 +67,13 @@ class KiwoomRedisLiveTests {
             assertThat(otherCache.load("005930", () -> { throw new AssertionError("캐시 재조회 시 외부 호출 금지"); }))
                     .containsEntry("code", "005930");
             assertThat(redis.getExpire("quote:005930:metadata")).isBetween(604700L, 604800L);
-            var index = market.kospi();
-            var kospi = new RedisKospiStore(redis);
-            kospi.save(index);
-            assertThat(new RedisKospiStore(redis).read(true)).contains(index);
-            System.out.println("LIVE CHECK: 실제 현재가·종목정보·코스피 REST, Redis 종목정보·지수 공유 확인");
-
             var store = new RedisQuoteStore(redis);
             collector = config.kiwoomStockStream(tokens, true, true, store, owner);
             disabledStream = config.kiwoomStockStream(normalTokens, true, false, store, normalOwner);
             var received = new LinkedBlockingQueue<RedisQuoteStore.QuoteEvent>();
             channels = new RedisMessageListenerContainer();
             channels.setConnectionFactory(connections); channels.afterPropertiesSet(); channels.start();
-            ordinary = new RedisMarketStream(store, new RedisSubscriptionDemand(redis), disabledStream,
+            ordinary = new RedisMarketStream(store, new RedisSubscriptionDemand(redis), mock(AiQuoteAdapter.class),
                     normalOwner, channels, event -> {
                         if (event instanceof RedisQuoteStore.QuoteEvent quote) received.add(quote);
                     }, mock(com.stock_spoon.river_be.order.repository.OrderRepository.class));

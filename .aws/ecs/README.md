@@ -20,6 +20,17 @@ dev push → 빌드·테스트 → ECR 업로드 → 개발 EC2 배포 → ECS �
 
 비밀값은 직접 적지 않고 `secrets[].valueFrom`으로 참조합니다. 초기 템플릿은 AWS의 실행 설정과 Secret 참조를 옮긴 것이며, Secret 실제 값은 포함하지 않습니다.
 
+## DB 접속 정보
+
+DB 접속 정보는 모두 SSM Parameter Store에서 주입합니다. 템플릿에 주소를 직접 적지 않습니다.
+
+| 환경변수 (`application.yaml`) | SSM 파라미터 | 관리 |
+|---|---|---|
+| `SPRING_DATASOURCE_URL` | `/stockspoon/v2/prod/backend/SPRING_DATASOURCE_URL` (`String`) | Cloud Terraform이 생성. ProxySQL `6033` 주소 |
+| `MYSQL_USER`, `MYSQL_PASSWORD` | `/stockspoon/v2/prod/backend/MYSQL_USER`, `MYSQL_PASSWORD` (`SecureString`) | CLI로 등록 |
+
+SSM 값은 Task가 시작될 때만 읽습니다. **값을 바꿔도 실행 중인 Task에는 반영되지 않으므로 수동 재배포가 필요합니다.** 아래 수동 배포에 dev 최신 커밋 SHA를 넣어 실행하거나, Cloud에서 `aws ecs update-service --force-new-deployment`로 Task를 교체합니다.
+
 ## 수동 배포
 
 GitHub Actions의 `Backend Dev CD (V2 ECS)`에서 다음과 같이 실행합니다.

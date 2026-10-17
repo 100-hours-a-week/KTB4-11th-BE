@@ -20,7 +20,7 @@ public record OrderCreateRequest(
         @JsonProperty("order_type") @NotBlank String orderType,
         @JsonProperty("limit_price") Long limitPrice,
         @NotNull @Min(1) Long quantity,
-        @NotBlank @Size(max = 100000) String reason,
+        @Size(max = 100000) String reason,
         @JsonProperty("stock_name") @Pattern(regexp = "(?s).*[^\\p{javaWhitespace}].*") @Size(max = 255) String stockName,
         java.util.List<@NotNull @jakarta.validation.Valid ReportReasoning> reasoning,
         @JsonProperty("holding_weight_limit_percent") Double holdingWeightLimitPercent,

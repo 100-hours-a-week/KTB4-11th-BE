@@ -81,9 +81,15 @@ public class OrderController {
     @ResponseStatus(HttpStatus.CREATED)
     public OrderCreateResponse create(@AuthenticationPrincipal Jwt jwt,
             @PathVariable long accountId, @Valid @RequestBody OrderCreateRequest request) {
-        if (!"AI".equals(jwt.getClaimAsString("actor"))) {
-            throw new OrderException(HttpStatus.FORBIDDEN, "AI_ORDER_ONLY",
-                    "AI 서버만 주문을 생성할 수 있습니다.");
+        String actor = jwt.getClaimAsString("actor");
+        Order.Source source;
+        if ("AI".equals(actor)) {
+            source = Order.Source.AI;
+        } else if ("USER".equals(actor)) {
+            source = Order.Source.USER;
+        } else {
+            throw new OrderException(HttpStatus.FORBIDDEN, "INVALID_ORDER_ACTOR",
+                    "주문 생성 권한이 없습니다.");
         }
         boolean marketOrder = "market".equalsIgnoreCase(request.orderType());
         if (!marketOrder && !"limit".equalsIgnoreCase(request.orderType())) {
@@ -98,11 +104,13 @@ public class OrderController {
         } catch (IllegalArgumentException error) {
             throw new OrderException("매수·매도 구분을 확인하세요.");
         }
-        request.validateReportInputs(side);
+        if (source == Order.Source.AI) {
+            request.validateReportInputs(side);
+        }
         if (request.limitPrice() == null || request.limitPrice() <= 0) {
             throw new OrderException("지정가를 입력하세요.");
         }
-        if (request.reason() == null) {
+        if (source == Order.Source.AI && (request.reason() == null || request.reason().isBlank())) {
             throw new OrderException("AI 주문의 판단 근거를 입력하세요.");
         }
         long userId;
@@ -112,12 +120,12 @@ public class OrderController {
             throw new OrderException(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", "인증 정보를 확인하세요.");
         }
         // [2. 계좌 검사] 토큰의 사용자 ID로 계좌 소유권·활성 상태·AI 운용 여부를 확인한다.
-        orders.assertOrderableAccount(userId, accountId);
+        orders.assertOrderableAccount(userId, accountId, source);
         // 지정가는 시세 연결 여부와 무관하게 예약하고 커밋 후 시세를 구독한다.
         market.validateLimit(request.stockCode(), request.limitPrice());
         // 람다 () -> ... 는 지금 저장하지 않고 '나중에 실행할 저장 작업'을 전달한다.
         // OrderSubscriptionService.create()의 saveOrder.get()에서 reserveLimit()이 실행된다.
-        Order order = subscriptions.create(request.stockCode(), () -> orders.reserveLimit(userId, accountId, request));
+        Order order = subscriptions.create(request.stockCode(), () -> orders.reserveLimit(userId, accountId, request, source));
         // [4. 최초 체결 판단] 예약이 커밋된 주문을 현재가와 비교한다. 체결은 별도 트랜잭션이다.
         // 장외 예약은 새 장중 시세가 들어올 때까지 대기한다.
         execution.orderCreated(order);

@@ -1,11 +1,14 @@
-# 지정가 주문 생성 API (v1)
+# 지정가 주문 생성 API
 
 `POST /api/v1/accounts/{accountId}/orders`는 키움에 실제 주문을 보내지 않고 BE의 모의 주문을 생성한다.
 구현 순서, 정책 결정 과정과 시장 검증의 자세한 설명은 [주문 생성 구현 흐름](stockspoon_order_create_flow.md)에 기록했다.
 종목별 WebSocket 구독, 장 마감 취소와 재기동 복구는 [주문 종목 WebSocket 생명주기](stockspoon_order_websocket_lifecycle.md)에 기록했다.
-v1에서는 AI가 사용자 계좌를 대신 운용한다. 요청 인증은 기존 access JWT 쿠키와 CSRF 토큰을 사용하며,
-AI가 서명한 JWT에는 `actor: "AI"`가 있어야 한다. JWT `sub`의 사용자와 주문 계좌 소유자가
-일치해야 한다. 일반 사용자 로그인 JWT는 `actor`가 없으므로 주문 생성에서 403으로 거절한다.
+요청 인증은 기존 access JWT 쿠키와 CSRF 토큰을 사용한다. 검증된 JWT의 `actor`는 `AI` 또는
+`USER`여야 하며 누락되거나 다른 값이면 `403 INVALID_ORDER_ACTOR`로 거절한다.
+JWT `sub`의 사용자와 주문 계좌 소유자가 일치해야 한다. AI는 AI 운용 계좌에만,
+사용자는 수동 운용 계좌에만 주문할 수 있다. 계좌 유형이 다르면 `403 FORBIDDEN_ACCOUNT`다.
+사용자 로그인·토큰 재발급 시 `actor: "USER"`를 발급한다. 이전 사용자 액세스 토큰에는
+`actor`가 없으므로 재발급 또는 재로그인이 필요하다.
 
 ## 요청
 
@@ -23,11 +26,18 @@ AI가 서명한 JWT에는 `actor: "AI"`가 있어야 한다. JWT `sub`의 사용
 }
 ```
 
-`reason`은 필수 문자열이며 공백만 있는 값은 거절한다. 최대 100,000자(Java UTF-16 길이)이며,
+AI 주문의 `reason`은 필수 문자열이며 공백만 있는 값은 거절한다. 최대 100,000자(Java UTF-16 길이)이며,
 기존 `decision_id`·`summary` 객체는 더 이상 받지 않는다. `ai_order_reports.reason`에 주문과
 같은 트랜잭션으로 저장한다. `order_id` UNIQUE 외래키로 주문당 최대 한 리포트를 보장한다.
 상세 조회와 DB 이관은 [AI 리포트 상세 조회](stockspoon_ai_report.md)를 참고한다.
-`order_source`는 body에서 받지 않고 v1 주문을 `AI`로 저장한다.
+`order_source`는 body에서 받지 않고 검증된 토큰의 `actor`로 결정해 `AI` 또는 `USER`로 저장한다.
+AI 매수는 `holding_weight_limit_percent`(0~100), AI 매도는 `is_lower_triggered`가 필수다.
+사용자 주문은 `reason`, `stock_name`, `reasoning`, `holding_weight_limit_percent`,
+`is_lower_triggered`를 생략하거나 null로 보낼 수 있다. 사용자 주문에는 보고서 필수값 검증을
+적용하지 않으며, `reason`을 보내더라도 AI 보고서를 만들거나 근거를 저장하지 않는다.
+지정가·수량·종목·잔고·보유량·대결 상태 검증은 두 주체에 동일하게 적용한다.
+보고서 없는 사용자 주문도 체결·취소할 수 있고, 체결 내역은 같은 주문 조회 API에서
+`order_source: "USER"`, `reason.summary: null`로 반환한다.
 
 현재 주문 생성은 `ka10100`의 시장구분코드 `0`(코스피)과 `8`(국내 ETF)만 허용한다.
 `60/70/90`인 ETN과 `10`인 코스닥은 거절한다. `marketCode=0`만으로 보통주·우선주만을

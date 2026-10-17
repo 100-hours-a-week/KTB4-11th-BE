@@ -36,6 +36,7 @@ class AuthTokenFlowTests {
 
         assertThat(Long.parseLong(access.getSubject())).isPositive();
         assertThat(access.getClaimAsString("type")).isEqualTo("access");
+        assertThat(access.getClaimAsString("actor")).isEqualTo("USER");
         assertThat(tokens.refreshToken()).isNotBlank();
         assertThat(refreshTokens.count()).isEqualTo(1);
     }
@@ -47,6 +48,7 @@ class AuthTokenFlowTests {
         var first = service.login("code");
 
         var second = service.reissue(first.refreshToken());
+        assertThat(accessDecoder.decode(second.accessToken()).getClaimAsString("actor")).isEqualTo("USER");
 
         assertThat(second.accessToken()).isNotEqualTo(first.accessToken());
         assertThat(second.refreshToken()).isNotEqualTo(first.refreshToken());

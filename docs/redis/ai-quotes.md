@@ -1,5 +1,7 @@
 # AI Valkey 현재가·호가 호환
 
+기존 연동의 삭제 내역과 남은 의존성은 [기존 키움 연동 코드 정리](legacy-kiwoom-cleanup.md)를 참고한다.
+
 기준: BE dev `5ac6a7c`, AI dev `8739d1332e4bf4e7b76f397a1914bfc0a194d470`.
 AI 저장소와 순위 API·키는 변경하지 않는다.
 
@@ -19,9 +21,9 @@ AI 원본은 TTL이 없으므로 GET 시각을 시세 수신시각으로 만들�
 
 ## BE의 기존 소유권 경계 유지
 
-`kiwoom.stream.enabled=true`일 때 기존 `RedisMarketStream`과 어댑터를 연결한다. 별도 전환 설정은 없다. 기존 `kiwoom.collector.enabled=true` 담당 BE가 필요하다. 담당은 접수 수요와 DB PENDING 종목을 합쳐 AI 채널을 개별 구독한다. 운영 시세 구독을 위해 `KiwoomStockStream.updateSymbols`를 호출하지 않는다. 키움 REST 종목정보·일봉과 토큰의 담당 정책은 유지한다.
+`kiwoom.stream.enabled=true`일 때 기존 `RedisMarketStream`과 어댑터를 연결한다. 별도 전환 설정은 없다. 기존 `kiwoom.collector.enabled=true` 담당 BE가 필요하다. 담당은 DB PENDING 주문 종목의 AI 채널을 개별 구독한다. 운영 시세 구독을 위해 `KiwoomStockStream.updateSymbols`를 호출하지 않는다. 키움 REST 종목정보·일봉과 토큰의 담당 정책은 유지한다.
 
-담당은 `coord:kiwoom:collector` 소유권을 확인하고 수신한 AI JSON을 검증한 뒤 BE 세션을 붙인다. 이 `Source`는 **BE 중계 연결**을 식별하며 AI 수집기의 소유권을 의미하지 않는다. 검증된 값은 기존 `quote:{code}:price/orderbook`, 등록은 `quote:{code}:subscription`, 내부 알림은 `quotes:{code}`를 사용한다. AI 키를 덮어쓰거나 삭제하거나 AI 채널에 발행하지 않는다. BE 접수 수요의 `coord:kiwoom:{accepting}:*`도 유지한다.
+담당은 `coord:kiwoom:collector` 소유권을 확인하고 수신한 AI JSON을 검증한 뒤 BE 세션을 붙인다. 이 `Source`는 **BE 중계 연결**을 식별하며 AI 수집기의 소유권을 의미하지 않는다. 검증된 값은 기존 `quote:{code}:price/orderbook`, 등록은 `quote:{code}:subscription`, 내부 알림은 `quotes:{code}`를 사용한다. AI 키를 덮어쓰거나 삭제하거나 AI 채널에 발행하지 않는다. 구독 대상은 DB의 PENDING 주문 종목으로 정한다. 접수 중 임시 수요 키(`coord:kiwoom:{accepting}:*`)와 구독 완료 대기는 제거했다. 주문은 먼저 저장하며 시세 구독에 실패해도 대기 상태를 유지한다. 이전 임시 수요 키는 기존 TTL(요청 30초, 색인 60초)로 정리되므로 별도 데이터 삭제나 DB 변경은 필요 없다.
 
 재연결 ACK는 새 BE 세션을 만들며 이전 캐시를 체결에 사용하지 않는다. 같은 구독 세대의 현재가·호가 ACK는 세션을 공유한다. ACK와 스냅샷 읽기에서는 새 체결 이벤트를 만들지 않는다. 거래소시각·거래량이 역행하거나 중복된 현재가를 재발행하지 않는다. 콜백은 단일 처리 스레드와 기존 256개 대기열로 순서를 보존한다.
 

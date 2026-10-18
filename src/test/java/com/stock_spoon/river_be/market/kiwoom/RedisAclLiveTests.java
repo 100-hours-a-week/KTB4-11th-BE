@@ -36,20 +36,18 @@ class RedisAclLiveTests {
         RedisMessageListenerContainer channels = null;
         boolean userCreated = false;
         boolean keysOwned = false;
-        String requestId = UUID.randomUUID().toString();
         String tokenKey = "token:kiwoom:development-test:" + suffix;
         String sessionKey = "session:development:" + suffix;
         var keys = List.of("quote:TST010:price", "quote:TST010:orderbook", "quote:TST010:subscription",
-                "quote:TST010:metadata", tokenKey, sessionKey,
-                "coord:kiwoom:{accepting}:request:" + requestId);
+                "quote:TST010:metadata", tokenKey, sessionKey);
         try {
             assertThat(admin.hasKey("coord:kiwoom:collector")).isFalse();
             for (String key : keys) assertThat(admin.hasKey(key)).as("기존 테스트 값 보호: %s", key).isFalse();
             var rules = new ArrayList<>(List.of("SETUSER", username, "reset", "on", "#" + passwordHash,
                     "~quote:*", "~session:*", "~token:*", "~coord:*", "&quotes:*", "-@all"));
             rules.addAll(List.of("+auth", "+hello", "+ping", "+client|setinfo", "+client|setname", "+client|id",
-                    "+get", "+set", "+expire", "+pexpire", "+del", "+time", "+ttl", "+pttl",
-                    "+zadd", "+zrange", "+zrem", "+zremrangebyscore", "+eval", "+evalsha", "+script|load",
+                    "+get", "+set", "+expire", "+pexpire", "+del", "+ttl", "+pttl",
+                    "+eval", "+evalsha", "+script|load",
                     "+publish", "+subscribe", "+unsubscribe"));
             execute(admin, "ACL", rules.toArray(String[]::new));
             userCreated = true;
@@ -62,14 +60,6 @@ class RedisAclLiveTests {
             owner.renew();
             assertThat(owner.ownsLease()).isTrue();
             assertThat(restricted.getExpire("coord:kiwoom:collector")).isBetween(1L, 15L);
-            var demand = new RedisSubscriptionDemand(restricted);
-            demand.retain(requestId, "TST010");
-            demand.renew(requestId, "TST010");
-            demand.assertRequest(requestId, "TST010");
-            assertThat(demand.symbols()).contains("TST010");
-            demand.release(requestId, "TST010");
-            assertThat(demand.symbols()).doesNotContain("TST010");
-
             channels = new RedisMessageListenerContainer();
             channels.setConnectionFactory(restrictedConnection);
             channels.afterPropertiesSet(); channels.start();

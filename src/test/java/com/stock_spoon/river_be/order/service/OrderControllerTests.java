@@ -100,7 +100,6 @@ class OrderControllerTests {
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
         user = users.save(new User("AI 주문 사용자"));
         account = accounts.save(new Account(user, "자동매매 계좌", 1_000_000));
-        when(stream.whenSubscribed(anyString())).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(null));
         when(marketClient.currentPrice(anyString())).thenThrow(new IllegalStateException("test price unavailable"));
     }
 
@@ -189,8 +188,8 @@ class OrderControllerTests {
 
     @Test
     void subscriptionFailureStillAcceptsPendingOrderAndReservesCash() throws Exception {
-        when(stream.whenSubscribed("005930")).thenReturn(java.util.concurrent.CompletableFuture.failedFuture(
-                new IllegalStateException("registration rejected")));
+        org.mockito.Mockito.doThrow(new IllegalStateException("Redis unavailable"))
+                .when(stream).updateSymbols(org.mockito.ArgumentMatchers.anySet());
         mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
                         .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
                         .content("""

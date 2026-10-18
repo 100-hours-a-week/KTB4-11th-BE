@@ -48,7 +48,7 @@ ELASTICACHE_CACHE_NAME=
 
 - 인스턴스 역할에 캐시와 사용자에 대한 `elasticache:Connect` 권한이 있고, Valkey 사용자가 IAM 방식으로 연결된 상태인지 확인한다. IAM 사용자 이름과 사용자 ID는 같아야 하며 코드의 `User`는 `REDIS_USERNAME`을 사용한다.
 - BE 인스턴스에서 엔드포인트에 TLS로 접근할 수 있어야 한다. 인스턴스 자격 제공 경로도 정상이어야 한다.
-- `coord:*`와 기존 키·채널 및 Lua·ZSET 명령 권한을 [ACL 요구 사항](valkey-acl-requirements.md)대로 적용한다. IAM 접속 권한과 Redis 데이터 명령 권한은 별개다.
+- `coord:*`와 기존 키·채널 및 Lua 명령 권한을 [ACL 요구 사항](valkey-acl-requirements.md)대로 적용한다. IAM 접속 권한과 Redis 데이터 명령 권한은 별개다.
 - 현재 Lettuce 클러스터 초기화·갱신에 사용하는 `CLUSTER NODES`, `INFO`의 권한도 확인한다. 기존 단일 노드 ACL 시험과 구분한다.
 - 실제 인스턴스에서 초기 연결·재연결·10분 이상 Pub/Sub 유지 및 재인증, TTL·Lua·종목별 알림을 확인한다. 실제 Serverless 클러스터 제약은 로컬 단일 노드 시험으로 대체하지 않는다.
 

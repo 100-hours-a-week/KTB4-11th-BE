@@ -6,7 +6,6 @@ import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalTime;
-import java.util.List;
 import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -21,14 +20,12 @@ import static org.mockito.Mockito.*;
 @EnabledIfEnvironmentVariable(named = "REDIS_LIVE_TEST", matches = "true")
 class RedisSharedMarketLiveTests {
     @Test
-    void sharesDemandQuotesAndExplicitChannelEventsBetweenTwoServers() throws Exception {
+    void sharesQuotesAndExplicitChannelEventsBetweenTwoServers() throws Exception {
         var connection = new LettuceConnectionFactory("localhost", 6380);
         connection.afterPropertiesSet();
         connection.start();
         var redis = new StringRedisTemplate(connection);
         var store = new RedisQuoteStore(redis);
-        var demands = new RedisSubscriptionDemand(redis);
-        String id = java.util.UUID.randomUUID().toString();
         String code = "TST003";
         String owner = java.util.UUID.randomUUID().toString();
         String session = java.util.UUID.randomUUID().toString();
@@ -38,21 +35,16 @@ class RedisSharedMarketLiveTests {
         container.afterPropertiesSet();
         container.start();
         var events = new LinkedBlockingQueue<KiwoomStockStream.StockPrice>();
-        var stream = new RedisMarketStream(store, demands, mock(AiQuoteAdapter.class),
+        var stream = new RedisMarketStream(store, mock(AiQuoteAdapter.class),
                 mock(com.stock_spoon.river_be.market.kiwoom.RedisCollectorHeartbeat.class), container,
                 event -> { if (event instanceof RedisQuoteStore.QuoteEvent quote) events.add(quote.price()); },
                 mock(com.stock_spoon.river_be.order.repository.OrderRepository.class));
         try {
             assertThat(redis.hasKey("coord:kiwoom:collector")).isFalse();
             redis.opsForValue().set("coord:kiwoom:collector", owner, java.time.Duration.ofSeconds(15));
-            demands.retain(id, code);
-            assertThat(demands.symbols()).contains(code);
-            assertThat(redis.getExpire(RedisSubscriptionDemand.requestKey(id))).isBetween(1L, 30L);
             stream.updateSymbols(Set.of(code));
-            assertThat(stream.whenSubscribed(code)).isNotDone();
             store.register(code, context, Instant.now());
             stream.reconcile();
-            assertThat(stream.whenSubscribed(code)).isCompleted();
             var price = new KiwoomStockStream.StockPrice(code, new BigDecimal("119500"),
                     BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(10, 0), Instant.now());
             store.savePrice(price, context);
@@ -79,12 +71,9 @@ class RedisSharedMarketLiveTests {
             redis.delete("coord:kiwoom:collector");
             assertThat(stream.latest(code)).isEmpty();
             assertThatThrownBy(() -> stream.assertAvailable(code)).isInstanceOf(IllegalStateException.class);
-            demands.release(id, code);
-            assertThat(demands.symbols()).doesNotContain(code);
         } finally {
             stream.updateSymbols(Set.of());
             stream.close();
-            demands.release(id, code);
             store.remove(code);
             if (owner.equals(redis.opsForValue().get("coord:kiwoom:collector"))) redis.delete("coord:kiwoom:collector");
             container.destroy();
@@ -92,29 +81,4 @@ class RedisSharedMarketLiveTests {
         }
     }
 
-    @Test
-    void expiredRequestCannotBeRevivedAndOneRequestCannotRemoveAnother() {
-        var connection = new LettuceConnectionFactory("localhost", 6380);
-        connection.afterPropertiesSet();
-        connection.start();
-        var redis = new StringRedisTemplate(connection);
-        var demands = new RedisSubscriptionDemand(redis);
-        String first = java.util.UUID.randomUUID().toString();
-        String second = java.util.UUID.randomUUID().toString();
-        try {
-            demands.retain(first, "TST004");
-            demands.retain(second, "TST004");
-            demands.release(first, "TST004");
-            assertThat(demands.symbols()).contains("TST004");
-            redis.delete(RedisSubscriptionDemand.requestKey(second));
-            assertThatThrownBy(() -> demands.renew(second, "TST004")).isInstanceOf(IllegalStateException.class);
-            assertThat(redis.hasKey(RedisSubscriptionDemand.requestKey(second))).isFalse();
-            demands.release(second, "TST004");
-            assertThat(demands.symbols()).doesNotContain("TST004");
-        } finally {
-            demands.release(first, "TST004");
-            demands.release(second, "TST004");
-            connection.destroy();
-        }
-    }
 }

@@ -81,7 +81,7 @@ Redis 장애는 테스트용 프록시로 BE 연결만 끊어 재현했다. Valk
 
 - 전달받은 Valkey 엔드포인트·TLS·클러스터·IAM 변수를 주입한다. 인스턴스 역할로 토큰을 생성·갱신하며 비밀값을 문서나 Git에 기록하지 않는다. 실제 IAM 접속 권한·사용자 설정·네트워크 경로는 인프라 환경에서 확인한다.
 - 기존 허용 키 `quote:*`, `session:*`, `token:*`에 **`coord:*`를 추가**한다. Pub/Sub 채널은 `quotes:*`이며 `PSUBSCRIBE`를 사용하지 않는다.
-- 명령 권한은 `GET`, `SET`(NX/EX/PX 포함), `EXPIRE`, `PEXPIRE`, `DEL`, `TIME`, `ZADD`, `ZRANGE`, `ZREM`, `ZREMRANGEBYSCORE`, `EVAL`, `EVALSHA`, `SCRIPT LOAD`, `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`가 필요하다. 연결 초기화 명령까지 포함한 최종 ACL은 실제 Spring/Lettuce 연결로 확인한다.
+- 명령 권한은 `GET`, `SET`(NX/EX/PX 포함), `EXPIRE`, `PEXPIRE`, `DEL`, `EVAL`, `EVALSHA`, `SCRIPT LOAD`, `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE`가 필요하다. 연결 초기화 명령까지 포함한 최종 ACL은 실제 Spring/Lettuce 연결로 확인한다.
 - 내부 REST 주소는 일반 BE가 접근할 수 있는 담당 BE 주소로 지정한다. 내부 API의 외부 접근을 제한하고 공통 `KIWOOM_COLLECTOR_SECRET`을 비밀 관리 방식으로 주입한다.
 - 담당 역할은 인스턴스 한 대에만 부여한다. 담당 역할을 여러 대에 설정하면 활동 키를 이미 가진 서버 외의 시작은 실패한다. 일반 BE만 늘리는 방식으로 구성한다.
 

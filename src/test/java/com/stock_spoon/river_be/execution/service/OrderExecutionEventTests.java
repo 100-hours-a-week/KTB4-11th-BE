@@ -115,7 +115,6 @@ class OrderExecutionEventTests {
         connection.start();
         var redis = new org.springframework.data.redis.core.StringRedisTemplate(connection);
         var store = new com.stock_spoon.river_be.market.RedisQuoteStore(redis);
-        var demand = new com.stock_spoon.river_be.market.RedisSubscriptionDemand(redis);
         String code = "TST005";
         String owner = java.util.UUID.randomUUID().toString();
         var source = new com.stock_spoon.river_be.market.QuoteStore.Source(owner, java.util.UUID.randomUUID().toString());
@@ -138,7 +137,7 @@ class OrderExecutionEventTests {
                 channel.start();
                 containers.add(channel);
                 var handler = new java.util.concurrent.atomic.AtomicReference<OrderExecutionListener>();
-                var shared = new com.stock_spoon.river_be.market.RedisMarketStream(store, demand,
+                var shared = new com.stock_spoon.river_be.market.RedisMarketStream(store,
                         mock(com.stock_spoon.river_be.market.AiQuoteAdapter.class), mock(com.stock_spoon.river_be.market.kiwoom.RedisCollectorHeartbeat.class),
                         channel, event -> {
                             if (!(event instanceof com.stock_spoon.river_be.market.RedisQuoteStore.QuoteEvent quote)) return;

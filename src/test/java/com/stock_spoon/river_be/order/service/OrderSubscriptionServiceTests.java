@@ -20,8 +20,6 @@ class OrderSubscriptionServiceTests {
         when(orders.findStockCodesByStatus(Order.Status.PENDING)).thenReturn(Set.of("005930"));
         doThrow(new IllegalStateException("Redis down")).when(stream).updateSymbols(anySet());
         assertThat(service.create("005930", () -> saved)).isSameAs(saved);
-        verify(stream, never()).whenSubscribed(anyString());
-        verify(stream, never()).retainRequest(anyString(), anyString());
         reset(stream);
         service.refresh();
         verify(stream).updateSymbols(Set.of("005930"));

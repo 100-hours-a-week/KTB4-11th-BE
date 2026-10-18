@@ -7,7 +7,7 @@
 인프라 팀에 다음을 전달한다. 이 문서는 전달용 초안이며 팀원에게 메시지를 발송한 기록은 아니다.
 
 - Valkey 키는 기존 `quote:*`, `session:*`, `token:*` 외에 승인된 **`coord:*`를 추가**한다. 채널은 `quotes:*`이며 개별 `SUBSCRIBE`를 사용한다. `PSUBSCRIBE`를 사용하지 않는다.
-- Lua, ZSET, Redis 시간 조회와 연결 초기화 명령이 필요하다. 상세 ACL과 로컬 검증 결과는 [권한 요구 사항](valkey-acl-requirements.md)을 따른다. `{accepting}` 해시 태그를 변경하지 않는다.
+- Lua와 연결 초기화 명령이 필요하다. 상세 ACL과 로컬 검증 결과는 [권한 요구 사항](valkey-acl-requirements.md)을 따른다. 접수 중 임시 수요 키는 더 이상 사용하지 않는다.
 - 담당 BE 한 대와 일반 BE 여러 대는 같은 DB·Valkey를 사용한다. 담당만 키움 REST·WebSocket과 토큰을 사용한다. 자동 담당 인계는 없다.
 - 전달받은 IAM·TLS·클러스터 변수를 BE에 주입한다. MySQL 연결 설정, 담당 BE 내부 주소·통신 경로, 실행 환경 및 이전 정상 이미지 식별자는 인프라에서 준비한다. IAM 인증 코드는 보완했으며 실제 인스턴스 검증은 별도다.
 - `/internal/**`는 내부 BE 간 통신용이며 외부 접근을 제한한다. 모든 BE에 같은 전용 비밀키를 주입하고 `X-Kiwoom-Collector-Key` 헤더로 인증한다.

@@ -13,7 +13,7 @@
 | 키 | `quote:*` | BE 검증 시세·종목정보 및 구독 연결 상태 |
 | 키 | `session:*` | 팀에서 지정한 임시 사용자 상태 영역. 이번 테스트는 TTL 있는 임시 값 저장만 확인 |
 | 키 | `token:*` | 키움 토큰과 만료 정보 |
-| 키 | **`coord:*`** | 담당 활동 키·접수 중 구독 수요·만료 순서 색인. 추가 허용 필요 |
+| 키 | **`coord:*`** | 담당 활동 키. 추가 허용 필요 |
 | 키 (GET) | `price:*`, `orderbook:*` | AI 원본 스냅샷 읽기 |
 | Pub/Sub 채널 | `price:*`, `orderbook:*` | 담당 BE가 AI 알림 구독 |
 | Pub/Sub 채널 | `quotes:*` | 검증 후 BE 내부 알림 |
@@ -25,7 +25,6 @@
 | 구분 | 로컬 검증에서 허용한 명령 |
 |---|---|
 | 저장·조회·정리 | `GET`, `SET`(NX/EX/PX 포함), `DEL`, `EXPIRE`, `PEXPIRE` |
-| 구독 수요 색인 | `TIME`, `ZADD`, `ZRANGE`, `ZREM`, `ZREMRANGEBYSCORE` |
 | 조건부 처리 | `EVAL`, `EVALSHA`, `SCRIPT LOAD` |
 | 종목별 Pub/Sub | `PUBLISH`, `SUBSCRIBE`, `UNSUBSCRIBE` |
 | TTL 검증·관찰 | `TTL`, `PTTL` |
@@ -35,7 +34,7 @@
 
 배포의 클러스터 연결에는 **`CLUSTER NODES`와 `INFO`도 확인해야 한다.** 현재 Lettuce 7.5.2의 토폴로지 조회·갱신 코드가 두 명령을 사용한다. 기존 단일 노드 로컬 ACL 시험에 포함한 명령은 아니며, 배포 사용자의 추가 권한으로 인프라에 전달한다. 전체 `CLUSTER` 관리 권한이나 `+@all`을 요구하는 것은 아니다. AWS는 Serverless에서 가상 클러스터 정보를 반환하는 `CLUSTER NODES`를 지원한다고 안내한다. [AWS 지원 명령](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/SupportedCommands.html)
 
-`PSUBSCRIBE`, `KEYS`, 애플리케이션 사용자의 ACL 관리는 허용하지 않았다. 코드의 Lua 스크립트와 개별 채널 사용은 이 제한 안에서 통과했다. 실제 접수 수요 키의 `{accepting}` 해시 태그는 유지해야 한다. Cluster 슬롯·Serverless 서비스 제약은 로컬 단일 노드 결과만으로 검증했다고 볼 수 없다.
+`PSUBSCRIBE`, `KEYS`, 애플리케이션 사용자의 ACL 관리는 허용하지 않았다. 코드의 Lua 스크립트와 개별 채널 사용은 이 제한 안에서 통과했다. 접수 중 임시 수요 키는 제거했으며 해당 ZSET 연산은 더 이상 사용하지 않는다. Cluster 슬롯·Serverless 서비스 제약은 로컬 단일 노드 결과만으로 검증했다고 볼 수 없다.
 
 ## 필요한 배포 정보
 

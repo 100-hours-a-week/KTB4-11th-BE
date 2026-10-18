@@ -11,8 +11,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -38,13 +36,11 @@ public class RedisMarketStream implements MarketStream, MessageListener, Subscri
     private static final Logger log = LoggerFactory.getLogger(RedisMarketStream.class);
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private final RedisQuoteStore quotes;
-    private final RedisSubscriptionDemand demands;
     private final AiQuoteAdapter collector;
     private final RedisCollectorHeartbeat heartbeat;
     private final RedisMessageListenerContainer channels;
     private final ApplicationEventPublisher events;
-    private final com.stock_spoon.river_be.order.repository.OrderRepository orders;
-    private final ConcurrentHashMap<String, CompletableFuture<Void>> waiting = new ConcurrentHashMap<>();
+    private final OrderRepository orders;
     private final ThreadPoolExecutor callbacks = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS,
             new ArrayBlockingQueue<>(256), runnable -> {
                 var thread = new Thread(runnable, "shared-quotes");
@@ -54,13 +50,12 @@ public class RedisMarketStream implements MarketStream, MessageListener, Subscri
     private volatile Set<String> desired = Set.of();
     private final Set<String> attached = new HashSet<>();
 
-    public RedisMarketStream(RedisQuoteStore quotes, RedisSubscriptionDemand demands,
+    public RedisMarketStream(RedisQuoteStore quotes,
             AiQuoteAdapter collector, RedisCollectorHeartbeat heartbeat,
             @org.springframework.beans.factory.annotation.Qualifier("quoteListenerContainer")
             RedisMessageListenerContainer channels, ApplicationEventPublisher events,
-            com.stock_spoon.river_be.order.repository.OrderRepository orders) {
+            OrderRepository orders) {
         this.quotes = quotes;
-        this.demands = demands;
         this.collector = collector;
         this.heartbeat = heartbeat;
         this.channels = channels;
@@ -78,8 +73,6 @@ public class RedisMarketStream implements MarketStream, MessageListener, Subscri
             if (!symbols.contains(code)) {
                 channels.removeMessageListener(this, new ChannelTopic("quotes:" + code));
                 attached.remove(code);
-                var future = waiting.remove(code);
-                if (future != null) future.completeExceptionally(new IllegalStateException("구독 수요가 종료되었습니다."));
             }
         }
         for (String code : symbols) {
@@ -95,32 +88,12 @@ public class RedisMarketStream implements MarketStream, MessageListener, Subscri
     public void reconcile() {
         try {
             if (heartbeat.ownsLease()) {
-                // 임시 표시 해제는 DB 커밋 뒤다. 이 순서로 읽어 전환 순간에도 한쪽 수요를 확보한다.
-                var combined = new HashSet<>(demands.symbols());
-                combined.addAll(orders.findStockCodesByStatus(com.stock_spoon.river_be.order.entity.Order.Status.PENDING));
-                collector.updateSymbols(combined);
+                collector.updateSymbols(orders.findStockCodesByStatus(Order.Status.PENDING));
             } else {
                 collector.updateSymbols(Set.of());
             }
-            for (var entry : waiting.entrySet()) {
-                if (quotes.activeSource(entry.getKey()).isPresent()) {
-                    if (waiting.remove(entry.getKey(), entry.getValue())) entry.getValue().complete(null);
-                }
-            }
         } catch (RuntimeException error) {
-            waiting.values().forEach(future -> future.completeExceptionally(error));
-            waiting.clear();
             log.warn("event=shared_quote_reconcile_failed causeType={}", error.getClass().getSimpleName());
-        }
-    }
-
-    public CompletableFuture<Void> whenSubscribed(String code) {
-        try {
-            if (!desired.contains(code)) throw new IllegalStateException("시세 구독 수요가 없습니다.");
-            if (quotes.activeSource(code).isPresent()) return CompletableFuture.completedFuture(null);
-            return waiting.computeIfAbsent(code, ignored -> new CompletableFuture<>());
-        } catch (RuntimeException error) {
-            return CompletableFuture.failedFuture(error);
         }
     }
 
@@ -128,10 +101,6 @@ public class RedisMarketStream implements MarketStream, MessageListener, Subscri
     public Optional<RedisQuoteStore.QuoteEvent> latestQuote(String code) { return quotes.usablePriceEvent(code); }
     public Optional<OrderBook> latestOrderBook(String code) { return quotes.usableOrderBook(code).or(() -> collector.latestOrderBook(code)); }
     public Optional<RedisQuoteStore.QuoteEvent> latestBookQuote(String code) { return quotes.usableBookEvent(code); }
-    public void retainRequest(String id, String code) { demands.retain(id, code); }
-    public void renewRequest(String id, String code) { demands.renew(id, code); }
-    public void releaseRequest(String id, String code) { demands.release(id, code); }
-    public void assertRequest(String id, String code) { demands.assertRequest(id, code); }
     public void assertAvailable(String code) {
         if (quotes.activeSource(code).isEmpty()) throw new IllegalStateException("시세 수집 담당 또는 구독 연결을 사용할 수 없습니다.");
     }
@@ -140,11 +109,6 @@ public class RedisMarketStream implements MarketStream, MessageListener, Subscri
         if (source == null || quotes.activeSource(code).filter(source::equals).isEmpty()) {
             throw new IllegalStateException("이전 시세 연결의 알림입니다.");
         }
-    }
-
-    public void assertRestFallbackAllowed() {
-        // 최초 주문 판단은 구독 연결에서 현재가가 수신될 때 진행한다.
-        throw new IllegalStateException("최초 현재가는 수집 담당의 웹소켓 수신을 기다립니다.");
     }
 
     @Override
@@ -171,8 +135,6 @@ public class RedisMarketStream implements MarketStream, MessageListener, Subscri
     @PreDestroy
     public void close() {
         channels.removeMessageListener(this);
-        waiting.values().forEach(future -> future.completeExceptionally(new IllegalStateException("시세 구독이 종료되었습니다.")));
-        waiting.clear();
         callbacks.shutdownNow();
     }
 }

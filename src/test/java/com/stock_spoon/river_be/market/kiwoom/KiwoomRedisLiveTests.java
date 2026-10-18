@@ -73,7 +73,7 @@ class KiwoomRedisLiveTests {
             var received = new LinkedBlockingQueue<RedisQuoteStore.QuoteEvent>();
             channels = new RedisMessageListenerContainer();
             channels.setConnectionFactory(connections); channels.afterPropertiesSet(); channels.start();
-            ordinary = new RedisMarketStream(store, new RedisSubscriptionDemand(redis), mock(AiQuoteAdapter.class),
+            ordinary = new RedisMarketStream(store, mock(AiQuoteAdapter.class),
                     normalOwner, channels, event -> {
                         if (event instanceof RedisQuoteStore.QuoteEvent quote) received.add(quote);
                     }, mock(com.stock_spoon.river_be.order.repository.OrderRepository.class));

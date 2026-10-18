@@ -68,7 +68,7 @@ public class SecurityConfig {
                     .filter(origin -> !origin.isEmpty())
                     .toList());
         }
-        cors.setAllowedMethods(List.of("GET", "POST", "PATCH", "OPTIONS"));
+        cors.setAllowedMethods(List.of("GET", "POST", "PATCH", "DELETE", "OPTIONS"));
         cors.setAllowedHeaders(List.of("Content-Type", "X-XSRF-TOKEN", "ngrok-skip-browser-warning"));
         cors.setAllowCredentials(true);
         cors.setExposedHeaders(List.of("X-Request-Id"));
@@ -114,7 +114,17 @@ public class SecurityConfig {
                                 error instanceof org.springframework.security.web.csrf.CsrfException
                                         ? "INVALID_CSRF_TOKEN" : "FORBIDDEN",
                                 "요청 권한 또는 CSRF 확인값을 확인해주세요.")));
-        return http.build();
+        var chain = http.build();
+        if (!csrfDisabled) {
+            // Resource Server의 자동 CSRF 예외를 해제한다. JWT도 쿠키로 전달하므로 검증이 필요하다.
+            for (var filter : chain.getFilters()) {
+                if (filter instanceof org.springframework.security.web.csrf.CsrfFilter csrfFilter) {
+                    csrfFilter.setRequireCsrfProtectionMatcher(
+                            org.springframework.security.web.csrf.CsrfFilter.DEFAULT_CSRF_MATCHER);
+                }
+            }
+        }
+        return chain;
     }
 
     private void writeError(HttpServletResponse response, int status, String code, String message)

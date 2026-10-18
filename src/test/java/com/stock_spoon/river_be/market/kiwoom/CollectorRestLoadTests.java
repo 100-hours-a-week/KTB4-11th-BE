@@ -54,7 +54,7 @@ class CollectorRestLoadTests {
         var arrivals = new ConcurrentHashMap<String, List<Long>>();
         try {
             upstream.setExecutor(workers);
-            upstream.createContext("/api/dostk/stkinfo", exchange -> {
+            upstream.createContext("/api/dostk/", exchange -> {
                 String api = exchange.getRequestHeaders().getFirst("api-id");
                 arrivals.computeIfAbsent(api, ignored -> Collections.synchronizedList(new ArrayList<>())).add(System.nanoTime());
                 try {
@@ -109,12 +109,13 @@ class CollectorRestLoadTests {
             var outcomes = new ArrayList<Future<Outcome>>();
             long started = System.nanoTime();
             for (int i = 0; i < count; i++) {
-                String api = i % trCount == 0 ? "ka10001" : "ka10100";
+                String api = i % trCount == 0 ? "ka10100" : "ka10081";
                 outcomes.add(workers.submit(() -> {
                     ready.countDown(); go.await();
                     long sent = System.nanoTime();
                     boolean success;
-                    try { success = "0".equals(String.valueOf(remote.query(api, "/api/dostk/stkinfo", Map.of("stk_cd", "005930")).get("return_code"))); }
+                    try { success = "0".equals(String.valueOf(remote.query(api, "ka10081".equals(api) ? "/api/dostk/chart" : "/api/dostk/stkinfo",
+                            "ka10081".equals(api) ? Map.of("stk_cd", "005930", "base_dt", "20261016", "upd_stkpc_tp", "0") : Map.of("stk_cd", "005930")).get("return_code"))); }
                     catch (IllegalStateException failure) { success = false; }
                     return new Outcome(success, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - sent));
                 }));

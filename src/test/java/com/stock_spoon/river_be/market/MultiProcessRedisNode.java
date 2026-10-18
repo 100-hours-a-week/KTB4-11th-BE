@@ -46,7 +46,7 @@ public class MultiProcessRedisNode {
             var stream = context.getBean(RedisMarketStream.class);
             var market = context.getBean(KiwoomMarketClient.class);
             var heartbeat = context.getBean(RedisCollectorHeartbeat.class);
-            var quotes = context.getBean(RedisQuoteStore.class);
+            var redis = context.getBean(org.springframework.data.redis.core.StringRedisTemplate.class);
             var server = (org.springframework.boot.web.server.context.WebServerApplicationContext) context;
             reply("ready");
             var input = new BufferedReader(new InputStreamReader(System.in));
@@ -57,11 +57,11 @@ public class MultiProcessRedisNode {
                         case "endpoint" -> reply("http://localhost:" + server.getWebServer().getPort());
                         case "metadata" -> reply(market.stockDetails("TST009").stockName());
                         case "calls" -> reply(Integer.toString(fixture.calls.get()));
-                        case "query" -> reply(Long.toString(market.currentPrice("TST009")));
+                        case "query" -> reply(market.stockInfo("TST009").marketCode());
                         case "badquery" -> {
                             var remote = new RemoteKiwoomRestTransport(org.springframework.web.client.RestClient.builder()
                                     .baseUrl(args[2]).build(), context.getBean(org.springframework.data.redis.core.StringRedisTemplate.class), "wrong-secret");
-                            remote.query("ka10001", "/api/dostk/stkinfo", Map.of("stk_cd", "TST009"));
+                            remote.query("ka10100", "/api/dostk/stkinfo", Map.of("stk_cd", "TST009"));
                             reply("unexpected-success");
                         }
                         case "owner" -> reply(Boolean.toString(heartbeat.ownsLease()));
@@ -88,25 +88,23 @@ public class MultiProcessRedisNode {
                             var orders = context.getBean(com.stock_spoon.river_be.order.repository.OrderRepository.class);
                             var extra = orders.save(com.stock_spoon.river_be.order.entity.Order.pendingLimit(account, "TST009",
                                     com.stock_spoon.river_be.order.entity.Order.Side.BUY, 1, 120000,
-                                    com.stock_spoon.river_be.order.entity.Order.Source.AI, null, Instant.now().minusSeconds(1)));
+                                    com.stock_spoon.river_be.order.entity.Order.Source.AI, null, Fixture.testTime().minusSeconds(1)));
                             var cancelled = context.getBean(com.stock_spoon.river_be.order.service.OrderService.class)
                                     .cancel(account.getId(), extra.getId());
                             reply(cancelled.getStatus().name());
                         }
                         case "replay-low" -> {
                             var old = fixture.last;
-                            var price = new KiwoomStockStream.StockPrice("TST009", new BigDecimal("119500"),
+                            var price = new StockPrice("TST009", new BigDecimal("119500"),
                                     BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(10, 0), Instant.now());
-                            context.publishEvent(new RedisQuoteStore.QuoteEvent("TST009", "price", price.receivedAt(),
+                            context.publishEvent(new QuoteEvent("TST009", "price", price.receivedAt(),
                                     old.source(), price, null));
                             reply("ok");
                         }
-                        case "new-session" -> {
-                            if (!heartbeat.ownsLease()) throw new IllegalStateException("담당 아님");
-                            fixture.session = UUID.randomUUID().toString();
-                            quotes.remove("TST009");
-                            quotes.register("TST009", new QuoteStore.Source(heartbeat.ownerId(), fixture.session), Instant.now());
-                            reply("ok");
+                        case "subscription-ready" -> {
+                            var adapter = context.getBean(AiQuoteAdapter.class);
+                            adapter.assertAvailable("TST009");
+                            reply(Boolean.toString(adapter.latestQuote("TST009").isEmpty()));
                         }
                         case "subscribe" -> { stream.updateSymbols(Set.of("TST009")); reply("ok"); }
                         case "seed-load" -> {
@@ -118,17 +116,13 @@ public class MultiProcessRedisNode {
                             for (int i = 0; i < 101; i++) orders.add(com.stock_spoon.river_be.order.entity.Order.pendingLimit(
                                     account, "TST009", com.stock_spoon.river_be.order.entity.Order.Side.BUY, 1,
                                     i == 100 ? 1 : 120000, com.stock_spoon.river_be.order.entity.Order.Source.AI, null,
-                                    Instant.now().minusSeconds(1)));
+                                    Fixture.testTime().minusSeconds(1)));
                             context.getBean(com.stock_spoon.river_be.order.repository.OrderRepository.class).saveAll(orders);
                             reply("ok");
                         }
                         case "emit-load-high", "emit-load-low" -> {
-                            if (!heartbeat.ownsLease()) throw new IllegalStateException("담당 아님");
-                            var source = new QuoteStore.Source(heartbeat.ownerId(), fixture.session);
-                            quotes.register("TST009", source, Instant.now());
-                            for (int i = 0; i < 20; i++) quotes.savePrice(new KiwoomStockStream.StockPrice("TST009",
-                                    new BigDecimal(command.equals("emit-load-high") ? "200000" : "119500"),
-                                    BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(10, 0), Instant.now()), source);
+                            for (int i = 0; i < 20; i++) fixture.emit(redis,
+                                    command.equals("emit-load-high") ? 200000 : 119500);
                             reply("ok");
                         }
                         case "load-high-received", "load-low-received" -> {
@@ -157,7 +151,7 @@ public class MultiProcessRedisNode {
                             context.getBean(com.stock_spoon.river_be.order.repository.OrderRepository.class).save(
                                     com.stock_spoon.river_be.order.entity.Order.pendingLimit(account, "TST009",
                                             com.stock_spoon.river_be.order.entity.Order.Side.BUY, 1, 120000,
-                                            com.stock_spoon.river_be.order.entity.Order.Source.AI, null, Instant.now().minusSeconds(1)));
+                                            com.stock_spoon.river_be.order.entity.Order.Source.AI, null, Fixture.testTime().minusSeconds(1)));
                             reply("ok");
                         }
                         case "assets" -> {
@@ -168,12 +162,7 @@ public class MultiProcessRedisNode {
                             reply(executions.count() + ":" + accounts.findAll().getFirst().getCashBalance());
                         }
                         case "emit", "emit-high" -> {
-                            if (!heartbeat.ownsLease()) throw new IllegalStateException("담당 아님");
-                            var source = new QuoteStore.Source(heartbeat.ownerId(), fixture.session);
-                            quotes.register("TST009", source, Instant.now());
-                            quotes.savePrice(new KiwoomStockStream.StockPrice("TST009",
-                                    new BigDecimal(command.equals("emit-high") ? "200000" : "119500"),
-                                    BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(10, 0), Instant.now()), source);
+                            fixture.emit(redis, command.equals("emit-high") ? 200000 : 119500);
                             reply("ok");
                         }
                         case "event" -> {
@@ -195,23 +184,35 @@ public class MultiProcessRedisNode {
     @TestConfiguration(proxyBeanMethods = false)
     static class Fixture {
         @Bean static org.springframework.beans.factory.config.BeanPostProcessor fixedMarketClock() {
-            var fixed = Clock.fixed(LocalDate.now(ZoneId.of("Asia/Seoul")).atTime(10, 0)
-                    .atZone(ZoneId.of("Asia/Seoul")).toInstant(), ZoneOffset.UTC);
+            var fixed = Clock.fixed(testTime(), ZoneOffset.UTC);
             return new org.springframework.beans.factory.config.BeanPostProcessor() {
                 public Object postProcessBeforeInitialization(Object bean, String name) {
                     if (bean instanceof com.stock_spoon.river_be.order.service.OrderService
-                            || bean instanceof com.stock_spoon.river_be.execution.service.OrderExecutionService) {
+                            || bean instanceof com.stock_spoon.river_be.execution.service.OrderExecutionService
+                            || bean instanceof AiQuoteAdapter) {
                         org.springframework.test.util.ReflectionTestUtils.setField(bean, "clock", fixed);
                     }
                     return bean;
                 }
             };
         }
+        private static Instant testTime() {
+            var date = LocalDate.now(ZoneId.of("Asia/Seoul"));
+            while (date.getDayOfWeek() == DayOfWeek.SATURDAY || date.getDayOfWeek() == DayOfWeek.SUNDAY) date = date.plusDays(1);
+            return date.atTime(10, 0).atZone(ZoneId.of("Asia/Seoul")).toInstant();
+        }
+        private long volume;
+        void emit(org.springframework.data.redis.core.StringRedisTemplate redis, long price) {
+            String payload = tools.jackson.databind.json.JsonMapper.builder().build().writeValueAsString(Map.of(
+                    "code", "TST009", "price", price, "change", 0, "rate", 0,
+                    "volume", ++volume, "timestamp", testTime().atOffset(ZoneOffset.UTC).toString()));
+            redis.opsForValue().set("price:TST009", payload, Duration.ofMinutes(5));
+            redis.convertAndSend("price:TST009", payload);
+        }
         final AtomicInteger calls = new AtomicInteger();
-        final BlockingQueue<RedisQuoteStore.QuoteEvent> events = new LinkedBlockingQueue<>();
-        volatile RedisQuoteStore.QuoteEvent last;
+        final BlockingQueue<QuoteEvent> events = new LinkedBlockingQueue<>();
+        volatile QuoteEvent last;
         String session = "process-test-session";
-        @Bean(name = "kiwoomStockStream") KiwoomStockStream fakeExternalWebSocket() { return mock(KiwoomStockStream.class); }
         @Bean @Primary
         @ConditionalOnProperty(name = "kiwoom.collector.enabled", havingValue = "true")
         KiwoomRestTransport fakeExternalRest() {
@@ -222,7 +223,7 @@ public class MultiProcessRedisNode {
             };
         }
         @EventListener @org.springframework.core.annotation.Order(org.springframework.core.Ordered.HIGHEST_PRECEDENCE)
-        void received(RedisQuoteStore.QuoteEvent event) {
+        void received(QuoteEvent event) {
             if ("TST009".equals(event.stockCode()) && event.price() != null) { last = event; events.add(event); }
         }
     }

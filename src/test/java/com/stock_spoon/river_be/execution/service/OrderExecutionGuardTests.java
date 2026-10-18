@@ -1,5 +1,7 @@
 package com.stock_spoon.river_be.execution.service;
 
+import com.stock_spoon.river_be.market.OrderBook;
+import com.stock_spoon.river_be.market.QuoteLevel;
 import com.stock_spoon.river_be.order.dto.OrderCreateRequest;
 import com.stock_spoon.river_be.order.entity.Order;
 import com.stock_spoon.river_be.execution.repository.ExecutionRepository;
@@ -8,7 +10,6 @@ import com.stock_spoon.river_be.order.repository.OrderRepository;
 
 import com.stock_spoon.river_be.account.entity.Account;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
-import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
@@ -79,8 +80,8 @@ class OrderExecutionGuardTests {
         assertThatThrownBy(() -> service.executeLimit(1L, 2L, 69000L, Map.of(), validate))
                 .isInstanceOf(IllegalStateException.class).hasMessage("previous session");
         var request = new OrderCreateRequest("005930", "buy", "market", null, 1L, "근거", null, List.of(), 100.0, null);
-        var book = new KiwoomStockStream.OrderBook("005930",
-                List.of(new KiwoomStockStream.QuoteLevel(BigDecimal.valueOf(70000), 1)), List.of(), LocalTime.of(10, 0), now);
+        var book = new OrderBook("005930",
+                List.of(new QuoteLevel(BigDecimal.valueOf(70000), 1)), List.of(), LocalTime.of(10, 0), now);
         valid.set(true);
         validate.run();
         assertThatThrownBy(() -> service.executeMarket(1L, 1L, request, book, Map.of(), validate))

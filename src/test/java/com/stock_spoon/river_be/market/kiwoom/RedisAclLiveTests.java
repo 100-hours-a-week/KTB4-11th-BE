@@ -1,7 +1,6 @@
 package com.stock_spoon.river_be.market.kiwoom;
 
 import com.stock_spoon.river_be.market.*;
-import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.*;
@@ -36,21 +35,19 @@ class RedisAclLiveTests {
         RedisMessageListenerContainer channels = null;
         boolean userCreated = false;
         boolean keysOwned = false;
-        String requestId = UUID.randomUUID().toString();
         String tokenKey = "token:kiwoom:development-test:" + suffix;
         String sessionKey = "session:development:" + suffix;
-        var keys = List.of("quote:TST010:price", "quote:TST010:orderbook", "quote:TST010:subscription",
-                "quote:TST010:metadata", tokenKey, sessionKey,
-                "coord:kiwoom:{accepting}:request:" + requestId);
+        var keys = List.of("price:TST010", "orderbook:TST010",
+                "quote:TST010:metadata", tokenKey, sessionKey);
         try {
             assertThat(admin.hasKey("coord:kiwoom:collector")).isFalse();
             for (String key : keys) assertThat(admin.hasKey(key)).as("기존 테스트 값 보호: %s", key).isFalse();
             var rules = new ArrayList<>(List.of("SETUSER", username, "reset", "on", "#" + passwordHash,
-                    "~quote:*", "~session:*", "~token:*", "~coord:*", "&quotes:*", "-@all"));
+                    "~quote:*", "~session:*", "~token:*", "~coord:*", "%R~price:*", "%R~orderbook:*", "&price:*", "&orderbook:*", "-@all"));
             rules.addAll(List.of("+auth", "+hello", "+ping", "+client|setinfo", "+client|setname", "+client|id",
-                    "+get", "+set", "+expire", "+pexpire", "+del", "+time", "+ttl", "+pttl",
-                    "+zadd", "+zrange", "+zrem", "+zremrangebyscore", "+eval", "+evalsha", "+script|load",
-                    "+publish", "+subscribe", "+unsubscribe"));
+                    "+get", "+set", "+expire", "+pexpire", "+del", "+ttl", "+pttl",
+                    "+eval", "+evalsha", "+script|load",
+                    "+subscribe", "+unsubscribe"));
             execute(admin, "ACL", rules.toArray(String[]::new));
             userCreated = true;
             restrictedConnection.afterPropertiesSet(); restrictedConnection.start();
@@ -62,14 +59,6 @@ class RedisAclLiveTests {
             owner.renew();
             assertThat(owner.ownsLease()).isTrue();
             assertThat(restricted.getExpire("coord:kiwoom:collector")).isBetween(1L, 15L);
-            var demand = new RedisSubscriptionDemand(restricted);
-            demand.retain(requestId, "TST010");
-            demand.renew(requestId, "TST010");
-            demand.assertRequest(requestId, "TST010");
-            assertThat(demand.symbols()).contains("TST010");
-            demand.release(requestId, "TST010");
-            assertThat(demand.symbols()).doesNotContain("TST010");
-
             channels = new RedisMessageListenerContainer();
             channels.setConnectionFactory(restrictedConnection);
             channels.afterPropertiesSet(); channels.start();
@@ -81,23 +70,19 @@ class RedisAclLiveTests {
                 }
                 public void onChannelSubscribed(byte[] channel, long count) { subscribed.countDown(); }
             }
-            channels.addMessageListener(new Listener(), new ChannelTopic("quotes:TST010"));
+            channels.addMessageListener(new Listener(), new ChannelTopic("price:TST010"));
             assertThat(subscribed.await(5, TimeUnit.SECONDS)).isTrue();
-            var quotes = new RedisQuoteStore(restricted);
-            var source = new QuoteStore.Source(owner.ownerId(), suffix);
-            quotes.register("TST010", source, Instant.now());
-            var price = new KiwoomStockStream.StockPrice("TST010", new BigDecimal("119500"),
-                    BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(10, 0), Instant.now());
-            quotes.savePrice(price, source);
-            assertThat(messages.poll(5, TimeUnit.SECONDS)).contains("TST010");
-            assertThat(quotes.usablePrice("TST010")).contains(price);
-            var book = new KiwoomStockStream.OrderBook("TST010",
-                    List.of(new KiwoomStockStream.QuoteLevel(new BigDecimal("119600"), 10)),
-                    List.of(new KiwoomStockStream.QuoteLevel(new BigDecimal("119500"), 10)),
-                    LocalTime.of(10, 0), Instant.now());
-            quotes.saveOrderBook(book, source);
-            assertThat(quotes.usableOrderBook("TST010")).contains(book);
-            assertThat(restricted.getExpire("quote:TST010:price")).isBetween(86300L, 86400L);
+            String payload = "{\"code\":\"TST010\",\"price\":119500,\"timestamp\":\"" + Instant.now() + "\"}";
+            admin.opsForValue().set("price:TST010", payload, Duration.ofMinutes(1));
+            admin.convertAndSend("price:TST010", payload);
+            assertThat(messages.poll(5, TimeUnit.SECONDS)).isEqualTo(payload);
+            assertThat(new RedisMarketPrice(restricted).currentPrice("TST010")).isEqualTo(119500L);
+            admin.opsForValue().set("orderbook:TST010", "{}", Duration.ofMinutes(1));
+            assertThat(restricted.opsForValue().get("orderbook:TST010")).isEqualTo("{}");
+            assertDenied(() -> restricted.opsForValue().set("price:TST010", "blocked"));
+            assertDenied(() -> restricted.delete("price:TST010"));
+            assertDenied(() -> restricted.opsForValue().set("orderbook:TST010", "blocked"));
+            assertDenied(() -> restricted.convertAndSend("price:TST010", "blocked"));
             var metadata = new StockMetadataCache(restricted);
             assertThat(metadata.load("TST010", () -> Map.of("return_code", 0, "code", "TST010", "name", "TEST",
                     "marketCode", "0", "upName", "TEST"))).containsEntry("name", "TEST");
@@ -120,7 +105,6 @@ class RedisAclLiveTests {
             assertDenied(() -> execute(restricted, "KEYS", "quote:*"));
             assertDenied(() -> execute(restricted, "ACL", "WHOAMI"));
             channels.stop();
-            quotes.remove("TST010");
             owner.close();
             assertThat(admin.hasKey("coord:kiwoom:collector")).isFalse();
         } finally {

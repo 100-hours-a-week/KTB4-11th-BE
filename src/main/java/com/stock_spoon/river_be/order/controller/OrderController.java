@@ -122,7 +122,7 @@ public class OrderController {
         // [2. 계좌 검사] 토큰의 사용자 ID로 계좌 소유권·활성 상태·AI 운용 여부를 확인한다.
         orders.assertOrderableAccount(userId, accountId, source);
         // 지정가는 시세 연결 여부와 무관하게 예약하고 커밋 후 시세를 구독한다.
-        market.validateLimit(request.stockCode(), request.limitPrice());
+        market.validateLimit(request.limitPrice());
         // 람다 () -> ... 는 지금 저장하지 않고 '나중에 실행할 저장 작업'을 전달한다.
         // OrderSubscriptionService.create()의 saveOrder.get()에서 reserveLimit()이 실행된다.
         Order order = subscriptions.create(request.stockCode(), () -> orders.reserveLimit(userId, accountId, request, source));

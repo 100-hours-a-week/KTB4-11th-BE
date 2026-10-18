@@ -12,7 +12,7 @@ public record CollectorQuery(String apiId, String stockCode, String collectorId,
 
     public String path() {
         if ("ka10081".equals(apiId)) return "/api/dostk/chart";
-        if ("ka10001".equals(apiId) || "ka10100".equals(apiId)) return "/api/dostk/stkinfo";
+        if ("ka10100".equals(apiId)) return "/api/dostk/stkinfo";
         throw new IllegalArgumentException("허용되지 않은 조회 TR입니다.");
     }
 

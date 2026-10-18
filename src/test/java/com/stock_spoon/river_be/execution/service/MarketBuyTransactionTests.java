@@ -1,5 +1,7 @@
 package com.stock_spoon.river_be.execution.service;
 
+import com.stock_spoon.river_be.market.OrderBook;
+import com.stock_spoon.river_be.market.QuoteLevel;
 import com.stock_spoon.river_be.order.dto.OrderCreateRequest;
 import com.stock_spoon.river_be.execution.entity.Execution;
 import com.stock_spoon.river_be.holding.entity.Holding;
@@ -11,7 +13,6 @@ import com.stock_spoon.river_be.order.repository.OrderRepository;
 
 import com.stock_spoon.river_be.account.entity.Account;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
-import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream;
 import com.stock_spoon.river_be.user.entity.User;
 import com.stock_spoon.river_be.user.repository.UserRepository;
 import java.math.BigDecimal;
@@ -67,14 +68,14 @@ class MarketBuyTransactionTests {
                 accounts.save(new Account(users.save(new User("시장가 검증")), "시장가 계좌", 1000000)));
     }
 
-    private KiwoomStockStream.OrderBook book(Instant receipt, LocalTime time) {
-        return new KiwoomStockStream.OrderBook("005930", List.of(
-                new KiwoomStockStream.QuoteLevel(BigDecimal.valueOf(70000), 3),
-                new KiwoomStockStream.QuoteLevel(BigDecimal.valueOf(70100), 4),
-                new KiwoomStockStream.QuoteLevel(BigDecimal.valueOf(70200), 5)), List.of(), time, receipt);
+    private OrderBook book(Instant receipt, LocalTime time) {
+        return new OrderBook("005930", List.of(
+                new QuoteLevel(BigDecimal.valueOf(70000), 3),
+                new QuoteLevel(BigDecimal.valueOf(70100), 4),
+                new QuoteLevel(BigDecimal.valueOf(70200), 5)), List.of(), time, receipt);
     }
 
-    private Order buy(Account account, KiwoomStockStream.OrderBook book) {
+    private Order buy(Account account, OrderBook book) {
         return execution.executeMarketBuy(account.getUser().getId(), account.getId(), "005930", 10, "근거", book);
     }
 
@@ -196,8 +197,8 @@ class MarketBuyTransactionTests {
     @Test
     void malformedQuotePriceIsMarketDataFailureWithoutSaving() {
         var account = account();
-        var invalid = new KiwoomStockStream.OrderBook("005930", List.of(
-                new KiwoomStockStream.QuoteLevel(new BigDecimal("70000.5"), 10)),
+        var invalid = new OrderBook("005930", List.of(
+                new QuoteLevel(new BigDecimal("70000.5"), 10)),
                 List.of(), LocalTime.of(10, 0), NOW);
         assertThatThrownBy(() -> buy(account, invalid)).isInstanceOfSatisfying(OrderException.class,
                 error -> assertThat(error.status()).isEqualTo(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE));
@@ -211,11 +212,11 @@ class MarketBuyTransactionTests {
         return account;
     }
 
-    private KiwoomStockStream.OrderBook sellBook() {
-        return new KiwoomStockStream.OrderBook("005930", List.of(), List.of(
-                new KiwoomStockStream.QuoteLevel(BigDecimal.valueOf(70000), 5),
-                new KiwoomStockStream.QuoteLevel(BigDecimal.valueOf(70200), 3),
-                new KiwoomStockStream.QuoteLevel(BigDecimal.valueOf(70100), 4)), LocalTime.of(10, 0), NOW);
+    private OrderBook sellBook() {
+        return new OrderBook("005930", List.of(), List.of(
+                new QuoteLevel(BigDecimal.valueOf(70000), 5),
+                new QuoteLevel(BigDecimal.valueOf(70200), 3),
+                new QuoteLevel(BigDecimal.valueOf(70100), 4)), LocalTime.of(10, 0), NOW);
     }
 
     private Order sell(Account account, long quantity) {
@@ -242,9 +243,9 @@ class MarketBuyTransactionTests {
     @Test
     void partialMarketSellUsesUnchangedFractionalAverageCostAndRoundsOnlyAtStorage() {
         var account = seller(3, "200000");
-        var book = new KiwoomStockStream.OrderBook("005930", List.of(), List.of(
-                new KiwoomStockStream.QuoteLevel(BigDecimal.valueOf(69000), 1),
-                new KiwoomStockStream.QuoteLevel(BigDecimal.valueOf(70000), 1)), LocalTime.of(10, 0), NOW);
+        var book = new OrderBook("005930", List.of(), List.of(
+                new QuoteLevel(BigDecimal.valueOf(69000), 1),
+                new QuoteLevel(BigDecimal.valueOf(70000), 1)), LocalTime.of(10, 0), NOW);
         var order = execution.executeMarketSell(account.getUser().getId(), account.getId(), "005930", 2, "매도 근거", book);
         var fills = executions.findForOrder(order.getId());
         assertThat(fills.get(0).getRealizedPnl()).isEqualByComparingTo("3333.33");

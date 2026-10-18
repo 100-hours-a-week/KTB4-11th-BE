@@ -1,5 +1,8 @@
 package com.stock_spoon.river_be.order.service;
 
+import com.stock_spoon.river_be.market.OrderBook;
+import com.stock_spoon.river_be.market.QuoteLevel;
+import com.stock_spoon.river_be.market.StockPrice;
 import com.stock_spoon.river_be.execution.service.OrderExecutionService;
 
 import com.stock_spoon.river_be.order.controller.OrderController;
@@ -19,7 +22,7 @@ import com.stock_spoon.river_be.account.entity.Account;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import com.stock_spoon.river_be.auth.token.JwtTokenProvider;
 import com.stock_spoon.river_be.config.JwtProperties;
-import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream;
+import com.stock_spoon.river_be.market.MarketStream;
 import com.stock_spoon.river_be.user.entity.User;
 import com.stock_spoon.river_be.user.repository.UserRepository;
 import jakarta.servlet.http.Cookie;
@@ -52,6 +55,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @Transactional
 class OrderControllerTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.stock_spoon.river_be.market.RedisMarketPrice redisPrices;
     // 체결 및 대회 정책 검증을 위한 고정 시각.
     @org.springframework.boot.test.context.TestConfiguration
     static class MarketHours {
@@ -71,7 +76,7 @@ class OrderControllerTests {
         @org.springframework.context.annotation.Bean
         @org.springframework.context.annotation.Primary
         OrderExecutionService fixedExecution(AccountRepository accounts, OrderRepository orders,
-                HoldingRepository holdings, ExecutionRepository executions, KiwoomStockStream stream) {
+                HoldingRepository holdings, ExecutionRepository executions, MarketStream stream) {
             return com.stock_spoon.river_be.execution.service.ExecutionTestFixture.withClock(accounts, orders, holdings, executions,
                     java.time.Clock.fixed(Instant.parse("2026-10-01T01:00:00Z"), java.time.ZoneOffset.UTC));
         }
@@ -86,7 +91,7 @@ class OrderControllerTests {
     @Autowired JwtEncoder encoder;
     @Autowired JwtProperties jwtProperties;
     @MockitoBean OrderMarketValidator market;
-    @MockitoBean KiwoomStockStream stream;
+    @MockitoBean MarketStream stream;
     @MockitoBean com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient marketClient;
     private MockMvc mvc;
     private User user;
@@ -100,8 +105,7 @@ class OrderControllerTests {
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
         user = users.save(new User("AI 주문 사용자"));
         account = accounts.save(new Account(user, "자동매매 계좌", 1_000_000));
-        when(stream.whenSubscribed(anyString())).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(null));
-        when(marketClient.currentPrice(anyString())).thenThrow(new IllegalStateException("test price unavailable"));
+        when(redisPrices.currentPrice(anyString())).thenThrow(new IllegalStateException("test price unavailable"));
     }
 
     @Test
@@ -272,8 +276,8 @@ class OrderControllerTests {
 
     @Test
     void subscriptionFailureStillAcceptsPendingOrderAndReservesCash() throws Exception {
-        when(stream.whenSubscribed("005930")).thenReturn(java.util.concurrent.CompletableFuture.failedFuture(
-                new IllegalStateException("registration rejected")));
+        org.mockito.Mockito.doThrow(new IllegalStateException("Redis unavailable"))
+                .when(stream).updateSymbols(org.mockito.ArgumentMatchers.anySet());
         mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
                         .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -398,11 +402,11 @@ class OrderControllerTests {
 
     private void marketBook(Instant receivedAt, java.time.LocalTime quoteTime) {
         var asks = java.util.List.of(
-                new KiwoomStockStream.QuoteLevel(new java.math.BigDecimal("70200"), 5),
-                new KiwoomStockStream.QuoteLevel(new java.math.BigDecimal("70000"), 3),
-                new KiwoomStockStream.QuoteLevel(new java.math.BigDecimal("70100"), 4));
+                new QuoteLevel(new java.math.BigDecimal("70200"), 5),
+                new QuoteLevel(new java.math.BigDecimal("70000"), 3),
+                new QuoteLevel(new java.math.BigDecimal("70100"), 4));
         when(stream.latestOrderBook("005930")).thenReturn(java.util.Optional.of(
-                new KiwoomStockStream.OrderBook("005930", asks, java.util.List.of(), quoteTime, receivedAt)));
+                new OrderBook("005930", asks, java.util.List.of(), quoteTime, receivedAt)));
     }
 
     private org.springframework.test.web.servlet.ResultActions marketRequest(long quantity, String price) throws Exception {
@@ -494,9 +498,9 @@ class OrderControllerTests {
     @Test
     void limitBuySellReturnSavedNameAndReasoning() throws Exception {
         holdings.save(new Holding(account, "005930", 10, new java.math.BigDecimal("700000")));
-        var levels = java.util.List.of(new KiwoomStockStream.QuoteLevel(new java.math.BigDecimal("70000"), 100));
+        var levels = java.util.List.of(new QuoteLevel(new java.math.BigDecimal("70000"), 100));
         when(stream.latestOrderBook("005930")).thenReturn(java.util.Optional.of(
-                new KiwoomStockStream.OrderBook("005930", levels, levels, java.time.LocalTime.of(10, 0),
+                new OrderBook("005930", levels, levels, java.time.LocalTime.of(10, 0),
                         Instant.parse("2026-10-01T01:00:00Z"))));
         for (String type : java.util.List.of("limit")) {
             for (String side : java.util.List.of("buy", "sell")) {
@@ -652,7 +656,7 @@ class OrderControllerTests {
     void buyWeightIsSavedAtExecutionAndDoesNotChangeAfterLaterBuy() throws Exception {
         for (int purchase = 1; purchase <= 2; purchase++) {
             when(stream.latest("005930")).thenReturn(java.util.Optional.of(
-                    new KiwoomStockStream.StockPrice("005930", new java.math.BigDecimal("70000"),
+                    new StockPrice("005930", new java.math.BigDecimal("70000"),
                             java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO,
                             java.time.LocalTime.of(10, 0), Instant.parse("2026-10-01T01:00:00Z"))));
             var result = mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
@@ -678,21 +682,21 @@ class OrderControllerTests {
     }
 
     @Test
-    void buyWeightUsesRestWithoutOtherStockSubscriptionAndFailureKeepsFill() throws Exception {
+    void buyWeightUsesRedisWithoutOtherStockSubscriptionAndFailureKeepsFill() throws Exception {
         holdings.save(new Holding(account, "000660", 10, new java.math.BigDecimal("50000")));
         account.changeCash(-50000);
         marketBook(Instant.parse("2026-10-01T01:00:00Z"), java.time.LocalTime.of(10, 0));
         when(stream.latest("005930")).thenReturn(java.util.Optional.of(
-                new KiwoomStockStream.StockPrice("005930", new java.math.BigDecimal("70000"),
+                new StockPrice("005930", new java.math.BigDecimal("70000"),
                         java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO,
                         java.time.LocalTime.of(10, 0), Instant.parse("2026-10-01T01:00:00Z"))));
         when(stream.latest("000660")).thenReturn(java.util.Optional.empty());
         int buyCount = 0;
         for (String type : java.util.List.of("limit")) {
             for (boolean available : java.util.List.of(false, true)) {
-                org.mockito.Mockito.reset(marketClient);
-                if (available) when(marketClient.currentPrice("000660")).thenReturn(10000L);
-                else when(marketClient.currentPrice("000660")).thenThrow(new IllegalStateException());
+                org.mockito.Mockito.reset(redisPrices);
+                if (available) when(redisPrices.currentPrice("000660")).thenReturn(10000L);
+                else when(redisPrices.currentPrice("000660")).thenThrow(new IllegalStateException());
                 var result = mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
                                 .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
                                 .content(reportInputBody("buy", type, ",\"holding_weight_limit_percent\":30")))
@@ -707,8 +711,8 @@ class OrderControllerTests {
                 Double weight = saved.getReport().getHoldingWeightAfterTradePercent();
                 if (available) assertThat(weight).isEqualTo(13.3333);
                 else assertThat(weight).isNull();
-                org.mockito.Mockito.verify(marketClient).currentPrice("000660");
-                org.mockito.Mockito.verify(marketClient, org.mockito.Mockito.never()).currentPrice("005930");
+                org.mockito.Mockito.verify(redisPrices).currentPrice("000660");
+                org.mockito.Mockito.verify(redisPrices, org.mockito.Mockito.never()).currentPrice("005930");
             }
         }
     }
@@ -757,9 +761,9 @@ class OrderControllerTests {
     @Test
     void reportInputsPersistBothValuesForLimitInBothDirections() throws Exception {
         holdings.save(new Holding(account, "005930", 10, new java.math.BigDecimal("700000")));
-        var levels = java.util.List.of(new KiwoomStockStream.QuoteLevel(new java.math.BigDecimal("70000"), 100));
+        var levels = java.util.List.of(new QuoteLevel(new java.math.BigDecimal("70000"), 100));
         when(stream.latestOrderBook("005930")).thenReturn(java.util.Optional.of(
-                new KiwoomStockStream.OrderBook("005930", levels, levels, java.time.LocalTime.of(10, 0),
+                new OrderBook("005930", levels, levels, java.time.LocalTime.of(10, 0),
                         Instant.parse("2026-10-01T01:00:00Z"))));
         for (String type : java.util.List.of("limit")) {
             for (String side : java.util.List.of("buy", "sell")) {

@@ -1,9 +1,5 @@
 package com.stock_spoon.river_be.market;
 
-import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.StockPrice;
-import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.OrderBook;
-import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.QuoteLevel;
-import com.stock_spoon.river_be.market.kiwoom.RedisCollectorHeartbeat;
 import jakarta.annotation.PreDestroy;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -19,7 +15,7 @@ import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-/** AI 키는 읽기 전용이다. BE 담당이 실제 수신한 알림만 BE 세션을 붙여 중계한다. */
+/** 각 BE가 AI 원본 채널을 읽고 검증한 알림을 해당 BE의 체결 서비스에 전달한다. */
 @Component
 @ConditionalOnProperty(name = "kiwoom.stream.enabled", havingValue = "true")
 public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
@@ -27,36 +23,45 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
     private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AiQuoteAdapter.class);
     private final StringRedisTemplate redis;
-    private final RedisQuoteStore quotes;
-    private final RedisCollectorHeartbeat owner;
+    private final org.springframework.context.ApplicationEventPublisher events;
+    private final String subscriberId = UUID.randomUUID().toString();
     private final RedisMessageListenerContainer channels;
     private final Clock clock;
     private final Object subscriptionLock = new Object();
-    private final Map<String, QuoteStore.Source> sessions = new HashMap<>();
+    private final Map<String, QuoteSource> sessions = new HashMap<>();
     private final Map<String, Set<String>> acknowledged = new HashMap<>();
-    private final Map<String, StockPrice> prices = new HashMap<>();
-    private final Map<String, OrderBook> books = new HashMap<>();
+    private final Map<String, QuoteEvent> prices = new HashMap<>();
+    private final Map<String, QuoteEvent> books = new HashMap<>();
     private Set<String> desired = Set.of();
 
+    private final java.util.concurrent.ThreadPoolExecutor callbacks = new java.util.concurrent.ThreadPoolExecutor(
+            1, 1, 0, java.util.concurrent.TimeUnit.SECONDS,
+            new java.util.concurrent.ArrayBlockingQueue<>(256), runnable -> {
+                var thread = new Thread(runnable, "direct-quotes");
+                thread.setDaemon(true);
+                return thread;
+            });
+
     @Autowired
-    public AiQuoteAdapter(StringRedisTemplate redis, RedisQuoteStore quotes, RedisCollectorHeartbeat owner,
-            @Qualifier("quoteListenerContainer") RedisMessageListenerContainer channels) {
-        this(redis, quotes, owner, channels, Clock.systemUTC());
+    public AiQuoteAdapter(StringRedisTemplate redis,
+            @Qualifier("quoteListenerContainer") RedisMessageListenerContainer channels,
+            org.springframework.context.ApplicationEventPublisher events) {
+        this(redis, channels, events, Clock.systemUTC());
     }
 
-    AiQuoteAdapter(StringRedisTemplate redis, RedisQuoteStore quotes, RedisCollectorHeartbeat owner,
-            RedisMessageListenerContainer channels, Clock clock) {
+    AiQuoteAdapter(StringRedisTemplate redis, RedisMessageListenerContainer channels,
+            org.springframework.context.ApplicationEventPublisher events, Clock clock) {
         this.redis = redis;
-        this.quotes = quotes;
-        this.owner = owner;
         this.channels = channels;
+        this.events = events;
         this.clock = clock;
+        channels.setTaskExecutor(callbacks);
     }
 
     public void updateSymbols(Set<String> symbols) {
         symbols.forEach(AiQuoteAdapter::validateCode);
         synchronized (subscriptionLock) {
-            Set<String> next = owner.ownsLease() ? Set.copyOf(symbols) : Set.of();
+            Set<String> next = Set.copyOf(symbols);
             Set<String> previous;
             synchronized (this) {
                 previous = desired;
@@ -73,7 +78,6 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
             // 채널 등록은 ACK를 기다릴 수 있으므로 수신 처리 잠금을 잡지 않는다.
             for (String code : previous) if (!next.contains(code)) {
                 channels.removeMessageListener(this, topics(code));
-                if (owner.ownsLease()) quotes.remove(code);
             }
             for (String code : next) if (!previous.contains(code)) {
                 synchronized (this) {
@@ -103,25 +107,38 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
     @Override
     public synchronized void onChannelSubscribed(byte[] channel, long count) {
         String code = channelCode(channel);
-        if (code == null || !desired.contains(code) || !owner.ownsLease()) return;
+        if (code == null || !desired.contains(code)) return;
         // 재연결 ACK는 이전 스냅샷을 새 시세로 발행하지 않는다.
         String topic = new String(channel, StandardCharsets.UTF_8);
         Set<String> ack = acknowledged.computeIfAbsent(code, ignored -> new HashSet<>());
         if (ack.isEmpty() || ack.contains(topic)) {
             ack.clear();
-            var source = new QuoteStore.Source(owner.ownerId(), UUID.randomUUID().toString());
+            var source = new QuoteSource(subscriberId, UUID.randomUUID().toString());
             sessions.put(code, source);
-            quotes.register(code, source, clock.instant());
+            prices.remove(code);
+            books.remove(code);
         }
         ack.add(topic);
     }
 
     @Override
-    public synchronized void onMessage(Message message, byte[] pattern) {
+    public void onMessage(Message message, byte[] pattern) {
+        var event = accept(message);
+        // 체결은 DB 잠금을 기다릴 수 있으므로 구독 상태 잠금 밖에서 호출한다.
+        if (event != null) {
+            try { events.publishEvent(event); }
+            catch (RuntimeException error) {
+                log.warn("event=direct_quote_event_failed stockCode={} causeType={}",
+                        event.stockCode(), error.getClass().getSimpleName());
+            }
+        }
+    }
+
+    private synchronized QuoteEvent accept(Message message) {
         String code = channelCode(message.getChannel());
-        if (code == null || !desired.contains(code) || !owner.ownsLease()) return;
+        if (code == null || !desired.contains(code) || !channels.isListening()) return null;
         var source = sessions.get(code);
-        if (source == null) return;
+        if (source == null) return null;
         Instant receivedAt = clock.instant();
         try {
             String channel = new String(message.getChannel(), StandardCharsets.UTF_8);
@@ -129,30 +146,64 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
             if (channel.startsWith("price:")) {
                 var price = price(node, code, receivedAt);
                 requireLive(price.exchangeTimestamp(), receivedAt);
-                var previous = prices.get(code);
+                var previous = Optional.ofNullable(prices.get(code)).map(QuoteEvent::price).orElse(null);
                 if (previous != null && (price.exchangeTimestamp().isBefore(previous.exchangeTimestamp())
                         || price.exchangeTimestamp().atZone(SEOUL).toLocalDate().equals(previous.exchangeTimestamp().atZone(SEOUL).toLocalDate())
                         && price.volume() < previous.volume()
-                        || price.exchangeTimestamp().equals(previous.exchangeTimestamp()) && price.volume().equals(previous.volume()))) return;
-                if (!owner.ownsLease()) return;
-                quotes.register(code, source, receivedAt);
-                quotes.savePrice(price, source);
-                prices.put(code, price);
-            } else {
-                var book = book(node, code, receivedAt);
-                requireLive(book.exchangeTimestamp(), receivedAt);
-                var previous = books.get(code);
-                if (previous != null && (book.exchangeTimestamp().isBefore(previous.exchangeTimestamp())
-                        || book.exchangeTimestamp().equals(previous.exchangeTimestamp())
-                        && book.asks().equals(previous.asks()) && book.bids().equals(previous.bids()))) return;
-                if (!owner.ownsLease()) return;
-                quotes.register(code, source, receivedAt);
-                quotes.saveOrderBook(book, source);
-                books.put(code, book);
+                        || price.exchangeTimestamp().equals(previous.exchangeTimestamp()) && price.volume().equals(previous.volume()))) return null;
+                var event = new QuoteEvent(code, "price", receivedAt, source, price, null);
+                prices.put(code, event);
+                return event;
             }
+            var book = book(node, code, receivedAt);
+            requireLive(book.exchangeTimestamp(), receivedAt);
+            var previous = Optional.ofNullable(books.get(code)).map(QuoteEvent::orderBook).orElse(null);
+            if (previous != null && (book.exchangeTimestamp().isBefore(previous.exchangeTimestamp())
+                    || book.exchangeTimestamp().equals(previous.exchangeTimestamp())
+                    && book.asks().equals(previous.asks()) && book.bids().equals(previous.bids()))) return null;
+            var event = new QuoteEvent(code, "orderbook", receivedAt, source, null, book);
+            books.put(code, event);
+            return event;
         } catch (RuntimeException error) {
             log.warn("event=ai_quote_rejected stockCode={} causeType={}", code, error.getClass().getSimpleName());
+            return null;
         }
+    }
+
+    @Override
+    public synchronized void onChannelUnsubscribed(byte[] channel, long count) {
+        String code = channelCode(channel);
+        if (code == null) return;
+        sessions.remove(code);
+        acknowledged.remove(code);
+        prices.remove(code);
+        books.remove(code);
+    }
+
+    public synchronized void assertAvailable(String code) {
+        if (!channels.isListening() || !desired.contains(code) || !sessions.containsKey(code)) {
+            throw new IllegalStateException("Redis 시세 구독을 사용할 수 없습니다.");
+        }
+    }
+
+    public synchronized void assertSource(String code, QuoteSource source) {
+        assertAvailable(code);
+        if (source == null || !source.equals(sessions.get(code))) {
+            throw new IllegalStateException("이전 Redis 구독 연결의 알림입니다.");
+        }
+    }
+
+    public synchronized Optional<QuoteEvent> latestQuote(String code) {
+        return current(code, prices.get(code));
+    }
+
+    public synchronized Optional<QuoteEvent> latestBookQuote(String code) {
+        return current(code, books.get(code));
+    }
+
+    private Optional<QuoteEvent> current(String code, QuoteEvent event) {
+        return channels.isListening() && event != null && event.source().equals(sessions.get(code))
+                ? Optional.of(event) : Optional.empty();
     }
 
     /** 스냅샷 GET에는 수신시각이 없다. 실행용 QuoteEvent로 승격하지 않는다. */
@@ -240,6 +291,7 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
                 books.clear();
             }
             channels.removeMessageListener(this);
+            callbacks.shutdownNow();
         }
     }
 }

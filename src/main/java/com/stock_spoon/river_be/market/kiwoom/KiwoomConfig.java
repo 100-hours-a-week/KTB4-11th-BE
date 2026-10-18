@@ -56,19 +56,6 @@ public class KiwoomConfig {
     }
 
     @Bean
-    KiwoomStockStream kiwoomStockStream(KiwoomTokenProvider tokenProvider,
-            @Value("${kiwoom.stream.enabled:false}") boolean enabled,
-            @Value("${kiwoom.collector.enabled:false}") boolean collector,
-            com.stock_spoon.river_be.market.RedisQuoteStore quotes,
-            RedisCollectorHeartbeat heartbeat) {
-        var stream = new KiwoomStockStream(tokenProvider, enabled && collector, java.util.List.of(), quotes);
-        stream.setCollectorCheck(heartbeat::ownsLease);
-        stream.setCollectorId(heartbeat.ownerId());
-        // 운영 체결 이벤트는 저장 후 Pub/Sub를 통해 담당 BE를 포함한 모든 BE에 전달한다.
-        return stream;
-    }
-
-    @Bean
     @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "kiwoom.stream.enabled", havingValue = "true")
     org.springframework.data.redis.listener.RedisMessageListenerContainer quoteListenerContainer(
             org.springframework.data.redis.connection.RedisConnectionFactory connections) {

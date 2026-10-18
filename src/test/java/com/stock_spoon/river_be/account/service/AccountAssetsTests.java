@@ -10,7 +10,7 @@ import com.stock_spoon.river_be.order.repository.OrderRepository;
 import com.stock_spoon.river_be.account.entity.Account;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import com.stock_spoon.river_be.account.exception.AccountException;
-import com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient;
+import com.stock_spoon.river_be.market.RedisMarketPrice;
 import com.stock_spoon.river_be.user.entity.User;
 import com.stock_spoon.river_be.user.repository.UserRepository;
 import org.junit.jupiter.api.Test;
@@ -31,7 +31,7 @@ class AccountAssetsTests {
     @Autowired HoldingRepository holdings;
     @Autowired OrderRepository orders;
     @Autowired ExecutionRepository executions;
-    @MockitoBean KiwoomMarketClient market;
+    @MockitoBean RedisMarketPrice market;
 
     @Test void evaluatesEveryHoldingAndSeparatesAccounts() {
         var user = users.save(new User("평가 테스트"));

@@ -3,7 +3,7 @@ package com.stock_spoon.river_be.execution.service;
 import com.stock_spoon.river_be.holding.entity.Holding;
 import com.stock_spoon.river_be.holding.repository.HoldingRepository;
 
-import com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient;
+import com.stock_spoon.river_be.market.RedisMarketPrice;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -11,7 +11,7 @@ import static org.mockito.Mockito.*;
 
 class OrderBuyPriceServiceTests {
     private final HoldingRepository holdings = mock(HoldingRepository.class);
-    private final KiwoomMarketClient market = mock(KiwoomMarketClient.class);
+    private final RedisMarketPrice market = mock(RedisMarketPrice.class);
     private final OrderBuyPriceService prices = new OrderBuyPriceService(holdings, market);
 
     private Holding holding(String code) {
@@ -35,7 +35,7 @@ class OrderBuyPriceServiceTests {
     }
 
     @Test
-    void unavailableOrNonPositiveRestPriceReturnsNoValuationWithoutThrowing() {
+    void unavailableOrNonPositiveRedisPriceReturnsNoValuationWithoutThrowing() {
         doReturn(List.of(holding("000660"))).when(holdings).findAllByAccountIds(List.of(1L));
         when(market.currentPrice("000660")).thenThrow(new IllegalStateException());
         assertThat(prices.fetch(1, "005930")).isEmpty();
@@ -45,7 +45,7 @@ class OrderBuyPriceServiceTests {
     }
 
     @Test
-    void noOtherHoldingNeedsNoRestCall() {
+    void noOtherHoldingNeedsNoRedisCall() {
         doReturn(List.of(holding("005930"))).when(holdings).findAllByAccountIds(List.of(1L));
         assertThat(prices.fetch(1, "005930")).isEmpty();
         verifyNoInteractions(market);

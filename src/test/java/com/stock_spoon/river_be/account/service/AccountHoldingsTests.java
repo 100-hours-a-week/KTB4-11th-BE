@@ -28,6 +28,8 @@ import static org.mockito.Mockito.*;
 @SpringBootTest
 @Transactional
 class AccountHoldingsTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.stock_spoon.river_be.market.RedisMarketPrice redisPrices;
     @Autowired AccountHoldingsService service;
     @Autowired AccountRepository accounts;
     @Autowired UserRepository users;
@@ -125,12 +127,12 @@ class AccountHoldingsTests {
         em.clear();
         assertThatThrownBy(() -> service.list(user.getId(), account.getId(), null, null, null)).isInstanceOf(AccountException.class);
         assertThatThrownBy(() -> service.list(user.getId(), Long.MAX_VALUE, null, null, null)).isInstanceOf(AccountException.class);
-        verify(market, never()).currentPrice(anyString());
+        verify(redisPrices, never()).currentPrice(anyString());
     }
 
     @Test void doesNotHideMarketFailuresInSuccessfulResponses() {
         add("000001", 1, "100", 100, null);
-        when(market.currentPrice("000001")).thenThrow(new IllegalStateException("조회 실패"));
+        when(redisPrices.currentPrice("000001")).thenThrow(new IllegalStateException("조회 실패"));
         assertThatThrownBy(() -> service.list(user.getId(), account.getId(), null, null, null))
                 .isInstanceOfSatisfying(AccountException.class, e -> {
                     assertThat(e.status().value()).isEqualTo(503);
@@ -167,7 +169,7 @@ class AccountHoldingsTests {
 
     private void add(String code, long quantity, String cost, long price, String time) {
         holdings.save(new Holding(account, code, quantity, new BigDecimal(cost)));
-        when(market.currentPrice(code)).thenReturn(price);
+        when(redisPrices.currentPrice(code)).thenReturn(price);
         when(market.stockDetails(code)).thenReturn(new KiwoomMarketClient.StockDetails(code, "종목" + code, "전기·전자"));
         if (time != null) {
             var order = orders.save(Order.pendingLimit(account, code, Order.Side.BUY, quantity, price,

@@ -1,5 +1,6 @@
 package com.stock_spoon.river_be.market.kiwoom;
 
+import com.stock_spoon.river_be.market.MarketStream;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -24,11 +25,11 @@ class CollectorSecurityTests {
     @Autowired WebApplicationContext context;
     @MockitoBean KiwoomRestTransport transport;
     @MockitoBean RedisCollectorHeartbeat heartbeat;
-    @MockitoBean KiwoomStockStream stream;
+    @MockitoBean MarketStream stream;
     @MockitoBean StockMetadataCache metadata;
     @LocalServerPort int port;
     private MockMvc mvc;
-    private static final String BODY = "{\"apiId\":\"ka10001\",\"stockCode\":\"005930\",\"collectorId\":\"owner-1\"}";
+    private static final String BODY = "{\"apiId\":\"ka10100\",\"stockCode\":\"005930\",\"collectorId\":\"owner-1\"}";
 
     @BeforeEach
     void setup() {
@@ -50,11 +51,19 @@ class CollectorSecurityTests {
     }
 
     @Test
+    void retiredCurrentPriceTrIsRejectedEvenWithValidSecret() throws Exception {
+        mvc.perform(post("/internal/kiwoom/query").header("X-Kiwoom-Collector-Key", "test-only-collector-shared-secret")
+                .contentType(MediaType.APPLICATION_JSON).content(BODY.replace("ka10100", "ka10001")))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(transport);
+    }
+
+    @Test
     void dedicatedSecretWorksWithoutUserLoginOrCsrf() throws Exception {
         mvc.perform(post("/internal/kiwoom/query").header("X-Kiwoom-Collector-Key", "test-only-collector-shared-secret")
                 .contentType(MediaType.APPLICATION_JSON).content(BODY))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.return_code").value(0));
-        verify(transport).query("ka10001", "/api/dostk/stkinfo", Map.of("stk_cd", "005930"));
+        verify(transport).query("ka10100", "/api/dostk/stkinfo", Map.of("stk_cd", "005930"));
     }
 
     @Test
@@ -64,7 +73,7 @@ class CollectorSecurityTests {
                 .contentType(MediaType.APPLICATION_JSON).content(BODY)).andExpect(status().isServiceUnavailable());
         when(heartbeat.ownsLease()).thenReturn(true);
         mvc.perform(post("/internal/kiwoom/query").header("X-Kiwoom-Collector-Key", "test-only-collector-shared-secret")
-                .contentType(MediaType.APPLICATION_JSON).content(BODY.replace("ka10001", "kt10000")))
+                .contentType(MediaType.APPLICATION_JSON).content(BODY.replace("ka10100", "kt10000")))
                 .andExpect(status().isBadRequest());
         verifyNoInteractions(transport);
     }
@@ -79,9 +88,9 @@ class CollectorSecurityTests {
         var config = new KiwoomConfig();
         var remote = config.kiwoomRestTransport(tokens, null, redis, false,
                 "http://localhost:" + port, "test-only-collector-shared-secret");
-        org.assertj.core.api.Assertions.assertThat(remote.query("ka10001", "/api/dostk/stkinfo", Map.of("stk_cd", "005930")))
+        org.assertj.core.api.Assertions.assertThat(remote.query("ka10100", "/api/dostk/stkinfo", Map.of("stk_cd", "005930")))
                 .containsEntry("return_code", 0);
-        verify(transport).query("ka10001", "/api/dostk/stkinfo", Map.of("stk_cd", "005930"));
+        verify(transport).query("ka10100", "/api/dostk/stkinfo", Map.of("stk_cd", "005930"));
         verifyNoInteractions(tokens);
     }
 

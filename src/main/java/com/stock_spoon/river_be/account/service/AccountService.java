@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
 import com.stock_spoon.river_be.holding.repository.HoldingRepository;
-import com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient;
+import com.stock_spoon.river_be.market.RedisMarketPrice;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.http.HttpStatus;
@@ -36,13 +36,13 @@ public class AccountService {
     private final OrderService orderService;
     private final OrderRepository orders;
     private final HoldingRepository holdings;
-    private final KiwoomMarketClient market;
+    private final RedisMarketPrice market;
     private final TransactionTemplate read;
     private final com.stock_spoon.river_be.competition.repository.CompetitionParticipantRepository participants;
 
     public AccountService(AccountRepository accountRepository, UserRepository userRepository,
             OrderService orderService, OrderRepository orders, HoldingRepository holdings,
-            KiwoomMarketClient market,
+            RedisMarketPrice market,
             PlatformTransactionManager transactions,
             com.stock_spoon.river_be.competition.repository.CompetitionParticipantRepository participants) {
         this.participants = participants;

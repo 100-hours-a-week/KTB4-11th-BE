@@ -21,7 +21,7 @@ class MultiProcessRedisLiveTests {
         var redis = new StringRedisTemplate(connection);
         Object database = null;
         boolean keysOwned = false;
-        var keys = List.of("quote:TST009:metadata", "quote:TST009:price", "quote:TST009:subscription");
+        var keys = List.of("quote:TST009:metadata", "price:TST009");
         try {
             assertThat(redis.hasKey("coord:kiwoom:collector")).as("기존 담당 보호").isFalse();
             for (String key : keys) assertThat(redis.hasKey(key)).as("기존 테스트 키 보호: %s", key).isFalse();
@@ -75,13 +75,13 @@ class MultiProcessRedisLiveTests {
     }
 
     @Test
-    void connectionFaultKeepsPendingOrderAndRequiresNewCollectorAndSession() throws Exception {
+    void redisReconnectResumesOriginalQuotesWithoutRestartingRestCollector() throws Exception {
         var connection = new LettuceConnectionFactory("localhost", 6380);
         connection.afterPropertiesSet(); connection.start();
         var redis = new StringRedisTemplate(connection);
         Object database = null;
         boolean keysOwned = false;
-        var keys = List.of("quote:TST009:metadata", "quote:TST009:price", "quote:TST009:subscription");
+        var keys = List.of("quote:TST009:metadata", "price:TST009");
         try (var proxy = new RedisFaultProxy()) {
             assertThat(redis.hasKey("coord:kiwoom:collector")).isFalse();
             for (String key : keys) assertThat(redis.hasKey(key)).as("기존 테스트 키 보호: %s", key).isFalse();
@@ -97,59 +97,34 @@ class MultiProcessRedisLiveTests {
                 String endpoint = collector.ask("endpoint");
                 try (var first = new Node(false, url, endpoint, proxy.port(), 0);
                      var second = new Node(false, url, endpoint, proxy.port(), 0)) {
-                    assertThat(first.ask("badquery")).isEqualTo("unavailable");
-                    assertThat(collector.ask("calls")).isEqualTo("0");
-                    assertThat(first.ask("query")).isEqualTo("119500");
+                    assertThat(first.ask("query")).isEqualTo("0");
                     assertThat(first.ask("seed")).isEqualTo("ok");
                     assertThat(first.ask("subscribe")).isEqualTo("ok");
                     assertThat(second.ask("subscribe")).isEqualTo("ok");
                     assertThat(collector.ask("emit-high")).isEqualTo("ok");
                     assertThat(first.ask("event")).isEqualTo("200000");
                     assertThat(second.ask("event")).isEqualTo("200000");
-                    assertThat(first.ask("state")).isEqualTo("1:0:1000000");
                     proxy.disconnect();
                     assertThat(first.ask("query")).isEqualTo("unavailable");
-                    assertThat(second.ask("latest")).isEqualTo("unavailable");
-                    assertThat(first.ask("create")).isEqualTo("503");
-                    assertThat(second.ask("cancel-extra")).isEqualTo("CANCELLED");
-                    assertThat(second.ask("replay-low")).isEqualTo("ok");
                     assertThat(first.ask("state")).isEqualTo("1:0:1000000");
-                    assertThat(second.ask("state")).isEqualTo("1:0:1000000");
-                    assertThat(collector.ask("owner")).isEqualTo("false");
                     awaitCollectorStopped(redis);
                     proxy.reconnect();
-                    // Redis 연결이 돌아와도 자격을 잃은 담당은 자동으로 재획득하지 않는다.
                     assertThat(collector.ask("owner")).isEqualTo("false");
-                    assertThat(collector.ask("emit")).isEqualTo("unavailable");
-                    assertThat(second.ask("replay-low")).isEqualTo("ok");
-                    assertThat(second.ask("state")).isEqualTo("1:0:1000000");
-                    collector.kill();
-                    int serverPort = java.net.URI.create(endpoint).getPort();
-                    try (var restarted = new Node(true, url, "", proxy.port(), serverPort)) {
-                        assertThat(first.ask("query")).isEqualTo("119500");
-                        assertThat(first.ask("latest")).isEqualTo("empty");
-                        assertThat(second.ask("replay-low")).isEqualTo("ok");
-                        assertThat(second.ask("state")).isEqualTo("1:0:1000000");
-                        assertThat(first.ask("clear-events")).isEqualTo("ok");
-                        assertThat(second.ask("clear-events")).isEqualTo("ok");
-                        assertThat(restarted.ask("emit-high")).isEqualTo("ok");
-                        assertThat(first.ask("event")).isEqualTo("200000");
-                        assertThat(second.ask("event")).isEqualTo("200000");
-                        assertThat(restarted.ask("new-session")).isEqualTo("ok");
-                        assertThat(first.ask("latest")).isEqualTo("empty");
-                        assertThat(first.ask("replay-low")).isEqualTo("ok");
-                        assertThat(first.ask("state")).isEqualTo("1:0:1000000");
-                        assertThat(first.ask("clear-events")).isEqualTo("ok");
-                        assertThat(second.ask("clear-events")).isEqualTo("ok");
-                        assertThat(restarted.ask("emit")).isEqualTo("ok");
-                        assertThat(first.ask("event")).isEqualTo("119500");
-                        assertThat(second.ask("event")).isEqualTo("119500");
-                        assertThat(first.ask("assets")).isEqualTo("1:880500");
-                        assertThat(second.ask("assets")).isEqualTo("1:880500");
-                    }
+                    // 재연결 ACK는 스냅샷만으로 주문을 체결하지 않는다.
+                    assertThat(first.ask("subscribe")).isEqualTo("ok");
+                    assertThat(second.ask("subscribe")).isEqualTo("ok");
+                    assertThat(first.ask("state")).isEqualTo("1:0:1000000");
+                    assertThat(first.ask("clear-events")).isEqualTo("ok");
+                    assertThat(second.ask("clear-events")).isEqualTo("ok");
+                    org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(30)).until(() ->
+                            "true".equals(first.ask("subscription-ready")) && "true".equals(second.ask("subscription-ready")));
+                    new MultiProcessRedisNode.Fixture().emit(redis, 119500);
+                    assertThat(first.ask("event")).isEqualTo("119500");
+                    assertThat(second.ask("event")).isEqualTo("119500");
+                    assertThat(first.ask("assets")).isEqualTo("1:880500");
+                    assertThat(second.ask("assets")).isEqualTo("1:880500");
                 }
             }
-            awaitCollectorStopped(redis);
         } finally {
             if (database != null) database.getClass().getMethod("stop").invoke(database);
             if (keysOwned) {
@@ -161,7 +136,7 @@ class MultiProcessRedisLiveTests {
     }
 
     @Test
-    void threeProcessesShareMetadataAndPriceAndRejectMissingCollector() throws Exception {
+    void threeProcessesShareRestMetadataAndReceiveDirectQuotesIndependentlyOfCollector() throws Exception {
         var connection = new LettuceConnectionFactory("localhost", 6380);
         connection.afterPropertiesSet(); connection.start();
         var redis = new StringRedisTemplate(connection);
@@ -170,8 +145,7 @@ class MultiProcessRedisLiveTests {
         try {
             assertThat(redis.hasKey("coord:kiwoom:collector")).as("기존 담당 실행 중이면 중단").isFalse();
             assertThat(redis.hasKey("quote:TST009:metadata")).isFalse();
-            assertThat(redis.hasKey("quote:TST009:price")).isFalse();
-            assertThat(redis.hasKey("quote:TST009:subscription")).isFalse();
+            assertThat(redis.hasKey("price:TST009")).isFalse();
             testKeysOwned = true;
             var h2 = Class.forName("org.h2.tools.Server");
             database = h2.getMethod("createTcpServer", String[].class).invoke(null,
@@ -186,8 +160,8 @@ class MultiProcessRedisLiveTests {
                     assertThat(first.ask("metadata")).isEqualTo("TEST STOCK");
                     assertThat(second.ask("metadata")).isEqualTo("TEST STOCK");
                     assertThat(collector.ask("calls")).isEqualTo("1");
-                    assertThat(first.ask("query")).isEqualTo("119500");
-                    assertThat(second.ask("query")).isEqualTo("119500");
+                    assertThat(first.ask("query")).isEqualTo("0");
+                    assertThat(second.ask("query")).isEqualTo("0");
                     assertThat(first.ask("seed")).isEqualTo("ok");
                     assertThat(first.ask("subscribe")).isEqualTo("ok");
                     assertThat(second.ask("subscribe")).isEqualTo("ok");
@@ -202,12 +176,12 @@ class MultiProcessRedisLiveTests {
                     assertThat(first.ask("query")).isEqualTo("unavailable");
                     // 종료 정리 전에 프로세스가 끝난 경우에도 활동 TTL(15초)로 판별한다.
                     awaitCollectorStopped(redis);
-                    assertThat(second.ask("latest")).isEqualTo("empty");
+                    assertThat(second.ask("latest")).isEqualTo("119500");
                 }
             }
         } finally {
             if (database != null) database.getClass().getMethod("stop").invoke(database);
-            if (testKeysOwned) for (String key : List.of("quote:TST009:metadata", "quote:TST009:price", "quote:TST009:subscription")) redis.delete(key);
+            if (testKeysOwned) for (String key : List.of("quote:TST009:metadata", "price:TST009")) redis.delete(key);
             connection.destroy();
         }
     }

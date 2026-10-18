@@ -114,10 +114,7 @@ class OrderExecutionEventTests {
         connection.afterPropertiesSet();
         connection.start();
         var redis = new org.springframework.data.redis.core.StringRedisTemplate(connection);
-        var store = new com.stock_spoon.river_be.market.RedisQuoteStore(redis);
         String code = "TST005";
-        String owner = java.util.UUID.randomUUID().toString();
-        var source = new com.stock_spoon.river_be.market.QuoteStore.Source(owner, java.util.UUID.randomUUID().toString());
         var account = account("공유 시세 체결");
         var order = orders.save(Order.pendingLimit(account, code, Order.Side.BUY, 1, 70000,
                 Order.Source.AI, null, NOW.minusSeconds(1)));
@@ -127,9 +124,6 @@ class OrderExecutionEventTests {
         var containers = new java.util.ArrayList<org.springframework.data.redis.listener.RedisMessageListenerContainer>();
         var streams = new java.util.ArrayList<com.stock_spoon.river_be.market.RedisMarketStream>();
         try {
-            assertThat(redis.hasKey("coord:kiwoom:collector")).isFalse();
-            redis.opsForValue().set("coord:kiwoom:collector", owner, java.time.Duration.ofSeconds(15));
-            store.remove(code);
             for (int i = 0; i < 2; i++) {
                 var channel = new org.springframework.data.redis.listener.RedisMessageListenerContainer();
                 channel.setConnectionFactory(connection);
@@ -137,27 +131,28 @@ class OrderExecutionEventTests {
                 channel.start();
                 containers.add(channel);
                 var handler = new java.util.concurrent.atomic.AtomicReference<OrderExecutionListener>();
-                var shared = new com.stock_spoon.river_be.market.RedisMarketStream(store,
-                        mock(com.stock_spoon.river_be.market.AiQuoteAdapter.class), mock(com.stock_spoon.river_be.market.kiwoom.RedisCollectorHeartbeat.class),
-                        channel, event -> {
-                            if (!(event instanceof com.stock_spoon.river_be.market.RedisQuoteStore.QuoteEvent quote)) return;
-                            ready.countDown();
-                            try {
-                                if (!start.await(3, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("동시 처리 대기 실패");
-                                handler.get().onQuote(quote);
-                            } catch (InterruptedException error) {
-                                Thread.currentThread().interrupt();
-                                throw new IllegalStateException(error);
-                            } finally { finished.countDown(); }
-                        }, orders);
+                var adapter = new com.stock_spoon.river_be.market.AiQuoteAdapter(redis, channel, event -> {
+                    if (!(event instanceof com.stock_spoon.river_be.market.RedisQuoteStore.QuoteEvent quote)) return;
+                    ready.countDown();
+                    try {
+                        if (!start.await(3, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("동시 처리 대기 실패");
+                        handler.get().onQuote(quote);
+                    } catch (InterruptedException error) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException(error);
+                    } finally { finished.countDown(); }
+                });
+                org.springframework.test.util.ReflectionTestUtils.setField(adapter, "clock", Clock.fixed(NOW, ZoneOffset.UTC));
+                var shared = new com.stock_spoon.river_be.market.RedisMarketStream(adapter);
                 streams.add(shared);
                 handler.set(new OrderExecutionListener(orders, executions, executionService,
                         subscriptions, shared, market, mock(OrderBuyPriceService.class)));
                 shared.updateSymbols(java.util.Set.of(code));
             }
-            store.register(code, source, Instant.now());
-            store.savePrice(new KiwoomStockStream.StockPrice(code, new BigDecimal("69000"),
-                    BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(10, 0), NOW), source);
+            redis.convertAndSend("price:" + code, """
+                    {"code":"TST005","price":69000,"change":0,"rate":0,"volume":100,
+                     "timestamp":"2026-10-19T10:00:00+09:00"}
+                    """);
             assertThat(ready.await(3, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
             start.countDown();
             assertThat(finished.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
@@ -168,8 +163,6 @@ class OrderExecutionEventTests {
             start.countDown();
             streams.forEach(com.stock_spoon.river_be.market.RedisMarketStream::close);
             for (var container : containers) container.destroy();
-            store.remove(code);
-            if (owner.equals(redis.opsForValue().get("coord:kiwoom:collector"))) redis.delete("coord:kiwoom:collector");
             connection.destroy();
         }
     }

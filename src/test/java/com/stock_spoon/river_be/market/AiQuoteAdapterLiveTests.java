@@ -1,6 +1,5 @@
 package com.stock_spoon.river_be.market;
 
-import com.stock_spoon.river_be.market.kiwoom.RedisCollectorHeartbeat;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -14,62 +13,60 @@ import static org.awaitility.Awaitility.await;
 
 @EnabledIfEnvironmentVariable(named = "REDIS_LIVE_TEST", matches = "true")
 class AiQuoteAdapterLiveTests {
-    @Test void relaysRealAiPubSubAndInvalidatesSnapshotsOnReconnect() throws Exception {
+    @Test void twoIndependentBesReadOriginalChannelsWithoutRelayOrSharedState() throws Exception {
         var connection = new LettuceConnectionFactory("localhost", 6380);
         connection.afterPropertiesSet(); connection.start();
         var redis = new StringRedisTemplate(connection);
-        var store = new RedisQuoteStore(redis);
-        var owner = new RedisCollectorHeartbeat(redis, true);
-        var channels = new RedisMessageListenerContainer();
-        channels.setConnectionFactory(connection); channels.afterPropertiesSet(); channels.start();
-        var adapter = new AiQuoteAdapter(redis, store, owner, channels);
-        String code = "TST011";
-        var keys = List.of("price:" + code, "orderbook:" + code, "quote:" + code + ":price",
-                "quote:" + code + ":orderbook", "quote:" + code + ":subscription");
-        var events = new LinkedBlockingQueue<String>();
-        var subscribed = new CountDownLatch(1);
-        class Listener implements org.springframework.data.redis.connection.MessageListener,
-                org.springframework.data.redis.connection.SubscriptionListener {
-            public void onMessage(org.springframework.data.redis.connection.Message message, byte[] pattern) {
-                events.add(new String(message.getBody(), java.nio.charset.StandardCharsets.UTF_8));
-            }
-            public void onChannelSubscribed(byte[] channel, long count) { subscribed.countDown(); }
-        }
+        var containers = new ArrayList<RedisMessageListenerContainer>();
+        var adapters = new ArrayList<AiQuoteAdapter>();
+        var first = new LinkedBlockingQueue<RedisQuoteStore.QuoteEvent>();
+        var second = new LinkedBlockingQueue<RedisQuoteStore.QuoteEvent>();
+        var relayed = new LinkedBlockingQueue<String>();
+        String code = "TST019";
+        String key = "price:" + code;
+        String timestamp = OffsetDateTime.now(ZoneOffset.ofHours(9)).withNano(0).toString();
+        String payload = "{\"code\":\"TST019\",\"price\":70000,\"change\":-100,\"rate\":-0.14,\"volume\":100,\"timestamp\":\"" + timestamp + "\"}";
         boolean owned = false;
         try {
-            for (String key : keys) assertThat(redis.hasKey(key)).as(key).isFalse();
-            assertThat(redis.hasKey("coord:kiwoom:collector")).isFalse();
-            owner.start(); owned = true;
-            channels.addMessageListener(new Listener(), new ChannelTopic("quotes:" + code));
-            assertThat(subscribed.await(5, TimeUnit.SECONDS)).isTrue();
-            String timestamp = OffsetDateTime.now(ZoneOffset.ofHours(9)).withNano(0).toString();
-            String payload = "{\"code\":\"TST011\",\"price\":70000,\"change\":-100,\"rate\":-0.14,\"volume\":100,\"timestamp\":\"" + timestamp + "\"}";
-            redis.opsForValue().set("price:" + code, payload);
-            assertThat(adapter.latestPrice(code).orElseThrow().receivedAt()).isNull();
-            adapter.updateSymbols(Set.of(code));
-            assertThat(events.poll(150, TimeUnit.MILLISECONDS)).isNull();
-            redis.convertAndSend("price:" + code, payload);
-            assertThat(events.poll(5, TimeUnit.SECONDS)).isNotNull();
-            assertThat(store.usablePrice(code).orElseThrow().exchangeTimestamp()).isEqualTo(OffsetDateTime.parse(timestamp).toInstant());
-            String book = "{\"code\":\"TST011\",\"asks\":[{\"price\":70100,\"qty\":10}],\"bids\":[{\"price\":70000,\"qty\":20}],\"timestamp\":\"" + timestamp + "\"}";
-            redis.opsForValue().set("orderbook:" + code, book);
-            assertThat(adapter.latestOrderBook(code).orElseThrow().receivedAt()).isNull();
+            owned = Boolean.TRUE.equals(redis.opsForValue().setIfAbsent(key, payload, Duration.ofMinutes(1)));
+            assertThat(owned).as("기존 원본 데이터 보호").isTrue();
+            for (var queue : List.of(first, second)) {
+                var channels = new RedisMessageListenerContainer();
+                channels.setConnectionFactory(connection); channels.afterPropertiesSet(); channels.start();
+                containers.add(channels);
+                var adapter = new AiQuoteAdapter(redis, channels, event -> queue.add((RedisQuoteStore.QuoteEvent) event));
+                adapters.add(adapter);
+                assertThat(adapter.latestPrice(code).orElseThrow().receivedAt()).isNull();
+                adapter.updateSymbols(Set.of(code));
+            }
+            var channels = containers.getFirst();
+            channels.addMessageListener((message, pattern) -> relayed.add("unexpected"), new ChannelTopic("quotes:" + code));
+            assertThat(first.poll(100, TimeUnit.MILLISECONDS)).isNull();
+            redis.convertAndSend(key, payload);
+            var a = first.poll(5, TimeUnit.SECONDS);
+            var b = second.poll(5, TimeUnit.SECONDS);
+            assertThat(a).isNotNull(); assertThat(b).isNotNull();
+            assertThat(a.price()).isEqualToIgnoringGivenFields(b.price(), "receivedAt");
+            assertThat(a.source().collectorId()).isNotEqualTo(b.source().collectorId());
+            adapters.getFirst().assertSource(code, a.source());
+            assertThatThrownBy(() -> adapters.get(1).assertSource(code, a.source())).isInstanceOf(IllegalStateException.class);
+            String book = "{\"code\":\"TST019\",\"asks\":[{\"price\":70100,\"qty\":10}],\"bids\":[{\"price\":70000,\"qty\":20}],\"timestamp\":\"" + timestamp + "\"}";
             redis.convertAndSend("orderbook:" + code, book);
-            assertThat(events.poll(5, TimeUnit.SECONDS)).contains("orderbook");
-            assertThat(store.usableOrderBook(code).orElseThrow().asks().getFirst().quantity()).isEqualTo(10);
-            var source = store.activeSource(code).orElseThrow();
+            assertThat(first.poll(5, TimeUnit.SECONDS).orderBook().asks().getFirst().quantity()).isEqualTo(10);
+            assertThat(second.poll(5, TimeUnit.SECONDS).type()).isEqualTo("orderbook");
             channels.stop(); channels.start();
-            await().atMost(Duration.ofSeconds(5)).until(() -> store.activeSource(code).filter(source::equals).isEmpty());
-            assertThat(store.usablePrice(code)).isEmpty();
-            assertThat(store.usableOrderBook(code)).isEmpty();
-            assertThat(events.poll(150, TimeUnit.MILLISECONDS)).isNull();
-            assertThat(redis.opsForValue().get("price:" + code)).isEqualTo(payload);
-            owner.close();
-            adapter.updateSymbols(Set.of());
-            assertThat(redis.opsForValue().get("price:" + code)).isEqualTo(payload);
+            await().atMost(Duration.ofSeconds(5)).until(() -> adapters.getFirst().latestQuote(code).isEmpty());
+            assertThatThrownBy(() -> adapters.getFirst().assertSource(code, a.source())).isInstanceOf(IllegalStateException.class);
+            assertThat(adapters.getFirst().latestBookQuote(code)).isEmpty();
+            assertThat(first.poll(150, TimeUnit.MILLISECONDS)).isNull();
+            assertThat(relayed).isEmpty();
+            assertThat(redis.opsForValue().get(key)).isEqualTo(payload);
+            for (var adapter : adapters) adapter.updateSymbols(Set.of());
+            assertThat(redis.opsForValue().get(key)).isEqualTo(payload);
         } finally {
-            adapter.close(); channels.destroy();
-            if (owned) { keys.forEach(redis::delete); owner.close(); }
+            adapters.forEach(AiQuoteAdapter::close);
+            for (var container : containers) container.destroy();
+            if (owned) redis.delete(key);
             connection.destroy();
         }
     }

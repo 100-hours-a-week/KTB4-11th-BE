@@ -32,7 +32,6 @@ class KiwoomRedisLiveTests {
         var leaseClock = Executors.newSingleThreadScheduledExecutor();
         KiwoomStockStream collector = null;
         KiwoomStockStream disabledStream = null;
-        RedisMarketStream ordinary = null;
         RedisMessageListenerContainer channels = null;
         boolean acquired = false;
         boolean keysOwned = false;
@@ -73,11 +72,11 @@ class KiwoomRedisLiveTests {
             var received = new LinkedBlockingQueue<RedisQuoteStore.QuoteEvent>();
             channels = new RedisMessageListenerContainer();
             channels.setConnectionFactory(connections); channels.afterPropertiesSet(); channels.start();
-            ordinary = new RedisMarketStream(store, mock(AiQuoteAdapter.class),
-                    normalOwner, channels, event -> {
-                        if (event instanceof RedisQuoteStore.QuoteEvent quote) received.add(quote);
-                    }, mock(com.stock_spoon.river_be.order.repository.OrderRepository.class));
-            ordinary.updateSymbols(Set.of("005930"));
+            channels.addMessageListener((message, pattern) -> {
+                var quote = tools.jackson.databind.json.JsonMapper.builder().build()
+                        .readValue(message.getBody(), RedisQuoteStore.QuoteEvent.class);
+                if (store.activeSource(quote.stockCode()).filter(quote.source()::equals).isPresent()) received.add(quote);
+            }, new org.springframework.data.redis.listener.ChannelTopic("quotes:005930"));
             collector.updateSymbols(Set.of("005930"));
             collector.whenSubscribed("005930").get(25, TimeUnit.SECONDS);
             assertThat(collector.state()).isEqualTo(KiwoomStockStream.State.SUBSCRIBED);
@@ -89,14 +88,14 @@ class KiwoomRedisLiveTests {
                 if (event != null) messageTimes.add(event.receivedAt());
             }
             assertThat(messageTimes.size()).as("서로 다른 시각의 실제 현재가 알림 2회 이상").isGreaterThanOrEqualTo(2);
-            assertThat(ordinary.latest("005930")).isPresent();
-            assertThat(ordinary.latestOrderBook("005930")).isPresent();
+            assertThat(store.usablePrice("005930")).isPresent();
+            assertThat(store.usableOrderBook("005930")).isPresent();
             assertThat(redis.getExpire("quote:005930:price")).isBetween(86300L, 86400L);
             assertThat(redis.getExpire("quote:005930:orderbook")).isBetween(86300L, 86400L);
-            System.out.println("LIVE CHECK: 실제 현재가·호가 Redis 저장, 일반 BE 처리 경로의 Pub/Sub 수신 확인");
+            System.out.println("LIVE CHECK: 실제 현재가·호가 Redis 저장, 단독 키움 검증 경로의 Pub/Sub 수신 확인");
             var previousSource = store.activeSource("005930").orElseThrow();
             collector.close();
-            assertThat(ordinary.latest("005930")).isEmpty();
+            assertThat(store.usablePrice("005930")).isEmpty();
             received.clear();
             collector = config.kiwoomStockStream(tokens, true, true, store, owner);
             collector.updateSymbols(Set.of("005930"));
@@ -105,9 +104,7 @@ class KiwoomRedisLiveTests {
             var nextSource = store.activeSource("005930").orElseThrow();
             assertThat(nextSource.collectorId()).isEqualTo(previousSource.collectorId());
             assertThat(nextSource.sessionId()).isNotEqualTo(previousSource.sessionId());
-            var consumer = ordinary;
-            assertThatThrownBy(() -> consumer.assertSource("005930", previousSource))
-                    .isInstanceOf(IllegalStateException.class);
+            assertThat(store.activeSource("005930").filter(previousSource::equals)).isEmpty();
             long recoveryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(45);
             boolean newPrice = false;
             while (System.nanoTime() < recoveryDeadline && (!newPrice || store.usableOrderBook("005930").isEmpty())) {
@@ -115,7 +112,7 @@ class KiwoomRedisLiveTests {
                 if (event != null && nextSource.equals(event.source())) newPrice = true;
             }
             assertThat(newPrice).as("재연결의 실제 현재가 알림 수신").isTrue();
-            assertThat(ordinary.latestOrderBook("005930")).isPresent();
+            assertThat(store.usableOrderBook("005930")).isPresent();
             System.out.println("LIVE CHECK: 실제 WebSocket 종료·새 LOGIN/REG·새 시세 수신, 이전 연결 출처 거절 확인");
             collector.close();
             owner.close();
@@ -129,7 +126,6 @@ class KiwoomRedisLiveTests {
             } finally { nextOwner.close(); }
         } finally {
             if (collector != null) collector.close();
-            if (ordinary != null) ordinary.close();
             if (channels != null) { channels.stop(); channels.destroy(); }
             if (disabledStream != null) disabledStream.close();
             leaseClock.shutdownNow();

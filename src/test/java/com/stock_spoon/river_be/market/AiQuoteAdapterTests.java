@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.*;
 import org.springframework.data.redis.connection.Message;
 import org.springframework.data.redis.listener.RedisMessageListenerContainer;
-import com.stock_spoon.river_be.market.kiwoom.RedisCollectorHeartbeat;
+import org.springframework.context.ApplicationEventPublisher;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -19,15 +19,13 @@ class AiQuoteAdapterTests {
             """;
     private final StringRedisTemplate redis = mock(StringRedisTemplate.class);
     private final ValueOperations<String, String> values = mock(ValueOperations.class);
-    private final RedisQuoteStore quotes = mock(RedisQuoteStore.class);
-    private final RedisCollectorHeartbeat owner = mock(RedisCollectorHeartbeat.class);
+    private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
     private final RedisMessageListenerContainer channels = mock(RedisMessageListenerContainer.class);
 
     private AiQuoteAdapter adapter() {
         when(redis.opsForValue()).thenReturn(values);
-        when(owner.ownsLease()).thenReturn(true);
-        when(owner.ownerId()).thenReturn("be-relay");
-        return new AiQuoteAdapter(redis, quotes, owner, channels, Clock.fixed(NOW, ZoneOffset.UTC));
+        when(channels.isListening()).thenReturn(true);
+        return new AiQuoteAdapter(redis, channels, events, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     @Test void snapshotMapsSignedFieldsWithoutInventingReceiptOrPublishing() {
@@ -40,7 +38,7 @@ class AiQuoteAdapterTests {
         assertThat(price.tradeTime()).isEqualTo(LocalTime.of(10, 0, 1));
         assertThat(price.exchangeTimestamp()).isEqualTo(NOW.minusSeconds(1));
         assertThat(price.receivedAt()).isNull();
-        verifyNoInteractions(quotes);
+        verifyNoInteractions(events);
         verify(redis, never()).convertAndSend(anyString(), anyString());
     }
 
@@ -49,26 +47,28 @@ class AiQuoteAdapterTests {
         adapter.updateSymbols(Set.of("005930"));
         adapter.onChannelSubscribed(bytes("price:005930"), 1);
         adapter.onChannelSubscribed(bytes("orderbook:005930"), 2);
-        clearInvocations(quotes);
+        clearInvocations(events);
         adapter.onMessage(message("price:005930", PRICE), null);
         adapter.onMessage(message("price:005930", PRICE), null);
-        verify(quotes, times(1)).savePrice(argThat(price -> NOW.equals(price.receivedAt())
-                && NOW.minusSeconds(1).equals(price.exchangeTimestamp())), any());
+        verify(events, times(1)).publishEvent((Object) argThat(event -> event instanceof RedisQuoteStore.QuoteEvent quote
+                && NOW.equals(quote.price().receivedAt()) && NOW.minusSeconds(1).equals(quote.price().exchangeTimestamp())));
+        assertThat(adapter.latestQuote("005930")).isPresent();
+        verifyNoInteractions(redis);
     }
 
-    @Test void rejectsWrongCodeOldDayFutureMalformedAndLostOwnership() {
+    @Test void rejectsWrongCodeOldDayFutureMalformedAndDisconnectedChannel() {
         var adapter = adapter();
         adapter.updateSymbols(Set.of("005930"));
         adapter.onChannelSubscribed(bytes("price:005930"), 1);
-        clearInvocations(quotes);
+        clearInvocations(events);
         for (String payload : new String[]{PRICE.replace("005930", "000660"),
                 PRICE.replace("2026-10-16", "2026-10-15"),
                 PRICE.replace("10:00:01", "10:01:01"), PRICE.replace("70000", "0"), "{}"}) {
             adapter.onMessage(message("price:005930", payload), null);
         }
-        when(owner.ownsLease()).thenReturn(false);
+        when(channels.isListening()).thenReturn(false);
         adapter.onMessage(message("price:005930", PRICE), null);
-        verify(quotes, never()).savePrice(any(), any());
+        verifyNoInteractions(events);
     }
 
     @Test void priceAndBookAckShareOneSessionButReconnectRotatesIt() {
@@ -76,13 +76,18 @@ class AiQuoteAdapterTests {
         adapter.updateSymbols(Set.of("005930"));
         adapter.onChannelSubscribed(bytes("price:005930"), 1);
         adapter.onChannelSubscribed(bytes("orderbook:005930"), 2);
-        var sources = org.mockito.ArgumentCaptor.forClass(QuoteStore.Source.class);
-        verify(quotes, times(1)).register(eq("005930"), sources.capture(), eq(NOW));
-        var first = sources.getValue();
+        adapter.onMessage(message("price:005930", PRICE), null);
+        var first = adapter.latestQuote("005930").orElseThrow().source();
+        clearInvocations(events);
         adapter.onChannelSubscribed(bytes("orderbook:005930"), 1);
         adapter.onChannelSubscribed(bytes("price:005930"), 2);
-        verify(quotes, times(2)).register(eq("005930"), sources.capture(), eq(NOW));
-        assertThat(sources.getValue()).isNotEqualTo(first);
+        assertThat(adapter.latestQuote("005930")).isEmpty();
+        assertThatThrownBy(() -> adapter.assertSource("005930", first)).isInstanceOf(IllegalStateException.class);
+        verifyNoInteractions(events);
+        adapter.onMessage(message("price:005930", PRICE), null);
+        var second = adapter.latestQuote("005930").orElseThrow().source();
+        assertThat(second).isNotEqualTo(first);
+        adapter.assertSource("005930", second);
     }
 
     @Test void bookMapsQtyAndRejectsFractionalAndNegativeQuantities() {
@@ -108,7 +113,34 @@ class AiQuoteAdapterTests {
         adapter.onMessage(message("price:005930", PRICE), null);
         verifyNoInteractions(values);
         verify(redis, never()).delete(anyString());
-        verify(quotes, never()).savePrice(any(), any());
+        verifyNoInteractions(events);
+    }
+
+    @Test void unsubscribedGenerationCannotExecuteAndRegistrationFailureCanRetry() {
+        var adapter = adapter();
+        doThrow(new IllegalStateException("Redis unavailable")).doNothing().when(channels)
+                .addMessageListener(eq(adapter), org.mockito.ArgumentMatchers.<org.springframework.data.redis.listener.Topic>anyCollection());
+        assertThatThrownBy(() -> adapter.updateSymbols(Set.of("005930"))).isInstanceOf(IllegalStateException.class);
+        adapter.updateSymbols(Set.of("005930"));
+        adapter.onChannelSubscribed(bytes("price:005930"), 1);
+        adapter.onMessage(message("price:005930", PRICE), null);
+        var source = adapter.latestQuote("005930").orElseThrow().source();
+        clearInvocations(events);
+        adapter.onChannelUnsubscribed(bytes("price:005930"), 0);
+        assertThat(adapter.latestQuote("005930")).isEmpty();
+        assertThatThrownBy(() -> adapter.assertSource("005930", source)).isInstanceOf(IllegalStateException.class);
+        adapter.onMessage(message("price:005930", PRICE), null);
+        verifyNoInteractions(events);
+    }
+
+    @Test void failedLocalListenerDoesNotStopFollowingTicks() {
+        var adapter = adapter();
+        adapter.updateSymbols(Set.of("005930"));
+        adapter.onChannelSubscribed(bytes("price:005930"), 1);
+        doThrow(new IllegalStateException("DB failure")).doNothing().when(events).publishEvent(any(Object.class));
+        assertThatCode(() -> adapter.onMessage(message("price:005930", PRICE), null)).doesNotThrowAnyException();
+        adapter.onMessage(message("price:005930", PRICE.replace("1234", "1235")), null);
+        verify(events, times(2)).publishEvent(any(Object.class));
     }
 
     private static byte[] bytes(String value) { return value.getBytes(StandardCharsets.UTF_8); }

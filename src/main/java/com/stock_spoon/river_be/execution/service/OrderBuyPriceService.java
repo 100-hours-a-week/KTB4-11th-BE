@@ -2,21 +2,21 @@ package com.stock_spoon.river_be.execution.service;
 
 import com.stock_spoon.river_be.holding.repository.HoldingRepository;
 
-import com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient;
+import com.stock_spoon.river_be.market.RedisMarketPrice;
 import java.math.BigDecimal;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Service;
 
-/** 체결 트랜잭션에 들어가기 전에 다른 보유 종목의 평가용 REST 가격을 확보한다. */
+/** 체결 트랜잭션에 들어가기 전에 다른 보유 종목의 평가용 Redis 가격을 확보한다. */
 @Service
 public class OrderBuyPriceService {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OrderBuyPriceService.class);
     private final HoldingRepository holdings;
-    private final KiwoomMarketClient market;
+    private final RedisMarketPrice market;
 
-    public OrderBuyPriceService(HoldingRepository holdings, KiwoomMarketClient market) {
+    public OrderBuyPriceService(HoldingRepository holdings, RedisMarketPrice market) {
         this.holdings = holdings;
         this.market = market;
     }

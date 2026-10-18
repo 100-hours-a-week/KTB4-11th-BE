@@ -28,6 +28,8 @@ import static org.mockito.Mockito.doThrow;
 
 @SpringBootTest
 class CompetitionCreationTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.stock_spoon.river_be.market.RedisMarketPrice redisPrices;
     @Autowired CompetitionService service;
     @Autowired CompetitionRepository competitions;
     @MockitoSpyBean CompetitionParticipantRepository participants;
@@ -180,14 +182,14 @@ class CompetitionCreationTests {
             ReflectionTestUtils.setField(competitions.findById(second.getCompetitionId()).orElseThrow(),
                     "state", com.stock_spoon.river_be.competition.entity.Competition.State.COMPLETED);
         });
-        org.mockito.Mockito.when(market.currentPrice("005930")).thenReturn(120_000L);
+        org.mockito.Mockito.when(redisPrices.currentPrice("005930")).thenReturn(120_000L);
         var response = service.listCompetitions(user.getId());
         assertThat(response.getOngoingCompetitionCount()).isEqualTo(1);
         assertThat(response.getCompetitions().get(0).getRemainingDays()).isNull();
         assertThat(response.getCompetitions().get(0).getCumulativeReturnPercent()).isNull();
         assertThat(response.getCompetitions().get(0).getWinner()).isNull();
         assertThat(response.getCompetitions().get(1).getCumulativeReturnPercent()).isEqualTo(2.0);
-        org.mockito.Mockito.when(market.currentPrice("005930")).thenThrow(new IllegalStateException("시세 장애"));
+        org.mockito.Mockito.when(redisPrices.currentPrice("005930")).thenThrow(new IllegalStateException("시세 장애"));
         assertThatThrownBy(() -> service.listCompetitions(user.getId()))
                 .isInstanceOf(com.stock_spoon.river_be.account.exception.AccountException.class);
     }

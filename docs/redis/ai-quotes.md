@@ -50,3 +50,17 @@ BE가 AI 키에 GET, AI 채널에 SUBSCRIBE/UNSUBSCRIBE할 수 있어야 한다.
 - 로컬 Valkey를 활성화한 어댑터·공유 시세·다중 BE 주문 이벤트·체결 회귀 테스트: 26개 통과, 건너뜀 0.
 - `build -x test`: 빌드 및 `spotbugsMain` 통과. 테스트는 위 명령으로 별도 실행했다.
 - 실제 AI 서버·키움 연결 및 배포 Valkey ACL/TLS/IAM 환경은 이번에 검증하지 않았다.
+
+## 평가용 현재가 직접 조회 (2026-10-18)
+
+`RedisMarketPrice.currentPrice(code)`는 시세 서버가 공급한 `price:{code}` JSON을 직접 GET한다. 담당 BE의 소유권이나 WebSocket 활성화 설정에 의존하지 않으며 Redis에 저장·삭제·재발행하지 않는다.
+
+- 적용: 계좌 목록·상세의 자산 평가(`AccountService`), 보유 종목 평가(`AccountHoldingsService`), 매수 체결 후 리포트의 다른 보유 종목 평가(`OrderBuyPriceService`). 계좌 자산 평가를 재사용하는 대회 목록 등의 조회도 같은 경로를 사용한다.
+- 검증: 요청 종목코드 일치, 양수인 정수 가격과 long 범위, 오프셋이 있는 `timestamp` 형식.
+- 장외·주말 평가에도 마지막 저장 가격을 사용한다. 이 조회에는 가격 경과시간 제한을 추가하지 않았다. 수집이 멈춘 경우 오래된 가격으로 평가될 수 있으며 공급 상태 표시는 별도 정책이 필요하다.
+- 누락·형식 오류·Redis 장애는 `IllegalStateException`으로 전달한다. 키움 REST로 대체 조회하거나 임의 가격을 넣지 않는다. 계좌·보유 조회는 기존 503 처리, 매수 리포트는 기존 비중 기록 생략 정책을 유지한다.
+- 이 스냅샷을 체결 이벤트로 발행하지 않는다. 실제 주문 체결은 기존 장중·거래소시각·수신시각 검증을 계속 사용한다.
+
+참고한 [시세 서버 HTTP 명세](https://stock-spoon.com/market/openapi.json)는 `/prices`, `/orderbooks`, `/bars/{code}`, `/indices/{name}` 등을 제공한다. HTTP 명세만으로 Redis 키·자료형을 알 수는 없으므로 현재가 키는 기존 AI 연동에서 확인한 `price:{code}` 규격을 사용했다. 새 환경변수나 시세 서버 HTTP 호출은 추가하지 않았다. BE에 `price:*` GET 권한이 필요하다.
+
+종목명·업종·시장 구분 및 날짜별 종가의 Redis 규격은 이 명세에 없다. 해당 REST 경로와 인증·토큰은 아직 유지한다. `/bars/{code}?timeframe=1d`가 있다고 해서 Redis 저장 키나 종가 확정 여부를 추정하지 않는다. 담당 BE의 기존 Pub/Sub 중계 구조도 이번 평가용 현재가 변경과 별개로 남아 있다.

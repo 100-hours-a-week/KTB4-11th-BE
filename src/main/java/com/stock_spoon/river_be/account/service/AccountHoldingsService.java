@@ -5,6 +5,7 @@ import com.stock_spoon.river_be.account.dto.AccountHoldingsResponse.Item;
 import com.stock_spoon.river_be.account.exception.AccountException;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient;
+import com.stock_spoon.river_be.market.RedisMarketPrice;
 import com.stock_spoon.river_be.execution.repository.ExecutionRepository;
 import com.stock_spoon.river_be.holding.repository.HoldingRepository;
 import java.math.BigDecimal;
@@ -22,7 +23,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-/** DB 스냅샷을 읽은 뒤 트랜잭션 밖에서 키움 REST를 조회한다. 자동 시세 갱신은 하지 않는다. */
+/** DB 스냅샷을 읽은 뒤 Redis 현재가와 기존 종목정보를 조회한다. 자동 시세 갱신은 하지 않는다. */
 @Service
 public class AccountHoldingsService {
     private static final Logger log = LoggerFactory.getLogger(AccountHoldingsService.class);
@@ -30,14 +31,16 @@ public class AccountHoldingsService {
     private final HoldingRepository holdings;
     private final ExecutionRepository executions;
     private final KiwoomMarketClient market;
+    private final RedisMarketPrice prices;
     private final TransactionTemplate read;
 
     public AccountHoldingsService(AccountRepository accounts, HoldingRepository holdings,
-            ExecutionRepository executions, KiwoomMarketClient market, PlatformTransactionManager transactions) {
+            ExecutionRepository executions, KiwoomMarketClient market, RedisMarketPrice prices, PlatformTransactionManager transactions) {
         this.accounts = accounts;
         this.holdings = holdings;
         this.executions = executions;
         this.market = market;
+        this.prices = prices;
         read = new TransactionTemplate(transactions);
         read.setReadOnly(true);
     }
@@ -80,7 +83,7 @@ public class AccountHoldingsService {
         for (Owned row : owned) {
             long price;
             try {
-                price = market.currentPrice(row.code());
+                price = prices.currentPrice(row.code());
             } catch (IllegalStateException error) {
                 throw unavailable(accountId, row.code(), "current_price", error);
             }

@@ -52,6 +52,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @Transactional
 class OrderControllerTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.stock_spoon.river_be.market.RedisMarketPrice redisPrices;
     // 체결 및 대회 정책 검증을 위한 고정 시각.
     @org.springframework.boot.test.context.TestConfiguration
     static class MarketHours {
@@ -100,7 +102,7 @@ class OrderControllerTests {
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
         user = users.save(new User("AI 주문 사용자"));
         account = accounts.save(new Account(user, "자동매매 계좌", 1_000_000));
-        when(marketClient.currentPrice(anyString())).thenThrow(new IllegalStateException("test price unavailable"));
+        when(redisPrices.currentPrice(anyString())).thenThrow(new IllegalStateException("test price unavailable"));
     }
 
     @Test
@@ -594,7 +596,7 @@ class OrderControllerTests {
     }
 
     @Test
-    void buyWeightUsesRestWithoutOtherStockSubscriptionAndFailureKeepsFill() throws Exception {
+    void buyWeightUsesRedisWithoutOtherStockSubscriptionAndFailureKeepsFill() throws Exception {
         holdings.save(new Holding(account, "000660", 10, new java.math.BigDecimal("50000")));
         account.changeCash(-50000);
         marketBook(Instant.parse("2026-10-01T01:00:00Z"), java.time.LocalTime.of(10, 0));
@@ -606,9 +608,9 @@ class OrderControllerTests {
         int buyCount = 0;
         for (String type : java.util.List.of("limit")) {
             for (boolean available : java.util.List.of(false, true)) {
-                org.mockito.Mockito.reset(marketClient);
-                if (available) when(marketClient.currentPrice("000660")).thenReturn(10000L);
-                else when(marketClient.currentPrice("000660")).thenThrow(new IllegalStateException());
+                org.mockito.Mockito.reset(redisPrices);
+                if (available) when(redisPrices.currentPrice("000660")).thenReturn(10000L);
+                else when(redisPrices.currentPrice("000660")).thenThrow(new IllegalStateException());
                 var result = mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
                                 .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
                                 .content(reportInputBody("buy", type, ",\"holding_weight_limit_percent\":30")))
@@ -623,8 +625,8 @@ class OrderControllerTests {
                 Double weight = saved.getReport().getHoldingWeightAfterTradePercent();
                 if (available) assertThat(weight).isEqualTo(13.3333);
                 else assertThat(weight).isNull();
-                org.mockito.Mockito.verify(marketClient).currentPrice("000660");
-                org.mockito.Mockito.verify(marketClient, org.mockito.Mockito.never()).currentPrice("005930");
+                org.mockito.Mockito.verify(redisPrices).currentPrice("000660");
+                org.mockito.Mockito.verify(redisPrices, org.mockito.Mockito.never()).currentPrice("005930");
             }
         }
     }

@@ -33,7 +33,7 @@
 
 ## BE의 로컬 구독 상태
 
-담당 BE의 `coord:kiwoom:collector`, 공유 종목 등록 `quote:{code}:subscription`, 공유 시세 `quote:{code}:price/orderbook`, 중계 채널 `quotes:{code}`는 이 시세 경로에서 사용하지 않는다. 직접 키움 WebSocket 클래스·빈·전용 테스트는 제거했다. 공용 자료형은 `market.StockPrice`, `market.OrderBook`, `market.QuoteLevel`로 분리했다. `RedisQuoteStore`의 과거 저장 경로는 별도 정리 대상으로 남아 있다.
+담당 BE의 `coord:kiwoom:collector`, 공유 종목 등록 `quote:{code}:subscription`, 공유 시세 `quote:{code}:price/orderbook`, 중계 채널 `quotes:{code}`는 이 시세 경로에서 사용하지 않는다. 직접 키움 WebSocket 클래스·빈·전용 테스트는 제거했다. 공용 자료형은 `market.StockPrice`, `market.OrderBook`, `market.QuoteLevel`로 분리했다. 과거 Redis 저장·구독 등록·중계 구현 `RedisQuoteStore`, `QuoteStore`도 제거했다. BE는 원본 시세를 Redis에 재저장하거나 발행하지 않는다.
 
 대신 각 BE 메모리에 다음 상태만 유지한다.
 
@@ -41,7 +41,7 @@
 - BE 실행 ID와 종목별 Redis 구독 세대 ID
 - 해당 구독 세대에서 실제 수신한 마지막 현재가·호가 이벤트: 중복·역행 검사와 신규 주문의 최초 체결 판단용
 
-이 값은 여러 BE가 공유하는 데이터가 아니다. `QuoteStore.Source`의 기존 필드명 `collectorId`는 이 경로에서는 각 BE의 수신자 ID를 뜻하며 키움 수집 담당 소유권을 뜻하지 않는다.
+이 값은 여러 BE가 공유하는 데이터가 아니다. `QuoteSource(subscriberId, sessionId)`는 각 BE의 수신자와 종목별 구독 세대를 식별한다. `QuoteEvent`는 검증한 현재가·호가를 로컬 Spring 이벤트로 전달하며 Redis에는 직렬화하거나 발행하지 않는다.
 
 구독 해제·종료 시 로컬 상태를 지운다. 재연결 ACK는 새 세대를 만들고 이전 체결용 이벤트를 지운다. 현재가와 호가의 같은 구독 세대 ACK는 세션을 공유한다. 구독 ACK나 저장된 스냅샷만으로 새 체결 이벤트를 만들지 않는다. 지연 처리 중 재연결·해제되면 체결 직전의 세대 검사에서 이전 이벤트를 거절한다.
 

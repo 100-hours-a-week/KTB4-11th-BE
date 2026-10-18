@@ -68,7 +68,7 @@ public class OrderExecutionListener {
     }
 
     @EventListener
-    public void onQuote(com.stock_spoon.river_be.market.RedisQuoteStore.QuoteEvent event) {
+    public void onQuote(com.stock_spoon.river_be.market.QuoteEvent event) {
         if (!"price".equals(event.type()) || event.price() == null) return;
         processPrice(event.price(), () -> stream.assertSource(event.stockCode(), event.source()));
     }

@@ -133,7 +133,7 @@ class OrderExecutionEventTests {
                 containers.add(channel);
                 var handler = new java.util.concurrent.atomic.AtomicReference<OrderExecutionListener>();
                 var adapter = new com.stock_spoon.river_be.market.AiQuoteAdapter(redis, channel, event -> {
-                    if (!(event instanceof com.stock_spoon.river_be.market.RedisQuoteStore.QuoteEvent quote)) return;
+                    if (!(event instanceof com.stock_spoon.river_be.market.QuoteEvent quote)) return;
                     ready.countDown();
                     try {
                         if (!start.await(3, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("동시 처리 대기 실패");

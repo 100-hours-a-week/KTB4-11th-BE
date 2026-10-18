@@ -97,7 +97,7 @@ public class MultiProcessRedisNode {
                             var old = fixture.last;
                             var price = new StockPrice("TST009", new BigDecimal("119500"),
                                     BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(10, 0), Instant.now());
-                            context.publishEvent(new RedisQuoteStore.QuoteEvent("TST009", "price", price.receivedAt(),
+                            context.publishEvent(new QuoteEvent("TST009", "price", price.receivedAt(),
                                     old.source(), price, null));
                             reply("ok");
                         }
@@ -210,8 +210,8 @@ public class MultiProcessRedisNode {
             redis.convertAndSend("price:TST009", payload);
         }
         final AtomicInteger calls = new AtomicInteger();
-        final BlockingQueue<RedisQuoteStore.QuoteEvent> events = new LinkedBlockingQueue<>();
-        volatile RedisQuoteStore.QuoteEvent last;
+        final BlockingQueue<QuoteEvent> events = new LinkedBlockingQueue<>();
+        volatile QuoteEvent last;
         String session = "process-test-session";
         @Bean @Primary
         @ConditionalOnProperty(name = "kiwoom.collector.enabled", havingValue = "true")
@@ -223,7 +223,7 @@ public class MultiProcessRedisNode {
             };
         }
         @EventListener @org.springframework.core.annotation.Order(org.springframework.core.Ordered.HIGHEST_PRECEDENCE)
-        void received(RedisQuoteStore.QuoteEvent event) {
+        void received(QuoteEvent event) {
             if ("TST009".equals(event.stockCode()) && event.price() != null) { last = event; events.add(event); }
         }
     }

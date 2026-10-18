@@ -50,7 +50,7 @@ class AiQuoteAdapterTests {
         clearInvocations(events);
         adapter.onMessage(message("price:005930", PRICE), null);
         adapter.onMessage(message("price:005930", PRICE), null);
-        verify(events, times(1)).publishEvent((Object) argThat(event -> event instanceof RedisQuoteStore.QuoteEvent quote
+        verify(events, times(1)).publishEvent((Object) argThat(event -> event instanceof QuoteEvent quote
                 && NOW.equals(quote.price().receivedAt()) && NOW.minusSeconds(1).equals(quote.price().exchangeTimestamp())));
         assertThat(adapter.latestQuote("005930")).isPresent();
         verifyNoInteractions(redis);

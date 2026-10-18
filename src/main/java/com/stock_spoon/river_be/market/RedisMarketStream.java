@@ -17,14 +17,14 @@ public class RedisMarketStream implements MarketStream {
 
     public void updateSymbols(Set<String> symbols) { quotes.updateSymbols(symbols); }
     public Optional<StockPrice> latest(String code) {
-        return latestQuote(code).map(RedisQuoteStore.QuoteEvent::price).or(() -> quotes.latestPrice(code));
+        return latestQuote(code).map(QuoteEvent::price).or(() -> quotes.latestPrice(code));
     }
     public Optional<OrderBook> latestOrderBook(String code) {
-        return latestBookQuote(code).map(RedisQuoteStore.QuoteEvent::orderBook).or(() -> quotes.latestOrderBook(code));
+        return latestBookQuote(code).map(QuoteEvent::orderBook).or(() -> quotes.latestOrderBook(code));
     }
-    public Optional<RedisQuoteStore.QuoteEvent> latestQuote(String code) { return quotes.latestQuote(code); }
-    public Optional<RedisQuoteStore.QuoteEvent> latestBookQuote(String code) { return quotes.latestBookQuote(code); }
+    public Optional<QuoteEvent> latestQuote(String code) { return quotes.latestQuote(code); }
+    public Optional<QuoteEvent> latestBookQuote(String code) { return quotes.latestBookQuote(code); }
     public void assertAvailable(String code) { quotes.assertAvailable(code); }
-    public void assertSource(String code, QuoteStore.Source source) { quotes.assertSource(code, source); }
+    public void assertSource(String code, QuoteSource source) { quotes.assertSource(code, source); }
     public void close() { quotes.close(); }
 }

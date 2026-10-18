@@ -58,9 +58,9 @@ class OrderExecutionListenerTests {
         var data = new StockPrice("005930", BigDecimal.valueOf(69000),
                 BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(9, 59, 59), now.plusSeconds(1),
                 now.minusSeconds(1), 100L);
-        listener.onQuote(new com.stock_spoon.river_be.market.RedisQuoteStore.QuoteEvent(
+        listener.onQuote(new com.stock_spoon.river_be.market.QuoteEvent(
                 "005930", "price", data.receivedAt(),
-                new com.stock_spoon.river_be.market.QuoteStore.Source("relay", "session"), data, null));
+                new com.stock_spoon.river_be.market.QuoteSource("relay", "session"), data, null));
         verify(execution, never()).executeLimit(anyLong(), anyLong(), anyLong(), anyMap(), any(Runnable.class));
     }
 
@@ -107,10 +107,10 @@ class OrderExecutionListenerTests {
 
     @Test
     void initialCachedPriceKeepsSourceUntilExecution() {
-        var source = new com.stock_spoon.river_be.market.QuoteStore.Source("owner", "old-session");
+        var source = new com.stock_spoon.river_be.market.QuoteSource("owner", "old-session");
         var data = price(69000);
         doReturn(Optional.of(
-                new com.stock_spoon.river_be.market.RedisQuoteStore.QuoteEvent("005930", "price", data.receivedAt(), source, data, null)))
+                new com.stock_spoon.river_be.market.QuoteEvent("005930", "price", data.receivedAt(), source, data, null)))
                 .when(stream).latestQuote("005930");
         doThrow(new IllegalStateException("previous session")).when(stream).assertSource("005930", source);
         listener.orderCreated(order(1));
@@ -121,9 +121,9 @@ class OrderExecutionListenerTests {
 
     @Test
     void oldSessionEventNeverExecutesEvenIfAnotherSessionIsConnected() {
-        var source = new com.stock_spoon.river_be.market.QuoteStore.Source("owner", "old-session");
+        var source = new com.stock_spoon.river_be.market.QuoteSource("owner", "old-session");
         var data = price(69000);
-        var event = new com.stock_spoon.river_be.market.RedisQuoteStore.QuoteEvent("005930", "price",
+        var event = new com.stock_spoon.river_be.market.QuoteEvent("005930", "price",
                 data.receivedAt(), source, data, null);
         doThrow(new IllegalStateException("previous session")).when(stream).assertSource("005930", source);
         listener.onQuote(event);

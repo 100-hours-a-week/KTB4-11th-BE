@@ -187,3 +187,12 @@ BE의 `KiwoomStockStream`과 생성 빈을 제거했다. LOGIN, REG/REMOVE, 재�
 - `RedisQuoteStore`의 과거 공유 저장 기능은 이번 범위에서 제거하지 않았다. Redis 직접 수신 경로에서는 사용하지 않으나 자료형과 남은 검증 코드 정리가 별도로 필요하다.
 
 위의 과거 단계에서 WebSocket 클래스를 유지한다고 설명한 내용은 이 후속 작업으로 대체된다.
+
+
+## 과거 Redis 시세 저장·중계 제거 후속 작업
+
+`RedisQuoteStore`와 `QuoteStore`를 제거했다. BE의 `quote:{code}:price`, `quote:{code}:orderbook`, `quote:{code}:subscription` 저장·조회·삭제, 구독 등록과 수집 담당에 따른 시세 유효성 검사, `quotes:{code}` 발행 기능을 삭제했다.
+
+현재 수신 경로에 필요한 자료형은 `QuoteEvent`와 `QuoteSource(subscriberId, sessionId)`로 분리했다. Redis 직접 구독·스냅샷 조회·로컬 구독 세대 검사·시세 검증·체결 판단은 유지한다. 과거 공유 저장소만 검증하던 테스트는 제거했으며 ACL 테스트는 관리자 연결이 모의 시세를 공급하고 제한된 BE 사용자가 원본을 읽고 구독하는 방식으로 변경했다. BE 사용자의 원본 쓰기·삭제·발행 거절도 확인한다.
+
+실제 Redis 키나 ACL 설정을 변경하는 마이그레이션은 없다. 과거 시세·구독 키는 기존 TTL로 만료되며, 종목정보 캐시 `quote:{code}:metadata`와 REST 담당·토큰 기능은 유지한다. 위의 이전 단계에서 저장소 정리를 남겼다고 한 내용은 이 후속 작업으로 대체된다.

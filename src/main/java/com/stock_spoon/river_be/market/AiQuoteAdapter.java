@@ -28,10 +28,10 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
     private final RedisMessageListenerContainer channels;
     private final Clock clock;
     private final Object subscriptionLock = new Object();
-    private final Map<String, QuoteStore.Source> sessions = new HashMap<>();
+    private final Map<String, QuoteSource> sessions = new HashMap<>();
     private final Map<String, Set<String>> acknowledged = new HashMap<>();
-    private final Map<String, RedisQuoteStore.QuoteEvent> prices = new HashMap<>();
-    private final Map<String, RedisQuoteStore.QuoteEvent> books = new HashMap<>();
+    private final Map<String, QuoteEvent> prices = new HashMap<>();
+    private final Map<String, QuoteEvent> books = new HashMap<>();
     private Set<String> desired = Set.of();
 
     private final java.util.concurrent.ThreadPoolExecutor callbacks = new java.util.concurrent.ThreadPoolExecutor(
@@ -113,7 +113,7 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
         Set<String> ack = acknowledged.computeIfAbsent(code, ignored -> new HashSet<>());
         if (ack.isEmpty() || ack.contains(topic)) {
             ack.clear();
-            var source = new QuoteStore.Source(subscriberId, UUID.randomUUID().toString());
+            var source = new QuoteSource(subscriberId, UUID.randomUUID().toString());
             sessions.put(code, source);
             prices.remove(code);
             books.remove(code);
@@ -134,7 +134,7 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
         }
     }
 
-    private synchronized RedisQuoteStore.QuoteEvent accept(Message message) {
+    private synchronized QuoteEvent accept(Message message) {
         String code = channelCode(message.getChannel());
         if (code == null || !desired.contains(code) || !channels.isListening()) return null;
         var source = sessions.get(code);
@@ -146,22 +146,22 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
             if (channel.startsWith("price:")) {
                 var price = price(node, code, receivedAt);
                 requireLive(price.exchangeTimestamp(), receivedAt);
-                var previous = Optional.ofNullable(prices.get(code)).map(RedisQuoteStore.QuoteEvent::price).orElse(null);
+                var previous = Optional.ofNullable(prices.get(code)).map(QuoteEvent::price).orElse(null);
                 if (previous != null && (price.exchangeTimestamp().isBefore(previous.exchangeTimestamp())
                         || price.exchangeTimestamp().atZone(SEOUL).toLocalDate().equals(previous.exchangeTimestamp().atZone(SEOUL).toLocalDate())
                         && price.volume() < previous.volume()
                         || price.exchangeTimestamp().equals(previous.exchangeTimestamp()) && price.volume().equals(previous.volume()))) return null;
-                var event = new RedisQuoteStore.QuoteEvent(code, "price", receivedAt, source, price, null);
+                var event = new QuoteEvent(code, "price", receivedAt, source, price, null);
                 prices.put(code, event);
                 return event;
             }
             var book = book(node, code, receivedAt);
             requireLive(book.exchangeTimestamp(), receivedAt);
-            var previous = Optional.ofNullable(books.get(code)).map(RedisQuoteStore.QuoteEvent::orderBook).orElse(null);
+            var previous = Optional.ofNullable(books.get(code)).map(QuoteEvent::orderBook).orElse(null);
             if (previous != null && (book.exchangeTimestamp().isBefore(previous.exchangeTimestamp())
                     || book.exchangeTimestamp().equals(previous.exchangeTimestamp())
                     && book.asks().equals(previous.asks()) && book.bids().equals(previous.bids()))) return null;
-            var event = new RedisQuoteStore.QuoteEvent(code, "orderbook", receivedAt, source, null, book);
+            var event = new QuoteEvent(code, "orderbook", receivedAt, source, null, book);
             books.put(code, event);
             return event;
         } catch (RuntimeException error) {
@@ -186,22 +186,22 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
         }
     }
 
-    public synchronized void assertSource(String code, QuoteStore.Source source) {
+    public synchronized void assertSource(String code, QuoteSource source) {
         assertAvailable(code);
         if (source == null || !source.equals(sessions.get(code))) {
             throw new IllegalStateException("이전 Redis 구독 연결의 알림입니다.");
         }
     }
 
-    public synchronized Optional<RedisQuoteStore.QuoteEvent> latestQuote(String code) {
+    public synchronized Optional<QuoteEvent> latestQuote(String code) {
         return current(code, prices.get(code));
     }
 
-    public synchronized Optional<RedisQuoteStore.QuoteEvent> latestBookQuote(String code) {
+    public synchronized Optional<QuoteEvent> latestBookQuote(String code) {
         return current(code, books.get(code));
     }
 
-    private Optional<RedisQuoteStore.QuoteEvent> current(String code, RedisQuoteStore.QuoteEvent event) {
+    private Optional<QuoteEvent> current(String code, QuoteEvent event) {
         return channels.isListening() && event != null && event.source().equals(sessions.get(code))
                 ? Optional.of(event) : Optional.empty();
     }

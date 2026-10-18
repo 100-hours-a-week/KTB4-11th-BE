@@ -19,8 +19,8 @@ class AiQuoteAdapterLiveTests {
         var redis = new StringRedisTemplate(connection);
         var containers = new ArrayList<RedisMessageListenerContainer>();
         var adapters = new ArrayList<AiQuoteAdapter>();
-        var first = new LinkedBlockingQueue<RedisQuoteStore.QuoteEvent>();
-        var second = new LinkedBlockingQueue<RedisQuoteStore.QuoteEvent>();
+        var first = new LinkedBlockingQueue<QuoteEvent>();
+        var second = new LinkedBlockingQueue<QuoteEvent>();
         var relayed = new LinkedBlockingQueue<String>();
         String code = "TST019";
         String key = "price:" + code;
@@ -34,7 +34,7 @@ class AiQuoteAdapterLiveTests {
                 var channels = new RedisMessageListenerContainer();
                 channels.setConnectionFactory(connection); channels.afterPropertiesSet(); channels.start();
                 containers.add(channels);
-                var adapter = new AiQuoteAdapter(redis, channels, event -> queue.add((RedisQuoteStore.QuoteEvent) event));
+                var adapter = new AiQuoteAdapter(redis, channels, event -> queue.add((QuoteEvent) event));
                 adapters.add(adapter);
                 assertThat(adapter.latestPrice(code).orElseThrow().receivedAt()).isNull();
                 adapter.updateSymbols(Set.of(code));
@@ -47,7 +47,7 @@ class AiQuoteAdapterLiveTests {
             var b = second.poll(5, TimeUnit.SECONDS);
             assertThat(a).isNotNull(); assertThat(b).isNotNull();
             assertThat(a.price()).isEqualToIgnoringGivenFields(b.price(), "receivedAt");
-            assertThat(a.source().collectorId()).isNotEqualTo(b.source().collectorId());
+            assertThat(a.source().subscriberId()).isNotEqualTo(b.source().subscriberId());
             adapters.getFirst().assertSource(code, a.source());
             assertThatThrownBy(() -> adapters.get(1).assertSource(code, a.source())).isInstanceOf(IllegalStateException.class);
             String book = "{\"code\":\"TST019\",\"asks\":[{\"price\":70100,\"qty\":10}],\"bids\":[{\"price\":70000,\"qty\":20}],\"timestamp\":\"" + timestamp + "\"}";

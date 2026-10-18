@@ -1,5 +1,6 @@
 package com.stock_spoon.river_be.execution.listener;
 
+import com.stock_spoon.river_be.market.StockPrice;
 import com.stock_spoon.river_be.order.dto.OrderCreateResponse;
 import com.stock_spoon.river_be.order.entity.Order;
 import com.stock_spoon.river_be.execution.repository.ExecutionRepository;
@@ -9,7 +10,6 @@ import com.stock_spoon.river_be.execution.service.OrderExecutionService;
 import com.stock_spoon.river_be.order.service.OrderSubscriptionService;
 
 import com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient;
-import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
@@ -63,7 +63,7 @@ public class OrderExecutionListener {
     // [체결 진입 B] 새 StockPrice 이벤트가 오면 HTTP 요청 없이도 Spring이 onPrice()를 호출한다.
     // RedisMarketStream이 유효한 종목별 Pub/Sub 알림을 Spring 이벤트로 전달한다.
     @EventListener
-    public void onPrice(KiwoomStockStream.StockPrice price) {
+    public void onPrice(StockPrice price) {
         processPrice(price, () -> stream.assertAvailable(price.stockCode()));
     }
 
@@ -73,7 +73,7 @@ public class OrderExecutionListener {
         processPrice(event.price(), () -> stream.assertSource(event.stockCode(), event.source()));
     }
 
-    private void processPrice(KiwoomStockStream.StockPrice price, Runnable validate) {
+    private void processPrice(StockPrice price, Runnable validate) {
         if (!execution.isUsablePrice(price)) return;
         Runnable currentSource = () -> {
             if (!execution.isUsablePrice(price)) throw new IllegalStateException("유효한 장중 시세가 아닙니다.");

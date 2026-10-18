@@ -56,7 +56,7 @@ Remove-Item Env:REDIS_LIVE_TEST
 
 Spring 운영 스트림은 Redis 저장소를 사용합니다. 유효한 WebSocket 구독 상태에서만 Redis 시세를 읽으며, 연결 종료·구독 해제 시 해당 캐시를 삭제합니다. 새 등록 전에 이전 캐시를 지우므로 재시작·재연결 이전 시세를 재사용하지 않습니다. Redis 쓰기 실패 시 수신 연결을 종료하고 체결 이벤트를 전달하지 않습니다.
 
-담당의 WebSocket을 켜려면 `KIWOOM_COLLECTOR_ENABLED=true`와 기존 `KIWOOM_STREAM_ENABLED=true`를 모두 설정합니다. 일반 BE는 `KIWOOM_STREAM_ENABLED=true`, `KIWOOM_COLLECTOR_ENABLED=false`로 설정해야 공유 시세 경로가 켜집니다. 기본값은 꺼짐입니다. 비담당 스트림은 키움 연결이나 공유 캐시 삭제를 수행하지 않습니다.
+각 BE는 `KIWOOM_STREAM_ENABLED=true`로 Redis 원본 채널을 구독합니다. 기본값은 꺼짐이며, 이때 시세 조회는 빈 결과를 반환하고 체결용 가용성 확인은 실패합니다. BE의 키움 WebSocket 구현은 제거되었습니다. `KIWOOM_COLLECTOR_ENABLED`는 남은 종목정보·종가 REST 조회의 담당 설정입니다.
 
 수집 담당은 시작 시 `coord:kiwoom:collector`에 고유한 서버 실행 ID를 저장합니다. 5초마다 자신의 값인 경우에만 TTL을 15초로 갱신합니다. 다른 담당이 있으면 두 번째 담당의 시작은 실패합니다. 만료·소유권 변경·Redis 오류가 발생하면 해당 실행은 재획득하지 않고 웹소켓과 시세 사용을 중단합니다. 복구하려면 담당 BE를 재시작해야 하며 자동 인계는 없습니다. 비담당 BE는 이 키를 생성하지 않습니다.
 

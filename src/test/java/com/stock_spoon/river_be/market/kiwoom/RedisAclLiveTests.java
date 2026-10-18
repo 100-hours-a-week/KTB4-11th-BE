@@ -1,5 +1,8 @@
 package com.stock_spoon.river_be.market.kiwoom;
 
+import com.stock_spoon.river_be.market.OrderBook;
+import com.stock_spoon.river_be.market.QuoteLevel;
+import com.stock_spoon.river_be.market.StockPrice;
 import com.stock_spoon.river_be.market.*;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -76,14 +79,14 @@ class RedisAclLiveTests {
             var quotes = new RedisQuoteStore(restricted);
             var source = new QuoteStore.Source(owner.ownerId(), suffix);
             quotes.register("TST010", source, Instant.now());
-            var price = new KiwoomStockStream.StockPrice("TST010", new BigDecimal("119500"),
+            var price = new StockPrice("TST010", new BigDecimal("119500"),
                     BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(10, 0), Instant.now());
             quotes.savePrice(price, source);
             assertThat(messages.poll(5, TimeUnit.SECONDS)).contains("TST010");
             assertThat(quotes.usablePrice("TST010")).contains(price);
-            var book = new KiwoomStockStream.OrderBook("TST010",
-                    List.of(new KiwoomStockStream.QuoteLevel(new BigDecimal("119600"), 10)),
-                    List.of(new KiwoomStockStream.QuoteLevel(new BigDecimal("119500"), 10)),
+            var book = new OrderBook("TST010",
+                    List.of(new QuoteLevel(new BigDecimal("119600"), 10)),
+                    List.of(new QuoteLevel(new BigDecimal("119500"), 10)),
                     LocalTime.of(10, 0), Instant.now());
             quotes.saveOrderBook(book, source);
             assertThat(quotes.usableOrderBook("TST010")).contains(book);

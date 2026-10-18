@@ -11,7 +11,7 @@ import com.stock_spoon.river_be.holding.entity.Holding;
 import com.stock_spoon.river_be.holding.repository.HoldingRepository;
 import com.stock_spoon.river_be.order.entity.Order;
 import com.stock_spoon.river_be.order.repository.OrderRepository;
-import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream;
+import com.stock_spoon.river_be.market.MarketStream;
 import com.stock_spoon.river_be.user.entity.User;
 import com.stock_spoon.river_be.user.repository.UserRepository;
 import com.stock_spoon.river_be.user.service.AiUserSnapshotService;
@@ -33,7 +33,7 @@ class AiUserSnapshotServiceTests {
     @Autowired HoldingRepository holdings;
     @Autowired OrderRepository orders;
     @Autowired EntityManager entityManager;
-    @MockitoBean KiwoomStockStream stream;
+    @MockitoBean MarketStream stream;
 
     @Test
     void includesEveryUserButOnlyActiveAiManagedAccountsAndPendingOrders() {

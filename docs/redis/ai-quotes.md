@@ -33,7 +33,7 @@
 
 ## BE의 로컬 구독 상태
 
-담당 BE의 `coord:kiwoom:collector`, 공유 종목 등록 `quote:{code}:subscription`, 공유 시세 `quote:{code}:price/orderbook`, 중계 채널 `quotes:{code}`는 이 시세 경로에서 사용하지 않는다. `RedisQuoteStore`와 직접 키움 WebSocket의 관련 코드는 단독 검증 등 기존 경로에 남아 있으므로 클래스 자체를 제거한 것은 아니다.
+담당 BE의 `coord:kiwoom:collector`, 공유 종목 등록 `quote:{code}:subscription`, 공유 시세 `quote:{code}:price/orderbook`, 중계 채널 `quotes:{code}`는 이 시세 경로에서 사용하지 않는다. 직접 키움 WebSocket 클래스·빈·전용 테스트는 제거했다. 공용 자료형은 `market.StockPrice`, `market.OrderBook`, `market.QuoteLevel`로 분리했다. `RedisQuoteStore`의 과거 저장 경로는 별도 정리 대상으로 남아 있다.
 
 대신 각 BE 메모리에 다음 상태만 유지한다.
 

@@ -95,7 +95,7 @@ public class MultiProcessRedisNode {
                         }
                         case "replay-low" -> {
                             var old = fixture.last;
-                            var price = new KiwoomStockStream.StockPrice("TST009", new BigDecimal("119500"),
+                            var price = new StockPrice("TST009", new BigDecimal("119500"),
                                     BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(10, 0), Instant.now());
                             context.publishEvent(new RedisQuoteStore.QuoteEvent("TST009", "price", price.receivedAt(),
                                     old.source(), price, null));
@@ -213,7 +213,6 @@ public class MultiProcessRedisNode {
         final BlockingQueue<RedisQuoteStore.QuoteEvent> events = new LinkedBlockingQueue<>();
         volatile RedisQuoteStore.QuoteEvent last;
         String session = "process-test-session";
-        @Bean(name = "kiwoomStockStream") KiwoomStockStream fakeExternalWebSocket() { return mock(KiwoomStockStream.class); }
         @Bean @Primary
         @ConditionalOnProperty(name = "kiwoom.collector.enabled", havingValue = "true")
         KiwoomRestTransport fakeExternalRest() {

@@ -1,5 +1,6 @@
 package com.stock_spoon.river_be.market.kiwoom;
 
+import com.stock_spoon.river_be.market.MarketStream;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -24,7 +25,7 @@ class CollectorSecurityTests {
     @Autowired WebApplicationContext context;
     @MockitoBean KiwoomRestTransport transport;
     @MockitoBean RedisCollectorHeartbeat heartbeat;
-    @MockitoBean KiwoomStockStream stream;
+    @MockitoBean MarketStream stream;
     @MockitoBean StockMetadataCache metadata;
     @LocalServerPort int port;
     private MockMvc mvc;

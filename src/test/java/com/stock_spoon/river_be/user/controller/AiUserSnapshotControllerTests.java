@@ -9,7 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.stock_spoon.river_be.account.entity.Account;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import com.stock_spoon.river_be.config.JwtProperties;
-import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream;
+import com.stock_spoon.river_be.market.MarketStream;
 import com.stock_spoon.river_be.holding.entity.Holding;
 import com.stock_spoon.river_be.holding.repository.HoldingRepository;
 import com.stock_spoon.river_be.order.entity.Order;
@@ -45,7 +45,7 @@ class AiUserSnapshotControllerTests {
     @Autowired OrderRepository orders;
     @Autowired JwtEncoder encoder;
     @Autowired JwtProperties jwt;
-    @MockitoBean KiwoomStockStream stream;
+    @MockitoBean MarketStream stream;
     private MockMvc mvc;
 
     @BeforeEach

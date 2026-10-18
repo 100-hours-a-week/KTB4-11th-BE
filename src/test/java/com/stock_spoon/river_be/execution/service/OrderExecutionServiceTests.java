@@ -119,12 +119,12 @@ class OrderExecutionServiceTests {
         var monday = service(Instant.parse("2026-10-19T01:00:00Z"));
         for (String received : new String[] {"2026-10-16T01:00:00Z", "2026-10-19T01:00:01Z",
                 "2026-10-18T23:59:59Z"}) {
-            var price = new com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.StockPrice("005930",
+            var price = new com.stock_spoon.river_be.market.StockPrice("005930",
                     BigDecimal.valueOf(69000), BigDecimal.ZERO, BigDecimal.ZERO,
                     java.time.LocalTime.of(10, 0), Instant.parse(received));
             assertThat(monday.isUsablePrice(price)).isFalse();
         }
-        var oldButSameSession = new com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.StockPrice("005930",
+        var oldButSameSession = new com.stock_spoon.river_be.market.StockPrice("005930",
                 BigDecimal.valueOf(69000), BigDecimal.ZERO, BigDecimal.ZERO,
                 java.time.LocalTime.of(9, 0), Instant.parse("2026-10-19T00:00:00Z"));
         assertThat(monday.isUsablePrice(oldButSameSession)).isTrue();

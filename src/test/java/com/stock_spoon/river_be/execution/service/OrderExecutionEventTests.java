@@ -1,5 +1,6 @@
 package com.stock_spoon.river_be.execution.service;
 
+import com.stock_spoon.river_be.market.StockPrice;
 import com.stock_spoon.river_be.order.service.OrderSubscriptionService;
 
 import com.stock_spoon.river_be.holding.entity.Holding;
@@ -12,7 +13,7 @@ import com.stock_spoon.river_be.order.repository.OrderRepository;
 import com.stock_spoon.river_be.account.entity.Account;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient;
-import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream;
+import com.stock_spoon.river_be.market.MarketStream;
 import com.stock_spoon.river_be.user.entity.User;
 import com.stock_spoon.river_be.user.repository.UserRepository;
 import java.math.BigDecimal;
@@ -47,7 +48,7 @@ class OrderExecutionEventTests {
     @Autowired OrderExecutionListener listener;
     @Autowired OrderExecutionService executionService;
     @Autowired jakarta.persistence.EntityManagerFactory entityManagerFactory;
-    @MockitoBean KiwoomStockStream stream;
+    @MockitoBean MarketStream stream;
     @MockitoBean KiwoomMarketClient market;
     @MockitoBean OrderSubscriptionService subscriptions;
 
@@ -84,8 +85,8 @@ class OrderExecutionEventTests {
                 Order.Source.AI, null, NOW.minusSeconds(1)));
     }
 
-    private KiwoomStockStream.StockPrice price() {
-        return new KiwoomStockStream.StockPrice("005930", new BigDecimal("69000"),
+    private StockPrice price() {
+        return new StockPrice("005930", new BigDecimal("69000"),
                 BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(10, 0), NOW);
     }
 
@@ -219,7 +220,7 @@ class OrderExecutionEventTests {
         listener.orderCreated(weekend);
         verify(stream, never()).latestQuote(anyString());
         verifyNoInteractions(market);
-        events.publishEvent(new KiwoomStockStream.StockPrice("005930", BigDecimal.valueOf(69000),
+        events.publishEvent(new StockPrice("005930", BigDecimal.valueOf(69000),
                 BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(10, 0), Instant.parse("2026-10-16T01:00:00Z")));
         assertThat(executions.count()).isZero();
         assertThat(orders.findById(friday.getId()).orElseThrow().getStatus()).isEqualTo(Order.Status.PENDING);

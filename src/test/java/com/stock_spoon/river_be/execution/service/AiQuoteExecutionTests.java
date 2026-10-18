@@ -1,6 +1,6 @@
 package com.stock_spoon.river_be.execution.service;
 
-import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.StockPrice;
+import com.stock_spoon.river_be.market.StockPrice;
 import java.math.BigDecimal;
 import java.time.*;
 import org.junit.jupiter.api.Test;

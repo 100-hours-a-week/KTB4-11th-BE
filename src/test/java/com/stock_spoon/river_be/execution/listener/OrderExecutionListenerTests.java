@@ -1,5 +1,6 @@
 package com.stock_spoon.river_be.execution.listener;
 
+import com.stock_spoon.river_be.market.StockPrice;
 import com.stock_spoon.river_be.order.entity.Order;
 import com.stock_spoon.river_be.execution.repository.ExecutionRepository;
 import com.stock_spoon.river_be.order.repository.OrderRepository;
@@ -8,7 +9,7 @@ import com.stock_spoon.river_be.execution.service.OrderExecutionService;
 import com.stock_spoon.river_be.order.service.OrderSubscriptionService;
 
 import com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient;
-import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream;
+import com.stock_spoon.river_be.market.MarketStream;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalTime;
@@ -21,7 +22,7 @@ class OrderExecutionListenerTests {
     private final OrderRepository orders = mock(OrderRepository.class);
     private final OrderExecutionService execution = mock(OrderExecutionService.class);
     private final OrderSubscriptionService subscriptions = mock(OrderSubscriptionService.class);
-    private final KiwoomStockStream stream = mock(KiwoomStockStream.class);
+    private final MarketStream stream = mock(MarketStream.class);
     private final KiwoomMarketClient market = mock(KiwoomMarketClient.class);
     private final OrderBuyPriceService buyPrices = mock(OrderBuyPriceService.class);
     private final OrderExecutionListener listener = new OrderExecutionListener(orders,
@@ -44,8 +45,8 @@ class OrderExecutionListenerTests {
         return order;
     }
 
-    private KiwoomStockStream.StockPrice price(long value) {
-        return new KiwoomStockStream.StockPrice("005930", BigDecimal.valueOf(value),
+    private StockPrice price(long value) {
+        return new StockPrice("005930", BigDecimal.valueOf(value),
                 BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(10, 0), now);
     }
 
@@ -54,7 +55,7 @@ class OrderExecutionListenerTests {
         var order = order(1);
         when(orders.findPendingForPrice("005930", Order.Status.PENDING, Order.Type.LIMIT))
                 .thenReturn(List.of(order));
-        var data = new KiwoomStockStream.StockPrice("005930", BigDecimal.valueOf(69000),
+        var data = new StockPrice("005930", BigDecimal.valueOf(69000),
                 BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(9, 59, 59), now.plusSeconds(1),
                 now.minusSeconds(1), 100L);
         listener.onQuote(new com.stock_spoon.river_be.market.RedisQuoteStore.QuoteEvent(

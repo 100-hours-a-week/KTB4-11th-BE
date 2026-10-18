@@ -11,8 +11,8 @@ import com.stock_spoon.river_be.holding.repository.HoldingRepository;
 import com.stock_spoon.river_be.order.repository.OrderRepository;
 
 import com.stock_spoon.river_be.account.repository.AccountRepository;
-import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.OrderBook;
-import com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.QuoteLevel;
+import com.stock_spoon.river_be.market.OrderBook;
+import com.stock_spoon.river_be.market.QuoteLevel;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
@@ -73,7 +73,7 @@ public class OrderExecutionService {
     }
 
     /** AI 시세는 전체 거래소시각과 5초 신선도를 추가 검증한다. 기존 직접 수신 정책은 유지한다. */
-    public boolean isUsablePrice(com.stock_spoon.river_be.market.kiwoom.KiwoomStockStream.StockPrice price) {
+    public boolean isUsablePrice(com.stock_spoon.river_be.market.StockPrice price) {
         if (price == null || price.tradeTime() == null || !isCurrentSession(price.receivedAt())) return false;
         if (price.exchangeTimestamp() != null && (!isCurrentSession(price.exchangeTimestamp())
                 || !price.exchangeTimestamp().atZone(SEOUL).toLocalTime().equals(price.tradeTime())

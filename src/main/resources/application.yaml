@@ -46,3 +46,10 @@ kiwoom:
     secret: ${KIWOOM_COLLECTOR_SECRET:}
   stream:
     enabled: ${KIWOOM_STREAM_ENABLED:false}
+
+db:
+  write-replay:
+    enabled: ${DB_WRITE_REPLAY_ENABLED:false}
+    queue-url: ${DB_WRITE_REPLAY_QUEUE_URL:}
+    proxysql-error-codes: ${DB_WRITE_REPLAY_PROXYSQL_ERROR_CODES:}
+    region: ${AWS_REGION:ap-northeast-2}

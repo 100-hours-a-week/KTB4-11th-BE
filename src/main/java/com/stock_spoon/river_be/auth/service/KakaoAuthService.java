@@ -5,6 +5,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.stock_spoon.river_be.auth.client.KakaoClient;
+import com.stock_spoon.river_be.auth.client.KakaoUserInfo;
 import com.stock_spoon.river_be.auth.exception.AuthException;
 import com.stock_spoon.river_be.config.KakaoProperties;
 import com.stock_spoon.river_be.user.entity.OAuthProvider;
@@ -31,13 +32,21 @@ public class KakaoAuthService {
 
     @Transactional
     public User verify(String code) {
+        return persistUser(verifyUserInfo(code));
+    }
+
+    public KakaoUserInfo verifyUserInfo(String code) {
         requireConfiguration();
         var kakaoUser = client.verifyUser(code);
         if (kakaoUser.nickname() == null || kakaoUser.nickname().isBlank()) {
             throw new AuthException(HttpStatus.BAD_GATEWAY,
                     "KAKAO_NICKNAME_NOT_PROVIDED", "카카오에서 닉네임을 제공받지 못했습니다.");
         }
+        return kakaoUser;
+    }
 
+    @Transactional
+    public User persistUser(KakaoUserInfo kakaoUser) {
         var oauth = userOAuthRepository.findByProviderAndProviderUserId(
                 OAuthProvider.KAKAO, kakaoUser.id());
         if (oauth.isPresent()) {

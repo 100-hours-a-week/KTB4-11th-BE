@@ -28,14 +28,14 @@ public class RefreshTokenService {
     public LoginTokens create(User user) {
         LoginTokens tokens = tokenProvider.issue(user.getId());
         repository.save(new RefreshToken(
-                user, hash(tokens.refreshToken()), tokens.refreshExpiresAt()));
+                user, hashForReplay(tokens.refreshToken()), tokens.refreshExpiresAt()));
         return tokens;
     }
 
     @Transactional
     public LoginTokens rotate(String refreshToken) {
         long userId = tokenProvider.refreshUserId(refreshToken);
-        RefreshToken stored = repository.findByTokenHash(hash(refreshToken))
+        RefreshToken stored = repository.findByTokenHash(hashForReplay(refreshToken))
                 .filter(token -> token.getUser().getId().equals(userId))
                 .orElseThrow(this::invalidRefreshToken);
 
@@ -43,18 +43,18 @@ public class RefreshTokenService {
         repository.delete(stored);
         LoginTokens tokens = tokenProvider.issue(userId);
         repository.save(new RefreshToken(
-                user, hash(tokens.refreshToken()), tokens.refreshExpiresAt()));
+                user, hashForReplay(tokens.refreshToken()), tokens.refreshExpiresAt()));
         return tokens;
     }
 
     @Transactional
     public void revoke(String refreshToken) {
         if (refreshToken != null && !refreshToken.isBlank()) {
-            repository.deleteByTokenHash(hash(refreshToken));
+            repository.deleteByTokenHash(hashForReplay(refreshToken));
         }
     }
 
-    private String hash(String token) {
+    public String hashForReplay(String token) {
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256")
                     .digest(token.getBytes(StandardCharsets.UTF_8));

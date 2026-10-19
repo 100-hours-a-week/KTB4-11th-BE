@@ -47,7 +47,8 @@ dependencies {
     implementation 'software.amazon.awssdk:auth'
     implementation 'software.amazon.awssdk:regions'
     implementation 'software.amazon.awssdk:http-auth-aws'
-  implementation 'org.springframework.boot:spring-boot-health:4.1.1'
+  	implementation 'org.springframework.boot:spring-boot-health:4.1.1'
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	runtimeOnly 'com.mysql:mysql-connector-j'
 	testRuntimeOnly 'com.h2database:h2'
 

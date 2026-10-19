@@ -46,3 +46,11 @@ kiwoom:
     secret: ${KIWOOM_COLLECTOR_SECRET:}
   stream:
     enabled: ${KIWOOM_STREAM_ENABLED:false}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never

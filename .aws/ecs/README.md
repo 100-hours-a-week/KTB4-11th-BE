@@ -22,7 +22,7 @@ dev push → 빌드·테스트 → ECR 업로드 → 개발 EC2 배포 → ECS �
 
 ## 수동 배포
 
-GitHub Actions의 `Backend Dev CD (V2 ECS)`에서 다음과 같이 실행합니다.
+GitHub Actions의 `Backend V2 ECS CD`에서 다음과 같이 실행합니다.
 
 1. 실행 브랜치로 `dev`를 선택합니다.
 2. `image_tag`에 ECR에 업로드된 이미지의 40자리 커밋 SHA를 입력합니다.

@@ -93,7 +93,7 @@ public class AccountService {
         }
 
         return AccountCreateResponse.from(accountRepository.save(
-                new Account(user, name, request.initialCapital())));
+                new Account(user, name, request.initialCapital(), false)));
     }
 
     @Transactional

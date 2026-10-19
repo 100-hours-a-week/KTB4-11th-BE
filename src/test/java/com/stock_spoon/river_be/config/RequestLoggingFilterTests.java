@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import jakarta.servlet.ServletException;
+import java.sql.SQLException;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -53,5 +54,36 @@ class RequestLoggingFilterTests {
         assertThatThrownBy(() -> new RequestLoggingFilter().doFilter(request, response,
                 (req, res) -> { throw error; })).isSameAs(error);
         assertThat(MDC.get("requestId")).isNull();
+    }
+
+    @Test
+    void logsSqlErrorDetailsWithRequestIdWithoutLoggingOuterExceptionMessage() {
+        Logger logger = (Logger) LoggerFactory.getLogger(RequestLoggingFilter.class);
+        var logs = new ListAppender<ILoggingEvent>();
+        logs.start();
+        logger.addAppender(logs);
+        var sqlError = new SQLException("read only denied", "HY000", 1290);
+        var error = new RuntimeException("outer exception secret", sqlError);
+        var request = new MockHttpServletRequest("POST", "/api/orders/secret-id");
+        var response = new MockHttpServletResponse();
+
+        try {
+            assertThatThrownBy(() -> new RequestLoggingFilter().doFilter(request, response, (req, res) -> {
+                req.setAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE, "/api/orders/{orderId}");
+                throw error;
+            })).isSameAs(error);
+
+            assertThat(logs.list).anySatisfy(event -> {
+                assertThat(event.getFormattedMessage()).contains(
+                        "event=database_exception_observed", "route=/api/orders/{orderId}",
+                        "exceptionType=SQLException", "sqlErrorCode=1290", "sqlState=HY000",
+                        "sqlMessage=read only denied");
+                assertThat(event.getMDCPropertyMap()).containsKey("requestId");
+            });
+            assertThat(logs.list.toString()).doesNotContain("outer exception secret", "secret-id");
+        } finally {
+            logger.detachAppender(logs);
+            logs.stop();
+        }
     }
 }

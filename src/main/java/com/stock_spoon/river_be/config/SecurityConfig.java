@@ -126,4 +126,3 @@ public class SecurityConfig {
         response.getWriter().write("{\"code\":\"" + code + "\",\"message\":\"" + message + "\"}");
     }
 }
-//

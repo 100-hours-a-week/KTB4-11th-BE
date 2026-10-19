@@ -113,6 +113,7 @@ jobs:
       - name: Wait for deployment
         env:
           DEPLOYMENT_ID: ${{ steps.update.outputs.deployment_id }}
+          TASK_DEFINITION_ARN: ${{ steps.register.outputs.task_definition_arn }}
         run: |
           set -Eeuo pipefail
           deadline=$((SECONDS + 35 * 60))
@@ -124,8 +125,14 @@ jobs:
               --query "services[0].deployments[?id=='${DEPLOYMENT_ID}'] | [0]" \
               --output json)"
 
-            if [[ "$DEPLOYMENT" == "null" ]]; then
-              echo "Deployment $DEPLOYMENT_ID is no longer active (rolled back or replaced)" >&2
+            # 이번 배포가 여전히 서비스의 PRIMARY이고 이번에 등록한 리비전을 쓰는지 매 조회마다 확인한다.
+            # COMPLETED 직후 다른 배포로 교체된 경우도 성공으로 처리하지 않는다.
+            if ! jq -e --arg arn "$TASK_DEFINITION_ARN" \
+              '. != null and .status == "PRIMARY" and .taskDefinition == $arn' \
+              <<<"$DEPLOYMENT" > /dev/null; then
+              echo "Deployment $DEPLOYMENT_ID is no longer the PRIMARY deployment of $TASK_DEFINITION_ARN (rolled back or replaced)" >&2
+              aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+                --query 'services[0].events[:10].[createdAt,message]' --output text || true
               exit 1
             fi
 
@@ -134,7 +141,7 @@ jobs:
 
             case "$STATE" in
               COMPLETED)
-                echo "Deployment completed"
+                echo "Deployment completed: $TASK_DEFINITION_ARN"
                 exit 0
                 ;;
               FAILED)

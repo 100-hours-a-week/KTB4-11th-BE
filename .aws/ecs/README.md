@@ -33,7 +33,7 @@ SSM 값은 Task가 시작될 때만 읽습니다. **값을 바꿔도 실행 중�
 
 ## 수동 배포
 
-GitHub Actions의 `Backend Dev CD (V2 ECS)`에서 다음과 같이 실행합니다.
+GitHub Actions의 `Backend V2 ECS CD`에서 다음과 같이 실행합니다.
 
 1. 실행 브랜치로 `dev`를 선택합니다.
 2. `image_tag`에 ECR에 업로드된 이미지의 40자리 커밋 SHA를 입력합니다.

@@ -98,7 +98,7 @@ class AccountControllerTests {
                 .andExpect(jsonPath("$.account_id").isNumber())
                 .andExpect(jsonPath("$.initial_capital").value(5_000_000))
                 .andExpect(jsonPath("$.cash_balance").value(5_000_000))
-                .andExpect(jsonPath("$.is_ai_managed").value(true))
+                .andExpect(jsonPath("$.is_ai_managed").value(false))
                 .andExpect(jsonPath("$.ai_delegated").doesNotExist())
                 .andExpect(jsonPath("$.account_name").value("기본 계좌 1"));
         createAccount(user,

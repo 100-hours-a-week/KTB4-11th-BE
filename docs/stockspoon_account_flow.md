@@ -61,7 +61,7 @@ Cookie: access_token={StockSpoon Access JWT}; XSRF-TOKEN={csrf-token}
 
 `AccountService.create()`는 `onboarding_completed=true`인지 확인한다. 완료 전이면 `409 ONBOARDING_REQUIRED`다. 시작 자금 범위는 첫 계좌와 같다. 계좌 개수 상한은 없다. `account_name`이 없거나 공백만 있으면 현재 활성 계좌 이름과 충돌하지 않는 가장 작은 번호를 찾아 `기본 계좌 1`, `기본 계좌 2`처럼 붙인다.
 
-사용자가 입력한 이름은 앞뒤 공백을 제거하고 저장한다. 최대 20자이며, 같은 사용자의 활성 계좌 이름과 영문 대소문자만 다를 때도 중복으로 취급한다. 초기 현금은 시작 자금과 동일하고 AI 위임은 항상 ON이다. 시작 자금과 AI 위임 상태를 변경하는 API는 없다.
+사용자가 입력한 이름은 앞뒤 공백을 제거하고 저장한다. 최대 20자이며, 같은 사용자의 활성 계좌 이름과 영문 대소문자만 다를 때도 중복으로 취급한다. 초기 현금은 시작 자금과 동일하고 사용자 운용 계좌로 생성한다(`is_ai_managed=false`). 시작 자금과 AI 위임 상태를 변경하는 API는 없다.
 
 두 생성 API는 역할이 다르지만 같은 `Account` 엔티티를 `accounts` 테이블에 저장한다.
 
@@ -115,7 +115,7 @@ Cookie: access_token={StockSpoon Access JWT}
 
 `available_cash`는 기존 주문 로직을 재사용해 현금에서 대기 매수 주문의 예약금을 뺀 실제 값이다. `holdings_market_value`는 전체 보유종목의 키움 현재가 × 보유수량 합계이며, `total_assets`는 현금 잔액 + 보유 평가액이다. `return_percent`는 (총자산 - 초기자본) / 초기자본 × 100을 소수점 4자리 HALF_UP으로 계산한다. `is_duel_account=false`와 `executed_trade_count=0`은 임시 표시값이다.
 
-추가 계좌 생성은 API 문서에 맞춘 `AccountCreateResponse`를 반환한다. 위 온보딩 응답의 `ai_delegated` 대신 `is_ai_managed`를 제공하며, 실제 AI 위임 상태인 `true`를 반환한다.
+추가 계좌 생성은 API 문서에 맞춘 `AccountCreateResponse`를 반환한다. 위 온보딩 응답의 `ai_delegated` 대신 `is_ai_managed`를 제공하며, 사용자 운용 상태인 `false`를 반환한다.
 
 계좌 목록은 API 문서에 맞춘 `AccountListResponse`의 배열을 반환한다.
 

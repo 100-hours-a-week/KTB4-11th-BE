@@ -53,6 +53,17 @@ class SecurityJwtTests {
     }
 
     @Test
+    void healthIsPublicWithoutExposingDetails() throws Exception {
+        mvc.perform(get("/actuator/health"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"))
+                .andExpect(jsonPath("$.components").doesNotExist())
+                .andExpect(jsonPath("$.details").doesNotExist());
+        mvc.perform(get("/actuator/env"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void corsAllowsConfiguredOriginsAndRejectsOthers() throws Exception {
         for (String origin : new String[] {"https://app.example.com", "http://localhost:3001"}) {
             mvc.perform(options("/api/v1/auth/login")

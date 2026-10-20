@@ -157,16 +157,16 @@ class OrderHistoryTests {
         var executed = executed("2026-09-02T00:00:00Z", "2026-09-02T01:00:00Z", Order.Side.BUY);
         var cancelled = pending(account, Order.Side.SELL, "2026-09-03T00:00:00Z");
         cancelled.cancel(Instant.parse("2026-09-03T01:00:00Z"));
-        var all = orders.findHistory(account.getId(), null, Order.Source.AI, null,
+        var all = orders.findHistory(account.getId(), null, Order.Source.AI, null, null,
                 org.springframework.data.domain.Pageable.unpaged());
         assertThat(all).extracting(Order::getId)
                 .containsExactlyInAnyOrder(pending.getId(), executed.getId(), cancelled.getId());
-        assertThat(orders.countHistory(account.getId(), null, Order.Source.AI, null)).isEqualTo(3);
+        assertThat(orders.countHistory(account.getId(), null, Order.Source.AI, null, null)).isEqualTo(3);
         for (var order : List.of(pending, executed, cancelled)) {
-            assertThat(orders.findHistory(account.getId(), order.getStatus(), Order.Source.AI, null,
+            assertThat(orders.findHistory(account.getId(), order.getStatus(), Order.Source.AI, null, null,
                     org.springframework.data.domain.Pageable.unpaged()))
                     .extracting(Order::getId).containsExactly(order.getId());
-            assertThat(orders.countHistory(account.getId(), order.getStatus(), Order.Source.AI, null)).isEqualTo(1);
+            assertThat(orders.countHistory(account.getId(), order.getStatus(), Order.Source.AI, null, null)).isEqualTo(1);
         }
         verifyNoInteractions(market);
     }
@@ -180,20 +180,20 @@ class OrderHistoryTests {
         pending(other, Order.Side.BUY, "2026-09-05T00:00:00Z");
         orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY, 2, 70000,
                 Order.Source.USER, null, Instant.parse("2026-09-05T00:00:00Z")));
-        assertThat(orders.countHistory(account.getId(), Order.Status.PENDING, Order.Source.AI, Order.Side.BUY))
+        assertThat(orders.countHistory(account.getId(), Order.Status.PENDING, Order.Source.AI, Order.Side.BUY, null))
                 .isEqualTo(2);
-        var first = orders.findHistory(account.getId(), Order.Status.PENDING, Order.Source.AI, Order.Side.BUY,
+        var first = orders.findHistory(account.getId(), Order.Status.PENDING, Order.Source.AI, Order.Side.BUY, null,
                 org.springframework.data.domain.PageRequest.of(0, 1));
-        var second = orders.findHistory(account.getId(), Order.Status.PENDING, Order.Source.AI, Order.Side.BUY,
+        var second = orders.findHistory(account.getId(), Order.Status.PENDING, Order.Source.AI, Order.Side.BUY, null,
                 org.springframework.data.domain.PageRequest.of(1, 1));
         assertThat(first).extracting(Order::getId).containsExactly(buy2.getId());
         assertThat(second).extracting(Order::getId).containsExactly(buy1.getId());
-        assertThat(orders.countHistory(account.getId(), null, Order.Source.AI, Order.Side.BUY)).isEqualTo(3);
-        assertThat(orders.findHistory(account.getId(), null, Order.Source.AI, Order.Side.BUY,
+        assertThat(orders.countHistory(account.getId(), null, Order.Source.AI, Order.Side.BUY, null)).isEqualTo(3);
+        assertThat(orders.findHistory(account.getId(), null, Order.Source.AI, Order.Side.BUY, null,
                 org.springframework.data.domain.Pageable.unpaged())).hasSize(3);
-        assertThat(orders.countHistory(account.getId(), Order.Status.CANCELLED, Order.Source.AI, Order.Side.SELL))
+        assertThat(orders.countHistory(account.getId(), Order.Status.CANCELLED, Order.Source.AI, Order.Side.SELL, null))
                 .isZero();
-        assertThat(orders.findHistory(account.getId(), Order.Status.CANCELLED, Order.Source.AI, Order.Side.SELL,
+        assertThat(orders.findHistory(account.getId(), Order.Status.CANCELLED, Order.Source.AI, Order.Side.SELL, null,
                 org.springframework.data.domain.Pageable.unpaged())).isEmpty();
         verifyNoInteractions(market);
     }
@@ -434,6 +434,64 @@ class OrderHistoryTests {
                 .andExpect(jsonPath("$.orders[0].stock_code").value("000660"));
         verify(market).stockDetails("000660");
         verify(market, never()).stockDetails("005930");
+    }
+
+    @Test void stockFilterCombinesWithStatusAndSideBeforePaging() throws Exception {
+        var first = pending(account, Order.Side.BUY, "2026-09-01T00:00:00Z");
+        var second = pending(account, Order.Side.BUY, "2026-09-02T00:00:00Z");
+        pending(account, Order.Side.SELL, "2026-09-03T00:00:00Z");
+        executed("2026-09-04T00:00:00Z", "2026-09-04T01:00:00Z", Order.Side.BUY);
+        orders.save(Order.pendingLimit(account, "000660", Order.Side.BUY, 2, 100,
+                Order.Source.AI, null, Instant.parse("2026-09-05T00:00:00Z")));
+        String filter = "&limit=1&stock_code=005930&order_status=pending&order_side=buy";
+        list("?page=0" + filter).andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders.length()").value(1))
+                .andExpect(jsonPath("$.orders[0].order_id").value(second.getId()))
+                .andExpect(jsonPath("$.orders[0].stock_code").value("005930"))
+                .andExpect(jsonPath("$.pagination.page").value(0))
+                .andExpect(jsonPath("$.pagination.limit").value(1))
+                .andExpect(jsonPath("$.pagination.total_elements").value(2))
+                .andExpect(jsonPath("$.pagination.total_pages").value(2))
+                .andExpect(jsonPath("$.pagination.has_next").value(true));
+        list("?page=1" + filter).andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders[0].order_id").value(first.getId()))
+                .andExpect(jsonPath("$.pagination.has_next").value(false));
+        list("?page=2" + filter).andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders").isEmpty())
+                .andExpect(jsonPath("$.pagination.total_elements").value(2));
+        verify(market, never()).stockDetails("000660");
+    }
+
+    @Test void stockFilterWorksWithoutPagingAndOmissionKeepsAllStocks() throws Exception {
+        pending(account, Order.Side.BUY, "2026-09-01T00:00:00Z");
+        orders.save(Order.pendingLimit(account, "000660", Order.Side.BUY, 2, 100,
+                Order.Source.AI, null, Instant.parse("2026-09-02T00:00:00Z")));
+        list("?stock_code=005930&limit=3").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders.length()").value(1))
+                .andExpect(jsonPath("$.orders[0].stock_code").value("005930"))
+                .andExpect(jsonPath("$.pagination").doesNotExist());
+        list("?page=0").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders.length()").value(2))
+                .andExpect(jsonPath("$.pagination.total_elements").value(2));
+    }
+
+    @Test void stockFilterReturnsEmptyForUnknownCodeAndRejectsBlankValues() throws Exception {
+        pending(account, Order.Side.BUY, "2026-09-01T00:00:00Z");
+        list("?page=0&stock_code=999999").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders").isEmpty())
+                .andExpect(jsonPath("$.pagination.total_elements").value(0))
+                .andExpect(jsonPath("$.pagination.total_pages").value(0))
+                .andExpect(jsonPath("$.pagination.has_next").value(false));
+        list("?stock_code=00593").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders").isEmpty());
+        for (String code : List.of("", " ", "\t")) {
+            mvc.perform(get("/api/v1/accounts/{id}/orders", account.getId())
+                    .param("stock_code", code)
+                    .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_ORDER_QUERY"));
+        }
+        verifyNoInteractions(market);
     }
 
     @Test void mapsStockInfoFailureTo503() throws Exception {

@@ -19,21 +19,25 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
             select o from Order o left join Execution e on e.order = o
             where o.account.id = :accountId and (:status is null or o.status = :status) and o.source = :source
             and (:side is null or o.side = :side)
+            and (:stockCode is null or o.stockCode = :stockCode)
             group by o order by
             case when :status = com.stock_spoon.river_be.order.entity.Order.Status.EXECUTED
                 then max(e.createdAt) else o.createdAt end desc, o.id desc
             """)
     List<Order> findHistory(@Param("accountId") long accountId, @Param("status") Order.Status status,
             @Param("source") Order.Source source, @Param("side") Order.Side side,
+            @Param("stockCode") String stockCode,
             org.springframework.data.domain.Pageable pageable);
 
     @Query("""
             select count(o) from Order o
             where o.account.id = :accountId and (:status is null or o.status = :status) and o.source = :source
             and (:side is null or o.side = :side)
+            and (:stockCode is null or o.stockCode = :stockCode)
             """)
     long countHistory(@Param("accountId") long accountId, @Param("status") Order.Status status,
-            @Param("source") Order.Source source, @Param("side") Order.Side side);
+            @Param("source") Order.Source source, @Param("side") Order.Side side,
+            @Param("stockCode") String stockCode);
 
     List<Order> findAllByStatus(Order.Status status);
 

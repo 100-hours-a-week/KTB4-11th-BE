@@ -14,6 +14,7 @@ import com.stock_spoon.river_be.account.repository.AccountRepository;
 import com.stock_spoon.river_be.competition.entity.Competition;
 import com.stock_spoon.river_be.competition.entity.CompetitionParticipant;
 import com.stock_spoon.river_be.competition.exception.CompetitionException;
+import com.stock_spoon.river_be.competition.logging.CompetitionCreationLog;
 import com.stock_spoon.river_be.competition.repository.CompetitionRepository;
 import com.stock_spoon.river_be.competition.repository.CompetitionParticipantRepository;
 import com.stock_spoon.river_be.user.repository.UserRepository;
@@ -185,45 +186,67 @@ public class CompetitionService {
 
     @Transactional // 대결·계좌 두 개·참가자 중 하나라도 저장에 실패하면 모두 롤백한다.
     public CompetitionCreateResponse createCompetition(Long userId, CompetitionCreateRequest request) {
+        CompetitionCreationLog.stage("read_trading_time");
         var now = tradingHours.now(); // 자정 경계에서도 한 요청은 같은 날짜·시각으로 판단한다.
+        CompetitionCreationLog.stage("user_lookup");
         var user = users.findLockedById(userId).orElseThrow(() -> new CompetitionException(
                 HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "사용자를 찾을 수 없습니다."));
+        CompetitionCreationLog.stage("validate_onboarding");
         if (!user.isOnboardingCompleted()) {
             throw new CompetitionException(HttpStatus.CONFLICT, "ONBOARDING_REQUIRED", "먼저 온보딩을 완료해주세요.");
         }
         // 단일 필드의 필수값·범위는 @Valid로 검사하고 여기서는 대결 정책을 검사한다.
+        CompetitionCreationLog.stage("validate_competition_type");
         if (!"user_vs_ai".equals(request.getCompetitionType())) {
             throw invalid("INVALID_COMPETITION_TYPE", "지원하지 않는 대결 유형입니다.");
         }
+        CompetitionCreationLog.stage("validate_ai_participant_count");
         if (request.getAiParticipantCount() != 1) {
             throw invalid("INVALID_AI_PARTICIPANT_COUNT", "v2 대결에는 AI 한 명만 참여할 수 있습니다.");
         }
+        CompetitionCreationLog.stage("validate_start_date");
         if (!request.getStartDate().equals(now.toLocalDate())) {
             throw invalid("INVALID_START_DATE", "대결 시작일은 오늘 날짜여야 합니다.");
         }
+        CompetitionCreationLog.stage("validate_period");
         if (ChronoUnit.DAYS.between(request.getStartDate(), request.getEndDate()) < 3) {
             throw invalid("INVALID_COMPETITION_PERIOD", "대결 기간은 최소 3일이어야 합니다.");
         }
+        CompetitionCreationLog.stage("validate_competition_name");
         String name = request.getCompetitionName().trim();
         if (name.isBlank() || name.length() > 20) {
             throw invalid("INVALID_COMPETITION_NAME", "대결 이름은 공백이 아닌 20자 이하여야 합니다.");
         }
+        CompetitionCreationLog.stage("check_account_name");
         if (accounts.existsByUserIdAndNameIgnoreCase(userId, name)) {
             throw new CompetitionException(HttpStatus.CONFLICT, "DUPLICATE_ACCOUNT_NAME", "이미 사용 중인 계좌 이름입니다.");
         }
 
-        // 1은 request.getAiParticipantCount() 대신 들어감
+        CompetitionCreationLog.stage("competition_save");
         var competition = competitions.save(new Competition(user, name, Competition.Type.USER_VS_AI,
                 request.getStartDate(), request.getEndDate(), request.getInitialCapital(), 1));
+        CompetitionCreationLog.competitionId(competition.getId());
+        CompetitionCreationLog.stage("initialize_competition_state");
         if (tradingHours.isOpen(now)) competition.start(now.toInstant());
 
         // 두 계좌의 자금은 별개다. 사용자 계좌명만 대결명을 사용하고 AI 이름은 내부 식별용이다.
+        CompetitionCreationLog.stage("user_account_save");
         var userAccount = accounts.save(new Account(user, name, request.getInitialCapital(), false));
+        CompetitionCreationLog.accountId(userAccount.getId());
+        CompetitionCreationLog.stage("ai_account_name");
         String aiName = nextAiAccountName(userId, competition.getId());
+        CompetitionCreationLog.accountId(null);
+        CompetitionCreationLog.stage("ai_account_save");
         var aiAccount = accounts.save(new Account(user, aiName, request.getInitialCapital(), true));
+        CompetitionCreationLog.accountId(userAccount.getId());
+        CompetitionCreationLog.stage("user_participant_save");
         participants.save(new CompetitionParticipant(competition, userAccount));
+        CompetitionCreationLog.accountId(aiAccount.getId());
+        CompetitionCreationLog.stage("ai_participant_save");
         participants.save(new CompetitionParticipant(competition, aiAccount));
 
+        CompetitionCreationLog.accountId(null);
+        CompetitionCreationLog.stage("transaction_commit");
         return new CompetitionCreateResponse("success", competition.getId(),
                 competition.getState().name().toLowerCase(Locale.ROOT));
     }

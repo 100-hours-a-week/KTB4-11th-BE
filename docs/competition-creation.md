@@ -73,13 +73,47 @@ AI 계좌: 내부 이름 사용 / 자금 10,000,000원
 ### 예외 처리
 
 ```text
-DTO 제약 위반 → 컨트롤러 메서드 실행 전 400
-업무 규칙 위반 → CompetitionException → CompetitionExceptionHandler.handle()
+DTO 제약 위반 / JSON 변환 실패 → CompetitionController.invalidCreateRequest()
+                            → 생성 실패 로그 → 기존 형식의 400
+업무 규칙 위반 → 컨트롤러에서 생성 실패 로그 → CompetitionExceptionHandler.handle()
               → 예외의 HTTP 상태 + code/message
-저장 실패 → 생성 트랜잭션 전체 롤백
+저장·커밋 실패 → 생성 트랜잭션 전체 롤백 → 컨트롤러에서 생성 실패 로그 → 원래 예외 재전파
 ```
 
 코드: [컨트롤러](../src/main/java/com/stock_spoon/river_be/competition/controller/CompetitionController.java) · [서비스](../src/main/java/com/stock_spoon/river_be/competition/service/CompetitionService.java) · [예외 처리](../src/main/java/com/stock_spoon/river_be/competition/exception/CompetitionExceptionHandler.java)
+
+### 생성 실패 원인 로그 — fix/competition-create-logging
+
+대결 생성 요청이 들어오면 `competition.controller.CompetitionController.createCompetition(jwt, request)`가 호출된다. 인증된 JWT는 `jwt`, JSON을 변환한 `CompetitionCreateRequest`는 `request` 인자로 전달된다. 컨트롤러는 `competition.logging.CompetitionCreationLog` 범위를 열고 JWT subject에서 추출한 사용자 ID를 기록한 뒤, `CompetitionService.createCompetition(userId, request)`를 호출한다. 이 클래스는 업무 서비스가 아닌 Controller·Service 공용 로깅 보조 클래스이므로 `logging` 패키지에 둔다.
+
+서비스는 처리 직전에 `CompetitionCreationLog.stage()`로 현재 단계를 갱신한다. 이 호출 자체는 로그를 출력하지 않는다. 실패한 경우 컨트롤러가 `failure(error)`를 한 번 호출하여 마지막 단계·오류 코드·내부 원인 정보를 기록하고 같은 예외를 다시 던진다. 서비스의 트랜잭션 프록시가 커밋한 뒤 컨트롤러로 반환하므로, 커밋 중 실패도 이 경계에서 기록된다. 정상 요청에는 생성 실패 로그가 없다.
+
+`@Valid`와 JSON 변환은 컨트롤러 본문보다 먼저 실행된다. 이 단계의 실패는 컨트롤러의 `invalidCreateRequest(error)`에서 필드·제약 이름 또는 변환 실패 유형을 기록하고 기존 `INVALID_REQUEST` 응답을 반환한다. 인증·CSRF 실패는 컨트롤러 진입 전 보안 계층의 기존 로그를 사용한다.
+
+| stage | 확인할 내용 |
+|---|---|
+| request_validation / request_deserialization | DTO 조건 위반 / JSON·자료형·날짜 변환 실패 |
+| identity_resolution / transaction_begin | 사용자 ID 해석 / 서비스 트랜잭션 시작 |
+| read_trading_time / user_lookup | 거래 시각 확인 / 사용자 잠금 조회 |
+| validate_onboarding / validate_competition_type / validate_ai_participant_count | 온보딩·대결 유형·AI 인원 규칙 |
+| validate_start_date / validate_period / validate_competition_name | 시작일·기간·이름 규칙 |
+| check_account_name | 기존 계좌명 중복 검사 |
+| competition_save / initialize_competition_state | 대결 저장 / 초기 상태 판단 |
+| user_account_save / ai_account_name / ai_account_save | 사용자 계좌 저장 / AI 계좌명 결정 / AI 계좌 저장 |
+| user_participant_save / ai_participant_save | 사용자·AI 참가자 연결 저장 |
+| transaction_commit | 트랜잭션 커밋·지연된 DB 변경 반영 |
+
+로그에는 `event=competition_creation_failed`, `stage`, `code`, `status`, `userId`, `competitionId`, `accountId`, `fieldIssues`, `causeType`, `rootCauseType`, `origin`, `sqlState`, `sqlErrorCode`가 남는다. 로그 패턴의 `requestId`로 공통 HTTP 결과 로그와 연결한다. 업무 예외는 기존 원인 코드, DB 오류는 `DATABASE_ERROR`, 그 외 내부 오류는 `UNEXPECTED_ERROR`를 로그용 코드로 사용한다. 4xx는 WARN, 5xx는 ERROR다. 이 로그용 구분은 기존 API 오류 응답을 바꾸지 않는다.
+
+```text
+requestId=... event=competition_creation_failed stage=validate_start_date code=INVALID_START_DATE status=400 ...
+requestId=... event=competition_creation_failed stage=request_validation code=INVALID_REQUEST status=400 ... fieldIssues=initialCapital:Min ...
+requestId=... event=competition_creation_failed stage=user_participant_save code=DATABASE_ERROR status=500 ... rootCauseType=SQLException ... sqlState=23000 sqlErrorCode=1062
+```
+
+`origin`은 가장 안쪽 원인의 클래스·메서드·행 번호다. 예외 메시지·전체 스택·SQL 원문·토큰·쿠키·요청 본문·거절된 입력값·대결명은 기록하지 않는다. DB 정보는 SQLState와 숫자 오류 코드만 기록한다. 발급 전 ID와 특정 계좌에 귀속되지 않는 커밋 단계의 accountId는 `none`이다. 실패 로그에 발급된 ID가 있어도 롤백되었을 수 있으므로 저장 완료를 뜻하지 않는다.
+
+범위가 닫히면 생성용 MDC를 복원한다. API 경계 없이 서비스를 직접 호출하는 테스트·내부 호출에서는 단계 정보를 남기지 않는다. 기존 공통 HTTP 로그는 별도로 유지하므로 내부 오류 시 HTTP 실패 로그가 추가로 보일 수 있다. 스케줄러·다른 대결 조회 로그 및 CloudWatch 수집 설정은 이번 변경 범위에 포함하지 않는다.
 
 ## 2. 자동 시작
 

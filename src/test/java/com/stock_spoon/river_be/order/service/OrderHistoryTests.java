@@ -75,6 +75,10 @@ class OrderHistoryTests {
                 .cookie(new Cookie("access_token", tokens.issue(user.getId()).accessToken())));
     }
 
+    private ResultActions listExecuted(String query) throws Exception {
+        return list(query + (query.isEmpty() ? "?" : "&") + "order_status=executed");
+    }
+
     @Test void limitsAfterExecutionTimeAndIdSortAndExcludesOtherStatesAndAccounts() throws Exception {
         var oldest = executed("2026-09-05T00:00:00Z", "2026-09-01T01:00:00Z", Order.Side.BUY);
         var middle = executed("2026-08-01T00:00:00Z", "2026-09-02T01:00:00Z", Order.Side.SELL);
@@ -84,14 +88,14 @@ class OrderHistoryTests {
         pending(account, Order.Side.BUY, "2026-09-04T00:00:00Z").cancel(Instant.now());
         var other = accounts.save(new Account(users.save(new User("다른사용자")), "다른계좌", 1000000));
         pending(other, Order.Side.BUY, "2026-09-04T00:00:00Z").execute();
-        list("?limit=3").andExpect(status().isOk()).andExpect(jsonPath("$.orders.length()").value(3))
+        listExecuted("?limit=3").andExpect(status().isOk()).andExpect(jsonPath("$.orders.length()").value(3))
                 .andExpect(jsonPath("$.orders[0].order_id").value(tie2.getId()))
                 .andExpect(jsonPath("$.orders[1].order_id").value(tie1.getId()))
                 .andExpect(jsonPath("$.orders[2].order_id").value(middle.getId()));
         verify(market, times(1)).stockDetails("005930");
-        list("").andExpect(status().isOk()).andExpect(jsonPath("$.orders.length()").value(4))
+        listExecuted("").andExpect(status().isOk()).andExpect(jsonPath("$.orders.length()").value(4))
                 .andExpect(jsonPath("$.orders[3].order_id").value(oldest.getId()));
-        list("?limit=10").andExpect(status().isOk()).andExpect(jsonPath("$.orders.length()").value(4));
+        listExecuted("?limit=10").andExpect(status().isOk()).andExpect(jsonPath("$.orders.length()").value(4));
     }
 
     @Test void matchesDocumentShapeAndPreservesSellPrecisionAndBuyNulls() throws Exception {
@@ -148,6 +152,134 @@ class OrderHistoryTests {
             assertThat(item.path("reason").path("summary").isNull()).isTrue();
         }
     }
+    @Test void repositorySupportsOptionalStatusInBothHistoryAndCountQueries() {
+        var pending = pending(account, Order.Side.BUY, "2026-09-01T00:00:00Z");
+        var executed = executed("2026-09-02T00:00:00Z", "2026-09-02T01:00:00Z", Order.Side.BUY);
+        var cancelled = pending(account, Order.Side.SELL, "2026-09-03T00:00:00Z");
+        cancelled.cancel(Instant.parse("2026-09-03T01:00:00Z"));
+        var all = orders.findHistory(account.getId(), null, Order.Source.AI, null,
+                org.springframework.data.domain.Pageable.unpaged());
+        assertThat(all).extracting(Order::getId)
+                .containsExactlyInAnyOrder(pending.getId(), executed.getId(), cancelled.getId());
+        assertThat(orders.countHistory(account.getId(), null, Order.Source.AI, null)).isEqualTo(3);
+        for (var order : List.of(pending, executed, cancelled)) {
+            assertThat(orders.findHistory(account.getId(), order.getStatus(), Order.Source.AI, null,
+                    org.springframework.data.domain.Pageable.unpaged()))
+                    .extracting(Order::getId).containsExactly(order.getId());
+            assertThat(orders.countHistory(account.getId(), order.getStatus(), Order.Source.AI, null)).isEqualTo(1);
+        }
+        verifyNoInteractions(market);
+    }
+
+    @Test void repositoryCombinesStatusSideAccountAndSourceBeforePaging() {
+        var buy1 = pending(account, Order.Side.BUY, "2026-09-01T00:00:00Z");
+        var buy2 = pending(account, Order.Side.BUY, "2026-09-02T00:00:00Z");
+        pending(account, Order.Side.SELL, "2026-09-03T00:00:00Z");
+        executed("2026-09-04T00:00:00Z", "2026-09-04T01:00:00Z", Order.Side.BUY);
+        var other = accounts.save(new Account(users.save(new User("Repository 타인")), "타인 계좌", 1000000));
+        pending(other, Order.Side.BUY, "2026-09-05T00:00:00Z");
+        orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY, 2, 70000,
+                Order.Source.USER, null, Instant.parse("2026-09-05T00:00:00Z")));
+        assertThat(orders.countHistory(account.getId(), Order.Status.PENDING, Order.Source.AI, Order.Side.BUY))
+                .isEqualTo(2);
+        var first = orders.findHistory(account.getId(), Order.Status.PENDING, Order.Source.AI, Order.Side.BUY,
+                org.springframework.data.domain.PageRequest.of(0, 1));
+        var second = orders.findHistory(account.getId(), Order.Status.PENDING, Order.Source.AI, Order.Side.BUY,
+                org.springframework.data.domain.PageRequest.of(1, 1));
+        assertThat(first).extracting(Order::getId).containsExactly(buy2.getId());
+        assertThat(second).extracting(Order::getId).containsExactly(buy1.getId());
+        assertThat(orders.countHistory(account.getId(), null, Order.Source.AI, Order.Side.BUY)).isEqualTo(3);
+        assertThat(orders.findHistory(account.getId(), null, Order.Source.AI, Order.Side.BUY,
+                org.springframework.data.domain.Pageable.unpaged())).hasSize(3);
+        assertThat(orders.countHistory(account.getId(), Order.Status.CANCELLED, Order.Source.AI, Order.Side.SELL))
+                .isZero();
+        assertThat(orders.findHistory(account.getId(), Order.Status.CANCELLED, Order.Source.AI, Order.Side.SELL,
+                org.springframework.data.domain.Pageable.unpaged())).isEmpty();
+        verifyNoInteractions(market);
+    }
+
+    @Test void filtersPendingAndCancelledOrdersAndBuildsEmptyExecutionResponses() throws Exception {
+        var newest = pending(account, Order.Side.BUY, "2026-09-05T00:00:00Z");
+        var older = pending(account, Order.Side.BUY, "2026-09-04T00:00:00Z");
+        var cancelled = pending(account, Order.Side.SELL, "2026-09-06T00:00:00Z");
+        cancelled.cancel(Instant.parse("2026-09-06T01:00:00Z"));
+        executed("2026-09-03T00:00:00Z", "2026-09-09T01:00:00Z", Order.Side.BUY);
+        list("?page=0&limit=1&order_status=pending&order_side=buy").andExpect(status().isOk())
+                .andExpect(jsonPath("$.pagination.total_elements").value(2))
+                .andExpect(jsonPath("$.pagination.total_pages").value(2))
+                .andExpect(jsonPath("$.pagination.has_next").value(true))
+                .andExpect(jsonPath("$.orders[0].order_id").value(newest.getId()))
+                .andExpect(jsonPath("$.orders[0].order_status").value("pending"))
+                .andExpect(jsonPath("$.orders[0].reserved_cash").value(140000))
+                .andExpect(jsonPath("$.orders[0].executions").isEmpty())
+                .andExpect(jsonPath("$.orders[0].execution_summary").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.orders[0].can_cancel").value(true));
+        list("?page=1&limit=1&order_status=pending&order_side=buy").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders[0].order_id").value(older.getId()))
+                .andExpect(jsonPath("$.pagination.has_next").value(false));
+        list("?page=0&order_status=cancelled&order_side=sell").andExpect(status().isOk())
+                .andExpect(jsonPath("$.pagination.total_elements").value(1))
+                .andExpect(jsonPath("$.orders[0].order_id").value(cancelled.getId()))
+                .andExpect(jsonPath("$.orders[0].order_status").value("cancelled"))
+                .andExpect(jsonPath("$.orders[0].reserved_cash").value(0))
+                .andExpect(jsonPath("$.orders[0].canceled_at").value("2026-09-06T10:00:00+09:00"))
+                .andExpect(jsonPath("$.orders[0].executions").isEmpty())
+                .andExpect(jsonPath("$.orders[0].execution_summary").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.orders[0].can_cancel").value(false));
+        list("?page=0&order_status=pending&order_side=sell").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders").isEmpty())
+                .andExpect(jsonPath("$.pagination.total_elements").value(0));
+    }
+
+    @Test void omittedStatusIncludesEveryStateAndSortsByCreationTimeWithIdTieBreak() throws Exception {
+        var filled = executed("2026-09-01T00:00:00Z", "2026-09-09T01:00:00Z", Order.Side.BUY);
+        var newest = pending(account, Order.Side.BUY, "2026-09-05T00:00:00Z");
+        var cancelled = pending(account, Order.Side.SELL, "2026-09-05T00:00:00Z");
+        cancelled.cancel(Instant.parse("2026-09-05T01:00:00Z"));
+        var other = accounts.save(new Account(users.save(new User("상태 필터 타인")), "타인", 1000000));
+        pending(other, Order.Side.BUY, "2026-09-10T00:00:00Z");
+        orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY, 2, 70000,
+                Order.Source.USER, null, Instant.parse("2026-09-10T00:00:00Z")));
+        list("?page=0&limit=2").andExpect(status().isOk())
+                .andExpect(jsonPath("$.pagination.total_elements").value(3))
+                .andExpect(jsonPath("$.orders[0].order_id").value(cancelled.getId()))
+                .andExpect(jsonPath("$.orders[1].order_id").value(newest.getId()));
+        list("?page=1&limit=2").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders.length()").value(1))
+                .andExpect(jsonPath("$.orders[0].order_id").value(filled.getId()))
+                .andExpect(jsonPath("$.pagination.has_next").value(false));
+        list("?limit=3").andExpect(status().isOk())
+                .andExpect(jsonPath("$.orders.length()").value(3))
+                .andExpect(jsonPath("$.orders[0].order_status").value("cancelled"))
+                .andExpect(jsonPath("$.pagination").doesNotExist());
+    }
+
+    @Test void keepsRecordedExecutionsForPendingAndCancelledOrders() throws Exception {
+        for (var state : List.of(Order.Status.PENDING, Order.Status.CANCELLED)) {
+            var order = pending(account, Order.Side.BUY, "2026-09-01T00:00:00Z");
+            executions.save(new Execution(order, 69500, 1, null, null, Instant.parse("2026-09-01T01:00:00Z")));
+            if (state == Order.Status.CANCELLED) order.cancel(Instant.parse("2026-09-01T02:00:00Z"));
+            list("?page=0&order_status=" + state.name().toLowerCase(java.util.Locale.ROOT))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.orders[0].order_id").value(order.getId()))
+                    .andExpect(jsonPath("$.orders[0].executions.length()").value(1))
+                    .andExpect(jsonPath("$.orders[0].execution_summary.quantity").value(1))
+                    .andExpect(jsonPath("$.orders[0].execution_summary.total_amount").value(69500));
+        }
+    }
+
+    @Test void validatesOrderStatusBeforeQueryingMarketData() throws Exception {
+        for (String value : List.of("", "all", "unknown", "PENDING", "canceled")) {
+            list("?page=0&order_status=" + value).andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_ORDER_QUERY"));
+        }
+        for (String value : List.of("pending", "executed", "cancelled")) {
+            list("?page=0&order_status=" + value).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.orders").isEmpty());
+        }
+        verifyNoInteractions(market);
+    }
+
     @Test void rejectsBadLimitAndReturnsEmptyWithoutExternalCalls() throws Exception {
         list("").andExpect(status().isOk()).andExpect(jsonPath("$.orders").isEmpty());
         for (String value : List.of("0", "-1", "abc", "1.5", "2147483648", "")) {
@@ -192,14 +324,14 @@ class OrderHistoryTests {
                 Order.Source.USER, null, Instant.parse("2026-09-05T00:00:00Z")));
         executions.save(new Execution(manual, 69500, 2, null, null, Instant.parse("2026-09-05T01:00:00Z")));
         manual.execute();
-        list("?page=0&limit=2&order_side=buy").andExpect(status().isOk())
+        listExecuted("?page=0&limit=2&order_side=buy").andExpect(status().isOk())
                 .andExpect(jsonPath("$.orders.length()").value(2))
                 .andExpect(jsonPath("$.orders[0].order_id").value(tie2.getId()))
                 .andExpect(jsonPath("$.orders[1].order_id").value(tie1.getId()))
                 .andExpect(jsonPath("$.pagination.total_elements").value(3))
                 .andExpect(jsonPath("$.pagination.total_pages").value(2))
                 .andExpect(jsonPath("$.pagination.has_next").value(true));
-        list("?page=1&limit=2&order_side=buy").andExpect(status().isOk())
+        listExecuted("?page=1&limit=2&order_side=buy").andExpect(status().isOk())
                 .andExpect(jsonPath("$.orders.length()").value(1))
                 .andExpect(jsonPath("$.orders[0].order_id").value(oldest.getId()))
                 .andExpect(jsonPath("$.pagination.page").value(1))
@@ -208,7 +340,7 @@ class OrderHistoryTests {
                 .andExpect(jsonPath("$.orders.length()").value(1))
                 .andExpect(jsonPath("$.orders[0].order_side").value("sell"))
                 .andExpect(jsonPath("$.pagination").doesNotExist());
-        list("?page=0&limit=10").andExpect(status().isOk())
+        listExecuted("?page=0&limit=10").andExpect(status().isOk())
                 .andExpect(jsonPath("$.pagination.total_elements").value(4));
     }
 
@@ -220,7 +352,7 @@ class OrderHistoryTests {
         executions.save(new Execution(sell, 121, 1, new BigDecimal("21"), new BigDecimal("21"),
                 Instant.parse("2026-09-03T01:00:00Z")));
         sell.execute();
-        list("?page=0&limit=1").andExpect(status().isOk())
+        listExecuted("?page=0&limit=1").andExpect(status().isOk())
                 .andExpect(jsonPath("$.pagination.total_elements").value(2))
                 .andExpect(jsonPath("$.orders[0].order_id").value(sell.getId()))
                 .andExpect(jsonPath("$.orders[0].executions.length()").value(2))
@@ -230,7 +362,7 @@ class OrderHistoryTests {
                 .andExpect(jsonPath("$.orders[0].execution_summary.realized_pnl").value(31))
                 .andExpect(jsonPath("$.orders[0].execution_summary.realized_return_percent").value(16.3158))
                 .andExpect(jsonPath("$.orders[0].execution_summary.executed_at").value("2026-09-03T10:00:00+09:00"));
-        list("?limit=3").andExpect(status().isOk())
+        listExecuted("?limit=3").andExpect(status().isOk())
                 .andExpect(jsonPath("$.orders[0].executions.length()").value(2))
                 .andExpect(jsonPath("$.pagination").doesNotExist());
     }

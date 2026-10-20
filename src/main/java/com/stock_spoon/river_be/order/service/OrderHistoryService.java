@@ -50,8 +50,10 @@ public class OrderHistoryService {
         read.setReadOnly(true);
     }
 
-    public OrderHistoryResponse list(long userId, long accountId, String limit, String page, String orderSide) {
+    public OrderHistoryResponse list(long userId, long accountId, String limit, String page, String orderSide,
+            String orderStatus) {
         long started = System.nanoTime();
+        Order.Status selectedStatus = parseStatus(orderStatus);
         Integer pageNumber = page == null ? null : parseNumber(page, 0);
         int count = limit == null ? (pageNumber == null ? Integer.MAX_VALUE : 10) : parseNumber(limit, 1);
         if (pageNumber != null && count > 100) throw invalidQuery();
@@ -64,7 +66,7 @@ public class OrderHistoryService {
             };
         }
         final Order.Side selectedSide = side;
-        log.debug("주문내역 조회 시작 accountId={} limit={}", accountId, count);
+        log.debug("주문내역 조회 시작 accountId={} limit={} requestedStatus={}", accountId, count, selectedStatus);
         Snapshot snapshot = read.execute(status -> {
             var account = accounts.findByIdAndUserIdAndActiveTrue(accountId, userId).orElseThrow(() -> {
                 log.warn("주문내역 계좌 접근 실패 accountId={} code=ACCOUNT_NOT_FOUND", accountId);
@@ -73,19 +75,19 @@ public class OrderHistoryService {
             competitionAccess.check(userId, accountId, false);
             var source = account.isAiManaged() ? Order.Source.AI : Order.Source.USER;
             long total = pageNumber == null ? 0
-                    : orders.countHistory(accountId, Order.Status.EXECUTED, source, selectedSide);
+                    : orders.countHistory(accountId, selectedStatus, source, selectedSide);
             long offset = pageNumber == null ? 0 : (long) pageNumber * count;
             // JPA의 offset은 int 범위다. 전체 개수 밖 요청은 DB 페이지 조회 없이 빈 결과로 반환한다.
             if (pageNumber != null && offset >= total) return new Snapshot(List.of(), total);
             if (offset > Integer.MAX_VALUE) throw invalidQuery();
-            var candidates = orders.findHistory(accountId, Order.Status.EXECUTED, source, selectedSide,
+            var candidates = orders.findHistory(accountId, selectedStatus, source, selectedSide,
                     pageNumber == null ? Pageable.unpaged() : PageRequest.of(pageNumber, count));
             if (candidates.isEmpty()) return new Snapshot(List.of(), total);
             var byOrder = executions.findForOrders(candidates.stream().map(Order::getId).toList()).stream()
                     .collect(Collectors.groupingBy(Execution::getOrderId));
             var rows = candidates.stream().map(o -> {
                 var fills = byOrder.getOrDefault(o.getId(), List.of());
-                if (fills.isEmpty()) {
+                if (o.getStatus() == Order.Status.EXECUTED && fills.isEmpty()) {
                     log.error("주문내역 체결 데이터 오류 accountId={} orderId={} count={}", accountId, o.getId(), fills.size());
                     throw new OrderException(HttpStatus.INTERNAL_SERVER_ERROR, "INVALID_ORDER_DATA", "주문 체결 데이터를 확인해주세요.");
                 }
@@ -116,6 +118,17 @@ public class OrderHistoryService {
     private OrderHistoryResponse.Item snapshot(Order order, List<Execution> fills) {
         var items = fills.stream().map(fill -> new OrderHistoryResponse.ExecutionItem(fill.getId(), fill.getPrice(),
                 fill.getQuantity(), fill.getRealizedPnl(), fill.getRealizedReturnPercent(), date(fill.getCreatedAt()))).toList();
+        var summary = fills.isEmpty() ? null : summarize(order, fills);
+        var report = order.getReport();
+        String reason = report == null ? null : report.getReason();
+        return new OrderHistoryResponse.Item(order.getId(), order.getStockCode(), null, order.getSource().name(),
+                order.getSide().name().toLowerCase(Locale.ROOT), order.getType().name().toLowerCase(Locale.ROOT),
+                order.getStatus().name().toLowerCase(Locale.ROOT), order.getQuantity(), order.getLimitPrice(), order.getReservedCash(),
+                date(order.getCreatedAt()), date(order.getCancelledAt()), new OrderHistoryResponse.Reason(reason),
+                items, summary, order.getStatus() == Order.Status.PENDING);
+    }
+
+    private OrderHistoryResponse.ExecutionSummary summarize(Order order, List<Execution> fills) {
         long quantity = 0;
         long amount = 0;
         Instant last = fills.getFirst().getCreatedAt();
@@ -138,18 +151,21 @@ public class OrderHistoryService {
                     .divide(cost, 4, RoundingMode.HALF_UP);
         }
         var average = BigDecimal.valueOf(amount).divide(BigDecimal.valueOf(quantity), 4, RoundingMode.HALF_UP);
-        var summary = new OrderHistoryResponse.ExecutionSummary(quantity, average, amount, date(last), realized, rate);
-        var report = order.getReport();
-        String reason = report == null ? null : report.getReason();
-        return new OrderHistoryResponse.Item(order.getId(), order.getStockCode(), null, order.getSource().name(),
-                order.getSide().name().toLowerCase(Locale.ROOT), order.getType().name().toLowerCase(Locale.ROOT),
-                "executed", order.getQuantity(), order.getLimitPrice(), order.getReservedCash(),
-                date(order.getCreatedAt()), date(order.getCancelledAt()), new OrderHistoryResponse.Reason(reason),
-                items, summary, false);
+        return new OrderHistoryResponse.ExecutionSummary(quantity, average, amount, date(last), realized, rate);
     }
 
     private static OffsetDateTime date(Instant value) {
         return value == null ? null : value.atOffset(ZoneOffset.ofHours(9));
+    }
+
+    private Order.Status parseStatus(String value) {
+        if (value == null) return null;
+        return switch (value) {
+            case "pending" -> Order.Status.PENDING;
+            case "executed" -> Order.Status.EXECUTED;
+            case "cancelled" -> Order.Status.CANCELLED;
+            default -> throw invalidQuery();
+        };
     }
 
     private int parseNumber(String value, int minimum) {
@@ -165,7 +181,7 @@ public class OrderHistoryService {
 
     private OrderException invalidQuery() {
         log.warn("주문내역 조회 조건 오류 code=INVALID_ORDER_QUERY");
-        return new OrderException(HttpStatus.BAD_REQUEST, "INVALID_ORDER_QUERY", "page, limit, order_side 값을 확인해주세요.");
+        return new OrderException(HttpStatus.BAD_REQUEST, "INVALID_ORDER_QUERY", "page, limit, order_side, order_status 값을 확인해주세요.");
     }
 
     private record Snapshot(List<OrderHistoryResponse.Item> rows, long total) {}

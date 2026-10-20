@@ -51,8 +51,9 @@ public class OrderHistoryService {
     }
 
     public OrderHistoryResponse list(long userId, long accountId, String limit, String page, String orderSide,
-            String orderStatus) {
+            String orderStatus, String stockCode) {
         long started = System.nanoTime();
+        if (stockCode != null && stockCode.isBlank()) throw invalidQuery();
         Order.Status selectedStatus = parseStatus(orderStatus);
         Integer pageNumber = page == null ? null : parseNumber(page, 0);
         int count = limit == null ? (pageNumber == null ? Integer.MAX_VALUE : 10) : parseNumber(limit, 1);
@@ -75,12 +76,12 @@ public class OrderHistoryService {
             competitionAccess.check(userId, accountId, false);
             var source = account.isAiManaged() ? Order.Source.AI : Order.Source.USER;
             long total = pageNumber == null ? 0
-                    : orders.countHistory(accountId, selectedStatus, source, selectedSide);
+                    : orders.countHistory(accountId, selectedStatus, source, selectedSide, stockCode);
             long offset = pageNumber == null ? 0 : (long) pageNumber * count;
             // JPA의 offset은 int 범위다. 전체 개수 밖 요청은 DB 페이지 조회 없이 빈 결과로 반환한다.
             if (pageNumber != null && offset >= total) return new Snapshot(List.of(), total);
             if (offset > Integer.MAX_VALUE) throw invalidQuery();
-            var candidates = orders.findHistory(accountId, selectedStatus, source, selectedSide,
+            var candidates = orders.findHistory(accountId, selectedStatus, source, selectedSide, stockCode,
                     pageNumber == null ? Pageable.unpaged() : PageRequest.of(pageNumber, count));
             if (candidates.isEmpty()) return new Snapshot(List.of(), total);
             var byOrder = executions.findForOrders(candidates.stream().map(Order::getId).toList()).stream()
@@ -181,7 +182,7 @@ public class OrderHistoryService {
 
     private OrderException invalidQuery() {
         log.warn("주문내역 조회 조건 오류 code=INVALID_ORDER_QUERY");
-        return new OrderException(HttpStatus.BAD_REQUEST, "INVALID_ORDER_QUERY", "page, limit, order_side, order_status 값을 확인해주세요.");
+        return new OrderException(HttpStatus.BAD_REQUEST, "INVALID_ORDER_QUERY", "page, limit, order_side, order_status, stock_code 값을 확인해주세요.");
     }
 
     private record Snapshot(List<OrderHistoryResponse.Item> rows, long total) {}

@@ -35,7 +35,6 @@ public class CompetitionCreateRequest {
     private Long initialCapital;
 
     @JsonProperty("ai_participant_count")
-    @NotNull
     @Min(1)
     private Integer aiParticipantCount;
 }

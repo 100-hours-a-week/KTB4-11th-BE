@@ -212,8 +212,9 @@ public class CompetitionService {
             throw new CompetitionException(HttpStatus.CONFLICT, "DUPLICATE_ACCOUNT_NAME", "이미 사용 중인 계좌 이름입니다.");
         }
 
+        // 1은 request.getAiParticipantCount() 대신 들어감
         var competition = competitions.save(new Competition(user, name, Competition.Type.USER_VS_AI,
-                request.getStartDate(), request.getEndDate(), request.getInitialCapital(), request.getAiParticipantCount()));
+                request.getStartDate(), request.getEndDate(), request.getInitialCapital(), 1));
         if (tradingHours.isOpen(now)) competition.start(now.toInstant());
 
         // 두 계좌의 자금은 별개다. 사용자 계좌명만 대결명을 사용하고 AI 이름은 내부 식별용이다.

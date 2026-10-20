@@ -55,7 +55,7 @@ class AccountControllerTests {
                 .andExpect(jsonPath("$.account_name").value("기본 계좌"))
                 .andExpect(jsonPath("$.initial_capital").value(10_000_000))
                 .andExpect(jsonPath("$.cash_balance").value(10_000_000))
-                .andExpect(jsonPath("$.is_ai_managed").value(true));
+                .andExpect(jsonPath("$.is_ai_managed").value(false));
 
         users.flush();
         mvc.perform(get("/api/v1/users/me").cookie(authCookie(user)))
@@ -64,6 +64,7 @@ class AccountControllerTests {
         assertThat(users.findById(user.getId()).orElseThrow().isOnboardingCompleted()).isTrue();
         assertThat(accounts.findAll()).singleElement().satisfies(account -> {
             assertThat(account.isActive()).isTrue();
+            assertThat(account.isAiManaged()).isFalse();
             assertThat(account.getCashBalance()).isEqualTo(account.getInitialCapital());
         });
     }
@@ -239,8 +240,10 @@ class AccountControllerTests {
                 .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString());
         renameAccount(user, accountId, "변경된 계좌")
                 .andExpect(status().isOk());
-        orders.reserveLimit(accountId, "005930", com.stock_spoon.river_be.order.entity.Order.Side.BUY,
-                10, 70_000, null);
+        orders.reserveLimit(user.getId(), accountId,
+                new com.stock_spoon.river_be.order.dto.OrderCreateRequest(
+                        "005930", "buy", "limit", 70_000L, 10L, null, null, null, null, null),
+                Order.Source.USER);
 
         mvc.perform(get("/api/v1/users/me/accounts/{accountId}", accountId)
                         .cookie(authCookie(user)))

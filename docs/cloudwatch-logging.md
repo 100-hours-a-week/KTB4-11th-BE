@@ -42,3 +42,16 @@ fields @timestamp, @message
 requestId를 확인한 뒤 같은 값으로 검색하면 요청 전체 흐름을 확인할 수 있다.
 인프라 확인: 배포 후 API 한 번 호출 → X-Request-Id 확인 → CloudWatch에서 해당 ID 검색.
 토큰 발급이 아닌 일반 조회 실패 테스트로 HTTP 상태와 TR ID가 보이는지 확인한다.
+
+## 대결 생성 실패 추적
+
+`POST /api/v2/users/me/competitions`는 `event=competition_creation_failed`로 실패 단계·원인 코드·내부 ID·원인 유형·코드 위치를 기록한다. JSON 변환·DTO 검증 실패도 포함하며, 토큰·본문·대결명·거절된 입력값·일반 예외 메시지는 기록하지 않는다. 자세한 단계와 호출 순서는 [대결 생성 문서](competition-creation.md#생성-실패-원인-로그--fixcompetition-create-logging)를 참고한다.
+
+```text
+fields @timestamp, @message
+| filter @message like /event=competition_creation_failed/
+| sort @timestamp desc
+| limit 100
+```
+
+해당 행의 `requestId`로 같은 요청의 공통 HTTP 로그를 찾는다. `stage=transaction_commit`은 서비스 메서드 본문 이후 커밋 과정에서 발생한 오류이며, 로그의 대결·계좌 ID가 롤백 후 DB에 존재하지 않을 수 있다. 실제 CloudWatch 수집 연결은 배포 환경에서 별도 확인해야 한다.

@@ -8,6 +8,13 @@ import com.stock_spoon.river_be.competition.dto.CompetitionResultResponse;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.GetMapping;
 import com.stock_spoon.river_be.competition.service.CompetitionService;
+import com.stock_spoon.river_be.competition.logging.CompetitionCreationLog;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import java.util.Map;
+import java.util.stream.Collectors;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -48,8 +55,35 @@ public class CompetitionController {
     public CompetitionCreateResponse createCompetition(
             @AuthenticationPrincipal Jwt jwt, // 인증된 사용자의 JWT를 주입한다. subject에서 사용자 ID를 읽을 수 있다.
             @Valid @RequestBody CompetitionCreateRequest request) { // JSON 요청 본문을 DTO로 변환한다.
-        return competitionService.createCompetition(Long.parseLong(jwt.getSubject()), request);
+        try (var creationLog = new CompetitionCreationLog()) {
+            try {
+                long userId = Long.parseLong(jwt.getSubject());
+                CompetitionCreationLog.userId(userId);
+                CompetitionCreationLog.stage("transaction_begin");
+                // Spring의 트랜잭션 프록시가 커밋한 뒤 반환하므로 커밋 실패도 여기서 기록한다.
+                return competitionService.createCompetition(userId, request);
+            } catch (RuntimeException error) {
+                creationLog.failure(error);
+                throw error;
+            }
+        }
     }
 
+    // @Valid·JSON 변환은 생성 메서드 실행 전에 실패하므로 별도 진입점에서 기록한다.
+    @ExceptionHandler({MethodArgumentNotValidException.class, HttpMessageNotReadableException.class})
+    public ResponseEntity<Map<String, String>> invalidCreateRequest(Exception error) {
+        try (var creationLog = new CompetitionCreationLog()) {
+            String fields = "none";
+            if (error instanceof MethodArgumentNotValidException validation) {
+                CompetitionCreationLog.stage("request_validation");
+                fields = validation.getBindingResult().getFieldErrors().stream()
+                        .map(field -> field.getField() + ":" + field.getCode()).distinct().sorted().collect(Collectors.joining(","));
+            } else {
+                CompetitionCreationLog.stage("request_deserialization");
+            }
+            creationLog.invalidRequest(error, fields);
+        }
+        return ResponseEntity.badRequest().body(Map.of("code", "INVALID_REQUEST", "message", "요청 형식이 올바르지 않습니다."));
+    }
 
 }

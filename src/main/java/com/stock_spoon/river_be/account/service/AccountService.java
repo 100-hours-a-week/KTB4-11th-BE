@@ -68,7 +68,7 @@ public class AccountService {
         }
 
         var account = accountRepository.save(
-                new Account(user, ONBOARDING_ACCOUNT_NAME, request.initialCapital()));
+                new Account(user, ONBOARDING_ACCOUNT_NAME, request.initialCapital(), false));
         user.completeOnboarding();
         return AccountResponse.from(account);
     }

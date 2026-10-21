@@ -15,6 +15,20 @@ public class CompetitionTradeHistoryResponse {
     private Long accountId;
     private List<Item> executions;
 
+    @JsonInclude(JsonInclude.Include.NON_NULL) // 전체 조회에서는 페이지 정보를 생략한다.
+    private Pagination pagination;
+
+    @Getter
+    @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.ALWAYS)
+    public static class Pagination {
+        private int limit;
+        @JsonProperty("has_next")
+        private boolean hasNext;
+        @JsonProperty("next_cursor")
+        private String nextCursor;
+    }
+
     // 항목 하나는 주문 하나의 합산 결과다. 개별 체결 ID 대신 order_id로 식별한다.
     @Getter
     @AllArgsConstructor

@@ -7,11 +7,14 @@ import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface CompetitionParticipantRepository extends JpaRepository<CompetitionParticipant, Long> {
-    // 사용자 계좌를 한 번에 읽는다. AI 계좌의 수익률은 목록에 공개하지 않는다.
+    // 이번 페이지의 사용자 참가자만 읽어 페이지 밖 계좌의 조회·수익률 계산을 줄인다.
     @EntityGraph(attributePaths = {"account", "competition"})
     @org.springframework.data.jpa.repository.Query("select p from CompetitionParticipant p "
-            + "where p.competition.user.id = :userId and p.account.aiManaged = false")
-    List<CompetitionParticipant> findUserParticipants(Long userId);
+            + "where p.competition.user.id = :userId "
+            + "and p.competition.id in :competitionIds and p.account.aiManaged = false")
+    List<CompetitionParticipant> findUserParticipantsInCompetitions(
+            @org.springframework.data.repository.query.Param("userId") Long userId,
+            @org.springframework.data.repository.query.Param("competitionIds") java.util.Collection<Long> competitionIds);
 
     // 참가자와 계좌를 함께 읽어 각 참가자의 account_id와 AI 운용 여부를 확인한다.
     @EntityGraph(attributePaths = "account")

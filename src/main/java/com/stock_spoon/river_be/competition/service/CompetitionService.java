@@ -3,6 +3,9 @@ package com.stock_spoon.river_be.competition.service;
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateRequest;
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateResponse;
 import com.stock_spoon.river_be.competition.dto.CompetitionListResponse;
+import com.stock_spoon.river_be.competition.dto.CompetitionListCursor;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import com.stock_spoon.river_be.competition.dto.CompetitionDetailResponse;
 import com.stock_spoon.river_be.competition.dto.CompetitionResultResponse;
 import com.stock_spoon.river_be.competition.repository.CompetitionDailyPerformanceRepository;
@@ -121,20 +124,51 @@ public class CompetitionService {
                 competition.getEndDate(), dDay, latestReturn, participantItems, history);
     }
 
-    public CompetitionListResponse listCompetitions(Long userId) {
-        // 1. 한국 시간의 오늘 날짜를 구하고, 요청한 사용자의 대결 전체를 최신 생성 순으로 조회한다.
-        // var는 오른쪽 값으로 변수 타입을 추론한다. today는 LocalDate, rows는 List<Competition>이다.
+    public CompetitionListResponse listCompetitions(Long userId, String cursor, Integer limit, String state) {
+        // 1. 요청을 먼저 검사한다. 필터가 바뀌면 이전 필터의 커서는 사용할 수 없다.
+        if (limit != null && (limit < 1 || limit > 100)) {
+            throw invalid("INVALID_COMPETITION_LIMIT", "조회 개수는 1부터 100까지 가능합니다.");
+        }
+        Competition.State filter = null;
+        if (state != null) {
+            filter = switch (state) {
+                case "ready" -> Competition.State.READY;
+                case "in_progress" -> Competition.State.IN_PROGRESS;
+                case "completed" -> Competition.State.COMPLETED;
+                case "cancelled" -> Competition.State.CANCELLED;
+                default -> throw invalid("INVALID_COMPETITION_STATE", "지원하지 않는 대결 상태입니다.");
+            };
+        }
+        var position = CompetitionListCursor.decode(cursor, filter);
         var now = tradingHours.now();
         var today = now.toLocalDate();
-        var rows = competitions.findAllByUserIdOrderByCreatedAtDescIdDesc(userId);
-        // 대결이 없으면 이후 계좌 조회·수익률 계산을 생략하고 개수 0과 빈 배열을 반환한다.
-        if (rows.isEmpty()) return new CompetitionListResponse(0, java.util.List.of());
+        // cursor와 limit이 모두 없으면 전체 조회다. cursor만 있으면 기본 10개씩 이어 읽는다.
+        boolean paged = cursor != null || limit != null;
+        int pageSize = limit == null ? 10 : limit;
+        // 분할 조회는 한 개를 더 읽어 다음 페이지 유무를 확인한다. 전체 조회에는 개수 제한을 걸지 않는다.
+        var fetched = competitions.findCursorPage(userId, filter,
+                position == null ? null : position.getCreatedAt(),
+                position == null ? null : position.getCompetitionId(),
+                paged ? PageRequest.of(0, pageSize + 1) : Pageable.unpaged());
+        boolean hasNext = paged && fetched.size() > pageSize;
+        var rows = hasNext ? fetched.subList(0, pageSize) : fetched;
+        String nextCursor = null;
+        if (hasNext) {
+            // 미리 읽은 한 개가 아닌, 실제 응답의 마지막 항목을 다음 조회 기준으로 삼는다.
+            var last = rows.getLast();
+            nextCursor = new CompetitionListCursor(last.getCreatedAt(), last.getId(), filter).encode();
+        }
+        var pagination = paged ? new CompetitionListResponse.Pagination(pageSize, hasNext, nextCursor) : null;
+        long ongoingCount = competitions.countByUserIdAndState(userId, Competition.State.IN_PROGRESS);
+        // 필터에 맞는 대결이 없어도 전체 진행 중 개수는 유지하고 계좌 조회를 생략한다.
+        if (rows.isEmpty()) return new CompetitionListResponse(ongoingCount, java.util.List.of(), pagination);
 
         // 2. AI를 제외한 사용자 참가자와 계좌를 한 번에 조회한다.
         // stream()은 목록의 각 요소를 차례로 처리하는 기능이다. p는 현재 처리 중인 참가자다.
         // toMap(키, 값)으로 {대결 ID: 사용자 참가자}를 만든 뒤, 아래에서 {대결 ID: 계좌}로 바꾼다.
         // 참가자에는 완료 시 저장한 최종 수익률이 있고, 계좌에는 현재 자산이 있다.
-        var userParticipants = participants.findUserParticipants(userId).stream()
+        var competitionIds = rows.stream().map(Competition::getId).toList();
+        var userParticipants = participants.findUserParticipantsInCompetitions(userId, competitionIds).stream()
                 .collect(Collectors.toMap(p -> p.getCompetition().getId(), p -> p));
         var userAccounts = userParticipants.entrySet().stream()
                 .collect(Collectors.toMap(java.util.Map.Entry::getKey, e -> e.getValue().getAccount()));
@@ -178,10 +212,8 @@ public class CompetitionService {
                     c.getStartDate(), c.getEndDate(), dDay, returnPercent, winner);
         }).toList();
 
-        // 5. 실제 진행 중(IN_PROGRESS)인 대결 수를 센다. 시작 대기(READY)는 세지 않는다.
-        long ongoingCount = rows.stream().filter(c -> c.getState() == Competition.State.IN_PROGRESS).count();
-        // 전체 응답: { ongoing_competition_count: 개수, competitions: 대결 DTO 목록 }
-        return new CompetitionListResponse(ongoingCount, items);
+        // 5. 이번 페이지 항목·전체 진행 중 개수·다음 조회 정보를 함께 반환한다.
+        return new CompetitionListResponse(ongoingCount, items, pagination);
     }
 
     @Transactional // 대결·계좌 두 개·참가자 중 하나라도 저장에 실패하면 모두 롤백한다.

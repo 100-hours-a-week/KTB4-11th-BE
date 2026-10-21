@@ -8,6 +8,7 @@
 | `feat/107-competition/create-competition` | 대결·계좌·참가자 생성 | [1. 대결 생성](#1-대결-생성) |
 | 같은 브랜치 | 대기 대결 시작 | [2. 자동 시작](#2-자동-시작) |
 | `feat/121-competition/competition-list` | 내 대결 전체 조회 | [3. 목록 조회](#3-목록-조회) |
+| `feat/171-competition-list-pagination` | 상태 필터·선택적 cursor 페이지네이션, 생략 시 전체 조회 | [3. 목록 조회](#3-목록-조회) |
 | `feat/123-competition/completion-scheduler` | 결과 확정·완료 처리 | [4. 종료 정산](#4-종료-정산) |
 | 같은 브랜치 | 마감 후 거래 차단 | [5. 주문 차단](#5-주문-차단) |
 | `feat/127-competition/daily-performance` | 일별 평가금·누적 수익률 저장 | [6. 일별 성적 저장](#6-일별-성적-저장) |
@@ -162,29 +163,44 @@ DB 잠금으로 중복 시작을 막고, Entity 변경은 트랜잭션 커밋 �
 ### 호출 흐름
 
 ```text
-GET /api/v2/users/me/competitions
+GET /api/v2/users/me/competitions?limit=10&cursor=...&state=in_progress
     ↓
-CompetitionController.listCompetitions()
-    ↓ 사용자 ID
-CompetitionService.listCompetitions()
-    ├─ CompetitionRepository → 내 대결 전체 조회
-    ├─ CompetitionParticipantRepository → 사용자 참가자·계좌 조회
+CompetitionController.listCompetitions(jwt, cursor, limit, state)
+    ↓ JWT subject → userId, 쿼리 → cursor / limit / state
+CompetitionService.listCompetitions(userId, cursor, limit, state)
+    ├─ limit 1~100 / state 검사 → CompetitionListCursor.decode(cursor, filter)
+    ├─ cursor·limit 모두 생략 → Pageable.unpaged()로 최신순 전체 조회
+    ├─ 그 외 CompetitionRepository.findCursorPage(...) → 최신순 pageSize+1개 조회
+    ├─ limit개만 선택 → 마지막 응답 항목으로 next_cursor 생성
+    ├─ CompetitionRepository.countByUserIdAndState(userId, IN_PROGRESS) → 전체 진행 중 개수
+    ├─ 빈 페이지면 계좌 조회 없이 반환
+    ├─ CompetitionParticipantRepository.findUserParticipantsInCompetitions(userId, competitionIds)
+    │      → 이번 페이지의 사용자 참가자·계좌만 조회
     └─ AccountService.returnPercents() → 현재 계좌별 수익률 계산
     ↓ CompetitionListResponse
 200 OK + JSON
 ```
 
+목록 요청이 들어오면 competition 패키지의 controller 하위 `CompetitionController.listCompetitions()`가 호출된다. 인증된 JWT는 `jwt`, URL 쿼리의 조회 위치·개수·상태는 각각 `cursor`, `limit`, `state` 인자로 전달된다. Controller는 JWT subject를 Long 사용자 ID로 바꾸어 `CompetitionService.listCompetitions(userId, cursor, limit, state)`에 전달한다. 쿼리에서 사용자 ID를 받지는 않는다.
+
+Service는 조회 개수와 상태를 검사하고, `CompetitionListCursor.decode()`로 이전 응답의 커서를 해석한다. 상태 필터가 커서에 저장된 조건과 다르면 400이다. Controller의 limit은 Integer이므로 생략하면 null이다. cursor와 limit이 모두 null이면 `findCursorPage()`에 `Pageable.unpaged()`를 전달하여 해당 상태의 대결 전체를 조회한다. 둘 중 하나라도 있으면 분할 조회하며, cursor만 있을 때 조회 개수 pageSize는 10이다. 이때 `PageRequest.of(0, pageSize + 1)`을 전달한다. 첫 요청은 커서 시각과 ID가 null이며, 다음 요청은 마지막 응답 항목보다 오래된 범위를 읽는다. 생성 시각이 같으면 ID 내림차순으로 구분한다. 페이지 번호는 증가시키지 않는다.
+
+분할 조회에서는 조회 결과 중 pageSize개만 응답 대상으로 정한다. 한 개가 더 있었다면 응답할 마지막 대결로 `next_cursor`를 만들고 `has_next=true`로 설정한다. 미리 읽은 한 개의 참가자·계좌는 조회하거나 평가하지 않는다. 전체 조회에서는 조회 결과를 모두 반환하고 pagination 필드를 생략한다. `countByUserIdAndState()`는 필터와 현재 페이지에 관계없이 본인의 전체 IN_PROGRESS 수를 센다. 페이지가 비어도 이 개수는 유지한다.
+
+선택한 대결 ID 목록은 `findUserParticipantsInCompetitions()`의 `competitionIds`로 전달된다. 이 메서드는 소유자 조건과 AI 제외 조건을 함께 적용하고 계좌·대결을 EntityGraph로 함께 읽는다. Service는 실제 거래 중인 사용자 계좌만 `AccountService.returnPercents(liveAccounts)`에 전달하고, 나머지 상태는 아래 표의 기존 정책을 적용한다. 마지막으로 `CompetitionListResponse(ongoingCount, items, pagination)`를 반환하면 Controller의 반환값이 HTTP 200 JSON으로 직렬화된다. 목록 Service 전체를 트랜잭션으로 묶지 않아 현재가 조회 중 DB 트랜잭션을 유지하지 않는다. 대결 조회와 전체 개수 조회는 하나의 시점으로 동결된 스냅샷은 아니다.
+
 ### 단계별 전달값
 
 | 단계 | 실제 메서드 | 입력 → 결과 |
 |---|---|---|
-| 요청 수신 | `CompetitionController.listCompetitions(jwt)` | JWT → 서비스가 반환한 응답 DTO |
-| 목록 구성 | `CompetitionService.listCompetitions(userId)` | 사용자 ID → 개수·대결 목록 DTO |
-| 대결 조회 | `CompetitionRepository.findAllByUserIdOrderByCreatedAtDescIdDesc(userId)` | 사용자 ID → 최신순 대결 전체 |
-| 계좌 연결 조회 | `CompetitionParticipantRepository.findUserParticipants(userId)` | 사용자 ID → 사용자 참가자·계좌 목록 |
+| 요청 수신 | `CompetitionController.listCompetitions(jwt, cursor, limit, state)` | JWT·쿼리 → 사용자 ID·조회 조건 |
+| 목록 구성 | `CompetitionService.listCompetitions(userId, cursor, limit, state)` | 사용자 ID·조회 조건 → 개수·페이지 항목·커서 |
+| 대결 조회 | `CompetitionRepository.findCursorPage(userId, filter, cursorCreatedAt, cursorId, pageable)` | 사용자·상태·정렬 키·조회 방식 → 전체 또는 pageSize+1개 이내 |
+| 전체 개수 | `CompetitionRepository.countByUserIdAndState(userId, IN_PROGRESS)` | 사용자 ID → 전체 진행 중 수 |
+| 계좌 연결 조회 | `CompetitionParticipantRepository.findUserParticipantsInCompetitions(userId, competitionIds)` | 사용자 ID·이번 페이지 대결 ID → 사용자 참가자·계좌 |
 | 현재 성적 계산 | `AccountService.returnPercents(liveAccounts)` | 평가할 계좌 목록 → `{계좌 ID: 수익률}` |
 | 항목 구성 | `new CompetitionListResponse.CompetitionItem(...)` | 대결 정보·계산값·확정 결과 → 대결 한 건 DTO |
-| 전체 응답 구성 | `new CompetitionListResponse(ongoingCount, items)` | 진행 중 개수·항목 목록 → 전체 응답 DTO |
+| 전체 응답 구성 | `new CompetitionListResponse(ongoingCount, items, pagination)` | 전체 진행 중 수·페이지 항목·다음 위치 → 응답 DTO |
 
 ### 계산 예시
 
@@ -212,7 +228,7 @@ KiwoomMarketClient.currentPrice() → 종목별 현재가
 ```
 
 `d_day`는 조회 시 계산하며 DB에 저장하지 않는다. 완료·취소는 null, 나머지는 최소 0이다.
-진행 중 개수는 `IN_PROGRESS`만 센다. 최신 생성 순으로 전체 반환하며 FE는 같은 배열로 상단 최대 3개 카드와 하단 필터 목록을 구성한다.
+진행 중 개수는 `IN_PROGRESS`만 센다. cursor·limit 생략 시 최신 생성 순으로 전체 반환하고, 지정하면 분할 반환한다. FE 무한스크롤의 첫 요청에는 limit=10을 명시한다. FE는 최초 전체 상태 조건 응답에서 상단 최근 최대 3개를 보관하고, 하단 필터·추가 페이지 응답으로 상단 카드를 덮어쓰지 않는다. 진행 중 카드만 표시할지는 별도 UI 정책이다.
 현재가 요청은 계좌 서비스의 DB 읽기 트랜잭션 밖에서 실행한다.
 
 | 상태 | 수익률 데이터 | 승자 |
@@ -229,9 +245,32 @@ KiwoomMarketClient.currentPrice() → 종목별 현재가
 ### 예외·빈 결과 처리
 
 ```text
-대결 없음 → {"ongoing_competition_count":0,"competitions":[]}
+전체 조회에서 대결 없음 → {"ongoing_competition_count":0,"competitions":[]}
+분할 조회에서 대결 없음 → {"ongoing_competition_count":0,"competitions":[],"pagination":{"limit":10,"has_next":false,"next_cursor":null}}
+잘못된 cursor / 필터 불일치 → 400 INVALID_COMPETITION_CURSOR
+limit 범위 초과 → 400 INVALID_COMPETITION_LIMIT
+잘못된 state → 400 INVALID_COMPETITION_STATE
+숫자로 변환할 수 없는 limit → Spring MVC에서 400
 시세 조회 실패 → 기존 계좌 평가의 오류 응답
 ```
+
+### 무한스크롤 요청·응답
+
+```http
+GET /api/v2/users/me/competitions?limit=10
+GET /api/v2/users/me/competitions?limit=10&cursor=<이전 next_cursor>
+GET /api/v2/users/me/competitions?limit=10&state=in_progress
+GET /api/v2/users/me/competitions
+GET /api/v2/users/me/competitions?state=in_progress
+```
+
+`cursor`와 `limit`을 모두 생략하면 전체 반환하고 pagination을 생략한다. `state`만 지정하면 그 상태의 전체를 반환한다. `limit` 허용 범위는 1~100이고, cursor만 지정하면 10개씩 이어 조회한다. 빈 limit은 Spring MVC에서 null로 변환되어 생략과 동일하게 처리한다. `state` 생략은 모든 상태이며 ready / in_progress / completed / cancelled만 허용한다. 빈 state와 빈 cursor는 400이다. `page`는 지원하지 않으며 다른 미지정 쿼리처럼 무시되므로 보내지 않는다. 분할 조회의 마지막 페이지는 `has_next=false`, `next_cursor=null`이다. 기존 항목 필드는 유지한다.
+
+현재 코드의 필터 이름은 `state`다. Google Sheets 명세에 적힌 `competition_state`와 이름이 다르며, 그 이름으로 요청하면 필터가 적용되지 않는다. 명세서 자체는 이번 작업에서 수정하지 않았다.
+
+FE는 응답 성공 후에만 커서를 갱신하고, 실패하면 동일 커서로 재시도한다. 요청 중 중복 호출을 막고, 필터 변경 시 cursor와 하단 배열을 초기화한다. 이전 필터의 늦은 응답은 버린다. 새 대결은 새로고침으로 첫 페이지에서 확인한다. 커서가 가리키는 행이 삭제되어도 다음 범위를 읽을 수 있지만, 상태가 변경되는 목록을 고정한 스냅샷은 아니므로 필터에 새로 편입된 항목은 새로고침이 필요할 수 있다. 커서는 인증 수단이 아니며 모든 조회에 JWT 사용자 조건이 적용된다.
+
+`db/competition-list-pagination.sql`은 사용자·생성 시각·ID 정렬용 인덱스 DDL이다. 운영 DB에는 실행하지 않았다. 적용 전 중복 인덱스와 실제 MySQL 실행 계획을 확인한다. 상태 필터 전용 추가 인덱스는 실제 데이터와 실행 계획을 보고 판단한다.
 
 코드: [컨트롤러](../src/main/java/com/stock_spoon/river_be/competition/controller/CompetitionController.java) · [대결 서비스](../src/main/java/com/stock_spoon/river_be/competition/service/CompetitionService.java) · [계좌 서비스](../src/main/java/com/stock_spoon/river_be/account/service/AccountService.java)
 

@@ -82,7 +82,7 @@ class CompetitionCreationTests {
         new com.stock_spoon.river_be.competition.service.CompetitionCompletionScheduler(competitions, completion, tradingHours, dailyPerformances)
                 .completeExpiredCompetitions();
         assertThat(competitions.findById(id).orElseThrow().getWinner().name()).isEqualTo("AI");
-        assertThat(service.listCompetitions(user.getId()).getCompetitions().getFirst().getCumulativeReturnPercent()).isEqualTo(-1.0);
+        assertThat(service.listCompetitions(user.getId(), null, 10, null).getCompetitions().getFirst().getCumulativeReturnPercent()).isEqualTo(-1.0);
     }
 
     @Test
@@ -95,7 +95,7 @@ class CompetitionCreationTests {
         var id = service.createCompetition(user.getId(), req).getCompetitionId();
         org.mockito.Mockito.doReturn(start.plusDays(4).withHour(15).withMinute(30)).when(tradingHours).now();
         completion.completeCompetition(id);
-        assertThat(service.listCompetitions(user.getId()).getCompetitions().getFirst().getWinner()).isEqualTo("draw");
+        assertThat(service.listCompetitions(user.getId(), null, 10, null).getCompetitions().getFirst().getWinner()).isEqualTo("draw");
         assertThat(participants.findAllByCompetitionIdOrderByIdAsc(id))
                 .allSatisfy(p -> assertThat(p.getFinalReturnPercent()).isEqualByComparingTo("0"));
     }
@@ -149,7 +149,7 @@ class CompetitionCreationTests {
                 .isInstanceOf(com.stock_spoon.river_be.order.exception.OrderException.class);
         completion.completeCompetition(id);
         assertThat(competitions.findById(id).orElseThrow().getState().name()).isEqualTo("COMPLETED");
-        var result = service.listCompetitions(user.getId());
+        var result = service.listCompetitions(user.getId(), null, 10, null);
         assertThat(result.getOngoingCompetitionCount()).isZero();
         assertThat(result.getCompetitions().getFirst().getWinner()).isEqualTo("user");
         assertThat(result.getCompetitions().getFirst().getCumulativeReturnPercent()).isEqualTo(2.0);
@@ -162,7 +162,7 @@ class CompetitionCreationTests {
                 com.stock_spoon.river_be.order.entity.Order.Status.PENDING)).isEmpty();
         org.mockito.Mockito.doReturn(close.plusDays(3)).when(tradingHours).now();
         completion.completeCompetition(id);
-        assertThat(service.listCompetitions(user.getId()).getCompetitions().getFirst().getCumulativeReturnPercent()).isEqualTo(2.0);
+        assertThat(service.listCompetitions(user.getId(), null, 10, null).getCompetitions().getFirst().getCumulativeReturnPercent()).isEqualTo(2.0);
         org.mockito.Mockito.verify(market, org.mockito.Mockito.times(1))
                 .closingPrice("005930", LocalDate.of(2026, 10, 16));
     }
@@ -183,19 +183,19 @@ class CompetitionCreationTests {
                     "state", com.stock_spoon.river_be.competition.entity.Competition.State.COMPLETED);
         });
         org.mockito.Mockito.when(redisPrices.currentPrice("005930")).thenReturn(120_000L);
-        var response = service.listCompetitions(user.getId());
+        var response = service.listCompetitions(user.getId(), null, 10, null);
         assertThat(response.getOngoingCompetitionCount()).isEqualTo(1);
         assertThat(response.getCompetitions().get(0).getRemainingDays()).isNull();
         assertThat(response.getCompetitions().get(0).getCumulativeReturnPercent()).isNull();
         assertThat(response.getCompetitions().get(0).getWinner()).isNull();
         assertThat(response.getCompetitions().get(1).getCumulativeReturnPercent()).isEqualTo(2.0);
         org.mockito.Mockito.when(redisPrices.currentPrice("005930")).thenThrow(new IllegalStateException("시세 장애"));
-        assertThatThrownBy(() -> service.listCompetitions(user.getId()))
+        assertThatThrownBy(() -> service.listCompetitions(user.getId(), null, 10, null))
                 .isInstanceOf(com.stock_spoon.river_be.account.exception.AccountException.class);
     }
 
     @Test
-    void listReturnsOnlyOwnedCompetitionsNewestFirstWithoutPagination() throws Exception {
+    void listReturnsOnlyOwnedCompetitionsNewestFirstWithExplicitPagination() throws Exception {
         var other = new User("다른" + UUID.randomUUID().toString().substring(0, 4));
         other.completeOnboarding();
         other = users.save(other);
@@ -207,12 +207,14 @@ class CompetitionCreationTests {
         var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup(context)
                 .apply(org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity()).build();
         var auth = new jakarta.servlet.http.Cookie("access_token", tokens.issue(user.getId()).accessToken());
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v2/users/me/competitions").cookie(auth))
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/v2/users/me/competitions").cookie(auth).param("limit", "10"))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.ongoing_competition_count").value(0))
-                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.competitions.length()").value(12))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.competitions.length()").value(10))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.pagination.limit").value(10))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.pagination.has_next").value(true))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.competitions[0].competition_id").value(ids.getLast().intValue()))
-                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.competitions[11].competition_id").value(ids.getFirst().intValue()))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.competitions[9].competition_id").value(ids.get(2).intValue()))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.competitions[0].d_day").value(3))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.competitions[0].cumulative_return_percent").value(0.0))
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.competitions[0].winner").value(org.hamcrest.Matchers.nullValue()));

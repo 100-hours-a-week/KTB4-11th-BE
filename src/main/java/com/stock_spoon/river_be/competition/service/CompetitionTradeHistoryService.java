@@ -25,20 +25,28 @@ public class CompetitionTradeHistoryService {
     private final CompetitionTradeHistoryRepository trades;
     private final KiwoomMarketClient market;
 
-    public CompetitionTradeHistoryResponse list(long userId, long accountId, String cursor, Integer limit) {
+    public CompetitionTradeHistoryResponse list(long userId, long accountId, String cursor, Integer limit, String orderSide) {
         // 1. 소유 계좌인지 확인한 뒤 대결 참가 여부와 AI 공개 시점을 검사한다.
         if (accounts.findByIdAndUserIdAndActiveTrue(accountId, userId).isEmpty()) {
             throw new CompetitionException(HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND", "계좌를 찾을 수 없습니다.");
         }
         access.check(userId, accountId, true);
+        // 외부 입력은 소문자 buy/sell만 허용한다. 생략하면 매수·매도 모두 조회한다.
+        if (orderSide != null && !"buy".equals(orderSide) && !"sell".equals(orderSide)) {
+            throw new CompetitionException(HttpStatus.BAD_REQUEST, "INVALID_TRADE_HISTORY_ORDER_SIDE",
+                    "매매 유형은 buy 또는 sell이어야 합니다.");
+        }
         if (limit != null && (limit < 1 || limit > 100)) {
             throw new CompetitionException(HttpStatus.BAD_REQUEST, "INVALID_TRADE_HISTORY_LIMIT", "조회 개수는 1부터 100까지 가능합니다.");
         }
-        var position = CompetitionTradeHistoryCursor.decode(cursor, accountId);
+        // 검증한 문자열을 Entity 필드와 같은 Enum 타입으로 바꾸어 쿼리에 전달한다.
+        var side = orderSide == null ? null
+                : com.stock_spoon.river_be.order.entity.Order.Side.valueOf(orderSide.toUpperCase(Locale.ROOT));
+        var position = CompetitionTradeHistoryCursor.decode(cursor, accountId, orderSide);
         boolean paged = cursor != null || limit != null;
         int pageSize = limit == null ? 10 : limit;
         // 2. 주문별 최신 체결 시각과 ID로 순서를 정해 조회한다. 전체 조회에는 제한을 걸지 않는다.
-        var fetched = trades.findOrderPositions(accountId,
+        var fetched = trades.findOrderPositions(accountId, side,
                 position == null ? null : position.getExecutedAt(),
                 position == null ? null : position.getOrderId(),
                 paged ? PageRequest.of(0, pageSize + 1) : Pageable.unpaged());
@@ -50,7 +58,7 @@ public class CompetitionTradeHistoryService {
         }
         if (hasNext) {
             var last = selected.getLast();
-            nextCursor = new CompetitionTradeHistoryCursor(last.getExecutedAt(), last.getOrderId(), accountId).encode();
+            nextCursor = new CompetitionTradeHistoryCursor(last.getExecutedAt(), last.getOrderId(), accountId, orderSide).encode();
         }
         var pagination = paged ? new CompetitionTradeHistoryResponse.Pagination(pageSize, hasNext, nextCursor) : null;
         if (selected.isEmpty()) return new CompetitionTradeHistoryResponse(accountId, List.of(), pagination);

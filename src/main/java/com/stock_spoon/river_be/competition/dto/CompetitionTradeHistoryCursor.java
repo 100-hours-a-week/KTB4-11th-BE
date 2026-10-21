@@ -17,6 +17,7 @@ public class CompetitionTradeHistoryCursor {
     private final Instant executedAt;
     private final long orderId;
     private final long accountId;
+    private final String orderSide;
 
     public String encode() {
         var payload = JSON.createObjectNode();
@@ -24,15 +25,25 @@ public class CompetitionTradeHistoryCursor {
         payload.put("executed_at", executedAt.toString());
         payload.put("order_id", orderId);
         payload.put("account_id", accountId);
+        // 전체 조회 조건도 null로 명시해 매수·매도 커서와 구분한다.
+        if (orderSide == null) payload.putNull("order_side");
+        else payload.put("order_side", orderSide);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(JSON.writeValueAsBytes(payload));
     }
 
-    public static CompetitionTradeHistoryCursor decode(String cursor, long expectedAccountId) {
+    public static CompetitionTradeHistoryCursor decode(String cursor, long expectedAccountId, String expectedOrderSide) {
         if (cursor == null) return null;
         if (cursor.isEmpty() || cursor.length() > 512 || !cursor.matches("[A-Za-z0-9_-]+")) throw invalid();
         try {
             var payload = JSON.readTree(Base64.getUrlDecoder().decode(cursor));
-            if (payload == null || !payload.isObject() || payload.size() != 3) throw invalid();
+            if (payload == null || !payload.isObject()) throw invalid();
+            var side = payload.get("order_side");
+            // 필터 도입 전 3필드 커서는 필터 없는 전체 조회에서만 이어 쓸 수 있다.
+            boolean legacy = side == null && payload.size() == 3;
+            if (!legacy && (side == null || payload.size() != 4 || (!side.isNull() && !side.isTextual()))) throw invalid();
+            String orderSide = legacy || side.isNull() ? null : side.asText();
+            if (orderSide != null && !"buy".equals(orderSide) && !"sell".equals(orderSide)) throw invalid();
+            if (!java.util.Objects.equals(orderSide, expectedOrderSide)) throw invalid();
             var time = payload.get("executed_at");
             var order = payload.get("order_id");
             var account = payload.get("account_id");
@@ -40,7 +51,7 @@ public class CompetitionTradeHistoryCursor {
                     || !order.canConvertToLong() || order.longValue() <= 0
                     || account == null || !account.isIntegralNumber() || !account.canConvertToLong()
                     || account.longValue() <= 0 || account.longValue() != expectedAccountId) throw invalid();
-            return new CompetitionTradeHistoryCursor(Instant.parse(time.asText()), order.longValue(), account.longValue());
+            return new CompetitionTradeHistoryCursor(Instant.parse(time.asText()), order.longValue(), account.longValue(), orderSide);
         } catch (IllegalArgumentException | DateTimeException | JacksonException error) {
             throw invalid();
         }

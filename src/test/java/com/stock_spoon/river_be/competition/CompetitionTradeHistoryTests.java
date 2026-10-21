@@ -101,6 +101,69 @@ class CompetitionTradeHistoryTests {
     }
 
     @Test
+    void validatesOrderSide() throws Exception {
+        for (String side : List.of("buy", "sell")) {
+            get(path(mine) + "?order_side=" + side, owner, 200);
+        }
+        for (String side : List.of("", "BUY", "SELL", "unknown")) {
+            String body = get(path(mine) + "?order_side=" + side, owner, 400);
+            assertThat((String) JsonPath.read(body, "$.code")).isEqualTo("INVALID_TRADE_HISTORY_ORDER_SIDE");
+        }
+    }
+
+    @Test
+    void filtersOrdersBeforePaginationAndKeepsCompleteFillTotals() throws Exception {
+        var olderBuy = order(mine, Order.Side.BUY, true);
+        executions.save(new Execution(olderBuy, 100, 10, null, null, TIME));
+        var sell = order(mine, Order.Side.SELL, true);
+        executions.save(new Execution(sell, 120, 10, BigDecimal.valueOf(200), BigDecimal.valueOf(20), TIME.plusSeconds(1)));
+        var newerBuy = order(mine, Order.Side.BUY, true);
+        executions.save(new Execution(newerBuy, 100, 4, null, null, TIME.plusSeconds(2)));
+        executions.save(new Execution(newerBuy, 110, 6, null, null, TIME.plusSeconds(2)));
+
+        String first = get(path(mine) + "?order_side=buy&limit=1", owner, 200);
+        assertThat(((Number) JsonPath.read(first, "$.executions[0].order_id")).longValue()).isEqualTo(newerBuy.getId());
+        assertThat((Number) JsonPath.read(first, "$.executions[0].execution_amount")).isEqualTo(1060);
+        assertThat((Boolean) JsonPath.read(first, "$.pagination.has_next")).isTrue();
+        String cursor = JsonPath.read(first, "$.pagination.next_cursor");
+        String last = get(path(mine) + "?order_side=buy&limit=1&cursor=" + cursor, owner, 200);
+        for (String changedFilter : List.of("", "&order_side=sell")) {
+            String failure = get(path(mine) + "?limit=1&cursor=" + cursor + changedFilter, owner, 400);
+            assertThat((String) JsonPath.read(failure, "$.code")).isEqualTo("INVALID_TRADE_HISTORY_CURSOR");
+        }
+        assertThat((List<?>) JsonPath.read(last, "$.executions")).hasSize(1);
+        assertThat(((Number) JsonPath.read(last, "$.executions[0].order_id")).longValue()).isEqualTo(olderBuy.getId());
+        assertThat((Boolean) JsonPath.read(last, "$.pagination.has_next")).isFalse();
+
+        String sells = get(path(mine) + "?order_side=sell&limit=1", owner, 200);
+        assertThat((List<?>) JsonPath.read(sells, "$.executions")).hasSize(1);
+        assertThat(((Number) JsonPath.read(sells, "$.executions[0].order_id")).longValue()).isEqualTo(sell.getId());
+        assertThat((Boolean) JsonPath.read(sells, "$.pagination.has_next")).isFalse();
+        String buys = get(path(mine) + "?order_side=buy", owner, 200);
+        assertThat((List<?>) JsonPath.read(buys, "$.executions")).hasSize(2);
+        assertThat(JsonPath.<Map<String, Object>>read(buys, "$")).doesNotContainKey("pagination");
+        assertThat((List<?>) JsonPath.read(get(path(mine), owner, 200), "$.executions")).hasSize(3);
+    }
+
+    @Test
+    void followsSellPagesAndReturnsEmptyFilteredHistory() throws Exception {
+        String empty = get(path(mine) + "?order_side=sell&limit=1", owner, 200);
+        assertThat((List<?>) JsonPath.read(empty, "$.executions")).isEmpty();
+        assertThat((Boolean) JsonPath.read(empty, "$.pagination.has_next")).isFalse();
+        var older = order(mine, Order.Side.SELL, true);
+        executions.save(new Execution(older, 100, 10, BigDecimal.ZERO, BigDecimal.ZERO, TIME));
+        var newer = order(mine, Order.Side.SELL, true);
+        executions.save(new Execution(newer, 100, 10, BigDecimal.ZERO, BigDecimal.ZERO, TIME.plusSeconds(1)));
+        String first = get(path(mine) + "?order_side=sell&limit=1", owner, 200);
+        assertThat(((Number) JsonPath.read(first, "$.executions[0].order_id")).longValue()).isEqualTo(newer.getId());
+        String cursor = JsonPath.read(first, "$.pagination.next_cursor");
+        String last = get(path(mine) + "?order_side=sell&limit=1&cursor=" + cursor, owner, 200);
+        assertThat(((Number) JsonPath.read(last, "$.executions[0].order_id")).longValue()).isEqualTo(older.getId());
+        assertThat((Boolean) JsonPath.read(last, "$.pagination.has_next")).isFalse();
+        assertThat((List<?>) JsonPath.read(get(path(mine) + "?order_side=buy", owner, 200), "$.executions")).isEmpty();
+    }
+
+    @Test
     void supportsAllRowsOrLimitedPagesAndRejectsInvalidPagination() throws Exception {
         for (int i = 0; i < 11; i++) {
             var o = order(mine, Order.Side.BUY, true);

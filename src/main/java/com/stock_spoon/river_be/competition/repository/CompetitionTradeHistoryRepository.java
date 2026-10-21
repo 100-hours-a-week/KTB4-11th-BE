@@ -14,6 +14,7 @@ public interface CompetitionTradeHistoryRepository extends Repository<Competitio
             select o.id as orderId, max(e.createdAt) as executedAt
             from Order o left join Execution e on e.order = o
             where o.account.id = :accountId and o.status = 'EXECUTED'
+              and (:orderSide is null or o.side = :orderSide)
             group by o.id
             having (:cursorTime is null or max(e.createdAt) < :cursorTime
                     or (max(e.createdAt) = :cursorTime and o.id < :cursorId))
@@ -21,6 +22,7 @@ public interface CompetitionTradeHistoryRepository extends Repository<Competitio
             """)
     List<OrderPosition> findOrderPositions(
             @org.springframework.data.repository.query.Param("accountId") long accountId,
+            @org.springframework.data.repository.query.Param("orderSide") com.stock_spoon.river_be.order.entity.Order.Side orderSide,
             @org.springframework.data.repository.query.Param("cursorTime") Instant cursorTime,
             @org.springframework.data.repository.query.Param("cursorId") Long cursorId,
             org.springframework.data.domain.Pageable pageable);

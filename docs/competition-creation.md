@@ -470,12 +470,12 @@ CompetitionDailyPerformanceService.recordFinalPerformances()
 
 ```text
 GET /api/v2/accounts/{account_id}/executions
-  → CompetitionTradeHistoryController.list(jwt, accountId, cursor, limit)
-  → CompetitionTradeHistoryService.list(userId, accountId, cursor, limit)
+  → CompetitionTradeHistoryController.list(jwt, accountId, cursor, limit, orderSide)
+  → CompetitionTradeHistoryService.list(userId, accountId, cursor, limit, orderSide)
       → 계좌 소유권·활성 여부 확인
       → CompetitionHistoryAccess.check(userId, accountId, true)
-      → limit 검사 → CompetitionTradeHistoryCursor.decode(cursor, accountId)
-      → CompetitionTradeHistoryRepository.findOrderPositions(accountId, cursorTime, cursorId, pageable)
+      → orderSide·limit 검사 → CompetitionTradeHistoryCursor.decode(cursor, accountId, orderSide)
+      → CompetitionTradeHistoryRepository.findOrderPositions(accountId, side, cursorTime, cursorId, pageable)
           주문별 최신 체결 시각 DESC, 주문 ID DESC → 응답 주문 선택
       → CompetitionTradeHistoryRepository.findExecutedTrades(accountId, orderIds)
           선택한 주문의 체결 행 전체 조회 (빈 결과면 생략)
@@ -485,9 +485,9 @@ GET /api/v2/accounts/{account_id}/executions
 
 | 단계 | 전달값 | 처리·결과 |
 |---|---|---|
-| 컨트롤러 | JWT subject, URL account_id, cursor, limit | 로그인 사용자 ID·계좌 ID·조회 조건을 서비스에 전달 |
+| 컨트롤러 | JWT subject, URL account_id, cursor, limit, order_side | 로그인 사용자 ID·계좌 ID·조회 조건을 서비스에 전달 |
 | 공통 접근 검사 | 사용자 ID, 계좌 ID | 본인 대결 참가 계좌인지 확인, AI 계좌는 COMPLETED에서만 공개 |
-| 주문 위치 조회 | accountId, cursorTime, cursorId, pageable | EXECUTED 주문별 최신 체결 시각·ID → 응답 주문 선택 |
+| 주문 위치 조회 | accountId, side, cursorTime, cursorId, pageable | EXECUTED 주문별 최신 체결 시각·ID → 응답 주문 선택 |
 | 체결 상세 조회 | accountId, orderIds | 실제 응답 주문의 모든 체결 행 조회 |
 | 체결 합산 | 주문별 체결 행 | 수량·금액·손익 합산, 마지막 체결 시각 사용 |
 | 대결 DTO | 대결 서비스에서 계산한 합산 값 | 화면용 9개 필드만 반환 |
@@ -498,11 +498,11 @@ URI와 배열명 `executions`는 확정 명세대로 유지하지만, 항목 하
 
 ### 선택적 cursor 페이지네이션 — 2026-10-21 추가
 
-요청이 들어오면 competition.controller의 `CompetitionTradeHistoryController.list()`가 호출된다. 인증된 JWT는 jwt, 경로의 계좌 ID는 accountId, 쿼리의 조회 위치와 개수는 cursor·limit 인자로 전달된다. Controller는 JWT subject를 Long 사용자 ID로 바꾸어 `CompetitionTradeHistoryService.list(userId, accountId, cursor, limit)`에 전달한다.
+요청이 들어오면 competition.controller의 `CompetitionTradeHistoryController.list()`가 호출된다. 인증된 JWT는 jwt, 경로의 계좌 ID는 accountId, 쿼리의 조회 위치와 개수는 cursor·limit, 매수·매도 조건 order_side는 orderSide 인자로 전달된다. Controller는 JWT subject를 Long 사용자 ID로 바꾸어 `CompetitionTradeHistoryService.list(userId, accountId, cursor, limit, orderSide)`에 전달한다.
 
-Service는 `AccountRepository.findByIdAndUserIdAndActiveTrue()`와 `CompetitionHistoryAccess.check()`로 본인의 활성 대결 계좌와 AI 공개 시점을 확인한다. 다음으로 limit을 검사하고 `CompetitionTradeHistoryCursor.decode()`로 커서를 해석한다. 커서는 주문별 최신 체결 시각·주문 ID·계좌 ID를 담는다. 다른 계좌 커서는 400이며, 커서는 인증 수단이 아니므로 접근 검사는 매 요청 실행한다.
+Service는 `AccountRepository.findByIdAndUserIdAndActiveTrue()`와 `CompetitionHistoryAccess.check()`로 본인의 활성 대결 계좌와 AI 공개 시점을 확인한다. 다음으로 orderSide와 limit을 검사하고 `CompetitionTradeHistoryCursor.decode()`로 커서를 해석한다. 커서는 주문별 최신 체결 시각·주문 ID·계좌 ID·order_side 필터를 담는다. 다른 계좌나 다른 필터의 커서는 400이며, 커서는 인증 수단이 아니므로 접근 검사는 매 요청 실행한다.
 
-`findOrderPositions()`는 주문 ID로 GROUP BY하고 MAX(체결 시각) DESC·주문 ID DESC로 정렬한다. HAVING은 커서보다 오래된 집계 시각 또는 같은 시각의 작은 주문 ID로 다음 범위를 제한한다. cursor·limit 모두 없으면 `Pageable.unpaged()`로 전체를 조회하고, 하나라도 있으면 `PageRequest.of(0, pageSize + 1)`로 조회한다. cursor만 있으면 pageSize는 10이다.
+Service는 검증한 orderSide 문자열을 `Order.Side.valueOf(orderSide.toUpperCase(Locale.ROOT))`로 Entity와 같은 Enum 타입으로 변환한다. 생략했으면 null이다. Repository의 `(:orderSide is null or o.side = :orderSide)` 조건은 null이면 모든 유형, BUY/SELL이면 해당 유형만 허용한다. **이 WHERE 필터를 적용한 후** 주문 ID로 GROUP BY하고 MAX(체결 시각) DESC·주문 ID DESC로 정렬하여 페이지를 나눈다. HAVING은 커서보다 오래된 집계 시각 또는 같은 시각의 작은 주문 ID로 다음 범위를 제한한다. cursor·limit 모두 없으면 `Pageable.unpaged()`로 전체를 조회하고, 하나라도 있으면 `PageRequest.of(0, pageSize + 1)`로 조회한다. cursor만 있으면 pageSize는 10이다.
 
 Service는 초과 1건을 다음 페이지 유무 확인에만 사용한다. 실제 응답 주문 ID만 `findExecutedTrades(accountId, orderIds)`로 전달해 그 주문의 모든 체결 행을 읽는다. 체결 행 자체를 먼저 자르지 않으므로 합산이 페이지 경계에서 잘리지 않는다. LinkedHashMap에 주문 순서를 먼저 넣고 `summarize()`로 합산한다. 종목명은 기존 `KiwoomMarketClient.stockDetails()`로 조회한다. 마지막 응답 주문의 시각·ID로 next_cursor를 만들고 `CompetitionTradeHistoryResponse(accountId, items, pagination)`를 반환하여 HTTP 200 JSON으로 변환한다.
 
@@ -510,11 +510,16 @@ Service는 초과 1건을 다음 페이지 유무 확인에만 사용한다. 실
 GET /api/v2/accounts/2/executions
 GET /api/v2/accounts/2/executions?limit=10
 GET /api/v2/accounts/2/executions?limit=10&cursor=<next_cursor>
+GET /api/v2/accounts/2/executions?order_side=buy
+GET /api/v2/accounts/2/executions?order_side=sell&limit=10
+GET /api/v2/accounts/2/executions?order_side=sell&limit=10&cursor=<next_cursor>
 ```
 
-첫 번째는 전체 조회, 두 번째부터 분할 조회다. 분할 응답에는 `pagination: {"limit":10,"has_next":true,"next_cursor":"..."}`를 추가한다. 마지막 페이지와 빈 분할 결과는 has_next=false·next_cursor=null이다. limit은 1~100이며 cursor만 지정하면 10이다. 빈 limit은 null로 변환되어 생략과 같다. 빈 cursor는 400이다. **매수·매도 필터는 이번에 추가하지 않았으며 둘 다 반환한다.** page·offset은 사용하지 않는다.
+첫 번째는 전체 조회, limit 또는 cursor를 지정하면 분할 조회다. 분할 응답에는 `pagination: {"limit":10,"has_next":true,"next_cursor":"..."}`를 추가한다. 마지막 페이지와 빈 분할 결과는 has_next=false·next_cursor=null이다. limit은 1~100이며 cursor만 지정하면 10이다. 빈 limit은 null로 변환되어 생략과 같다. 빈 cursor는 400이다. order_side는 buy/sell만 허용하며 생략하면 둘 다 반환한다. 빈 값·대문자·기타 값은 400이다. order_side만 지정하면 해당 유형 전체를 반환하며 pagination을 생략한다. page·offset은 사용하지 않는다.
 
-FE는 첫 요청에 limit을 명시하고 성공 응답의 next_cursor로 추가 요청한다. 실패하면 같은 커서로 재시도하고 계좌 변경 시 목록·커서를 초기화한다. 신규 체결은 첫 페이지 재조회로 확인한다. 커서 주문이 삭제되어도 정렬 키로 이어 읽는다. 조회 결과를 동결한 스냅샷은 아니므로 과거 체결 데이터의 뒤늦은 삽입·정정까지 보장하지 않는다. 전체 Service를 트랜잭션으로 묶지 않아 종목 조회 중 DB 트랜잭션을 유지하지 않는다.
+FE는 첫 요청에 limit을 명시하고 성공 응답의 next_cursor로 추가 요청한다. 실패하면 같은 커서로 재시도하고 계좌 또는 order_side 변경 시 목록·커서를 초기화한다. 신규 체결은 첫 페이지 재조회로 확인한다. 커서 주문이 삭제되어도 정렬 키로 이어 읽는다. 조회 결과를 동결한 스냅샷은 아니므로 과거 체결 데이터의 뒤늦은 삽입·정정까지 보장하지 않는다. 전체 Service를 트랜잭션으로 묶지 않아 종목 조회 중 DB 트랜잭션을 유지하지 않는다.
+
+커서의 order_side는 null(전체)·buy·sell 중 하나이며 현재 요청과 Objects.equals로 비교한다. 불일치하면 INVALID_TRADE_HISTORY_CURSOR다. 필터 도입 전 3필드 커서는 필터 없는 전체 조회에서만 허용하고, 새로 발급하는 커서는 order_side를 명시한다. 필터를 변경하면 FE가 기존 커서를 제거하고 처음부터 요청해야 한다.
 
 기존 ix_orders_account_status(account_id,status), ix_executions_order(order_id)를 확인했다. MAX 집계 정렬 비용은 남으므로 cursor가 DB 비용을 항상 일정하게 만들지는 않는다. 운영 MySQL 실행 계획·부하 검증과 추가 인덱스·스키마 변경은 하지 않았다.
 
@@ -545,8 +550,9 @@ FE는 첫 요청에 limit을 명시하고 성공 응답의 next_cursor로 추가
 | 타인·없는·비활성 계좌 | 404 ACCOUNT_NOT_FOUND |
 | 일반 계좌 또는 본인 대결 참가 계좌가 아님 | 404 COMPETITION_ACCOUNT_NOT_FOUND |
 | AI 계좌의 대결이 READY / IN_PROGRESS / CANCELLED | 403 COMPETITION_AI_HISTORY_HIDDEN |
-| 잘못된 커서 / 다른 계좌 커서 | 400 INVALID_TRADE_HISTORY_CURSOR |
+| 잘못된 커서 / 다른 계좌·필터 커서 | 400 INVALID_TRADE_HISTORY_CURSOR |
 | limit 범위 초과 | 400 INVALID_TRADE_HISTORY_LIMIT |
+| 잘못된 order_side | 400 INVALID_TRADE_HISTORY_ORDER_SIDE |
 | 숫자로 변환할 수 없는 limit | Spring MVC에서 400 |
 | 체결 완료 주문에 체결 행 누락 | 500 INVALID_ORDER_DATA |
 | 기존 종목명 조회 실패 | 503 ORDER_DATA_UNAVAILABLE |

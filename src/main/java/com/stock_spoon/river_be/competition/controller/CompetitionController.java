@@ -7,6 +7,7 @@ import com.stock_spoon.river_be.competition.dto.CompetitionDetailResponse;
 import com.stock_spoon.river_be.competition.dto.CompetitionResultResponse;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import com.stock_spoon.river_be.competition.service.CompetitionService;
 import com.stock_spoon.river_be.competition.logging.CompetitionCreationLog;
 import org.springframework.http.ResponseEntity;
@@ -46,8 +47,12 @@ public class CompetitionController {
     }
 
     @GetMapping // JWT의 사용자 ID로 본인의 대결만 조회한다.
-    public CompetitionListResponse listCompetitions(@AuthenticationPrincipal Jwt jwt) {
-        return competitionService.listCompetitions(Long.parseLong(jwt.getSubject()));
+    public CompetitionListResponse listCompetitions(@AuthenticationPrincipal Jwt jwt,
+            @RequestParam(required = false) String cursor,
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) String state) {
+        // 조회 위치·개수·상태는 쿼리에서 받고, 사용자 ID는 신뢰할 수 있는 JWT에서만 읽는다.
+        return competitionService.listCompetitions(Long.parseLong(jwt.getSubject()), cursor, limit, state);
     }
 
     @PostMapping // 공통 경로로 들어오는 POST 요청을 처리한다.

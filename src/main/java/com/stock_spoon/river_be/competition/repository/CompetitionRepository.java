@@ -2,6 +2,11 @@ package com.stock_spoon.river_be.competition.repository;
 
 import com.stock_spoon.river_be.competition.entity.Competition;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.data.domain.Pageable;
+import java.time.Instant;
+import java.util.List;
 
 // save(), findById() 등 기본 저장·조회 기능은 Spring Data JPA가 구현한다.
 public interface CompetitionRepository extends JpaRepository<Competition, Long> {
@@ -22,7 +27,28 @@ public interface CompetitionRepository extends JpaRepository<Competition, Long> 
     @org.springframework.data.jpa.repository.Query("select c.id from Competition c where c.state = IN_PROGRESS "
             + "and c.endDate <= :latestEndDate order by c.id")
     java.util.List<Long> findCompletionCandidates(java.time.LocalDate latestEndDate);
-    java.util.List<Competition> findAllByUserIdOrderByCreatedAtDescIdDesc(Long userId);
+
+    // 첫 요청은 커서가 null이다. 다음 요청부터는 마지막 항목보다 오래된 대결만 조회한다.
+    // 생성 시각이 같으면 ID로 순서를 구분해 중복·누락을 막는다.
+    // Pageable은 항상 첫 페이지로 전달하고, limit+1개까지 가져오는 용도로만 사용한다.
+    @Query("""
+            select c from Competition c
+            where c.user.id = :userId
+              and (:state is null or c.state = :state)
+              and (:cursorCreatedAt is null
+                   or c.createdAt < :cursorCreatedAt
+                   or (c.createdAt = :cursorCreatedAt and c.id < :cursorId))
+            order by c.createdAt desc, c.id desc
+            """)
+    List<Competition> findCursorPage(
+            @Param("userId") Long userId,
+            @Param("state") Competition.State state,
+            @Param("cursorCreatedAt") Instant cursorCreatedAt,
+            @Param("cursorId") Long cursorId,
+            Pageable pageable);
+
+    // 현재 페이지·조회 필터와 별개로 사용자의 전체 진행 중 대결 수를 계산한다.
+    long countByUserIdAndState(Long userId, Competition.State state);
 
     // 여러 BE 인스턴스가 동시에 실행해도 같은 대결을 중복 시작하지 않도록 잠근다.
     @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)

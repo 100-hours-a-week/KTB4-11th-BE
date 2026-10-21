@@ -15,6 +15,20 @@ public class CompetitionListResponse {
     private long ongoingCompetitionCount;
     private List<CompetitionItem> competitions;
 
+    @JsonInclude(JsonInclude.Include.NON_NULL) // 전체 조회에는 페이지 정보가 없다.
+    private Pagination pagination;
+
+    @Getter
+    @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.ALWAYS) // 마지막 페이지도 next_cursor를 null로 명시한다.
+    public static class Pagination {
+        private int limit;
+        @JsonProperty("has_next")
+        private boolean hasNext;
+        @JsonProperty("next_cursor")
+        private String nextCursor;
+    }
+
     @Getter
     @AllArgsConstructor
     @JsonInclude(JsonInclude.Include.ALWAYS) // 미확정 결과도 필드를 생략하지 않고 null로 반환한다.

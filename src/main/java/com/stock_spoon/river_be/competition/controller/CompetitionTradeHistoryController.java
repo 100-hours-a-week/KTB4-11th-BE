@@ -14,7 +14,8 @@ public class CompetitionTradeHistoryController {
     private final CompetitionTradeHistoryService history;
 
     @GetMapping
-    public CompetitionTradeHistoryResponse list(@AuthenticationPrincipal Jwt jwt, @PathVariable long accountId) {
-        return history.list(Long.parseLong(jwt.getSubject()), accountId);
+    public CompetitionTradeHistoryResponse list(@AuthenticationPrincipal Jwt jwt, @PathVariable long accountId,
+            @RequestParam(required = false) String cursor, @RequestParam(required = false) Integer limit) {
+        return history.list(Long.parseLong(jwt.getSubject()), accountId, cursor, limit);
     }
 }

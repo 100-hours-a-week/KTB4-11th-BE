@@ -1,6 +1,9 @@
 package com.stock_spoon.river_be.competition.service;
 
 import com.stock_spoon.river_be.competition.dto.CompetitionTradeHistoryResponse;
+import com.stock_spoon.river_be.competition.dto.CompetitionTradeHistoryCursor;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import com.stock_spoon.river_be.competition.exception.CompetitionException;
 import com.stock_spoon.river_be.competition.repository.CompetitionTradeHistoryRepository;
@@ -22,24 +25,57 @@ public class CompetitionTradeHistoryService {
     private final CompetitionTradeHistoryRepository trades;
     private final KiwoomMarketClient market;
 
-    public CompetitionTradeHistoryResponse list(long userId, long accountId) {
+    public CompetitionTradeHistoryResponse list(long userId, long accountId, String cursor, Integer limit) {
         // 1. 소유 계좌인지 확인한 뒤 대결 참가 여부와 AI 공개 시점을 검사한다.
         if (accounts.findByIdAndUserIdAndActiveTrue(accountId, userId).isEmpty()) {
             throw new CompetitionException(HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND", "계좌를 찾을 수 없습니다.");
         }
         access.check(userId, accountId, true);
-        // 2. 최근 체결부터 읽어 주문별로 묶는다. LinkedHashMap으로 최근 주문 순서를 유지한다.
+        if (limit != null && (limit < 1 || limit > 100)) {
+            throw new CompetitionException(HttpStatus.BAD_REQUEST, "INVALID_TRADE_HISTORY_LIMIT", "조회 개수는 1부터 100까지 가능합니다.");
+        }
+        var position = CompetitionTradeHistoryCursor.decode(cursor, accountId);
+        boolean paged = cursor != null || limit != null;
+        int pageSize = limit == null ? 10 : limit;
+        // 2. 주문별 최신 체결 시각과 ID로 순서를 정해 조회한다. 전체 조회에는 제한을 걸지 않는다.
+        var fetched = trades.findOrderPositions(accountId,
+                position == null ? null : position.getExecutedAt(),
+                position == null ? null : position.getOrderId(),
+                paged ? PageRequest.of(0, pageSize + 1) : Pageable.unpaged());
+        boolean hasNext = paged && fetched.size() > pageSize;
+        var selected = hasNext ? fetched.subList(0, pageSize) : fetched;
+        String nextCursor = null;
+        for (var row : selected) {
+            if (row.getExecutedAt() == null) throw invalidOrderData();
+        }
+        if (hasNext) {
+            var last = selected.getLast();
+            nextCursor = new CompetitionTradeHistoryCursor(last.getExecutedAt(), last.getOrderId(), accountId).encode();
+        }
+        var pagination = paged ? new CompetitionTradeHistoryResponse.Pagination(pageSize, hasNext, nextCursor) : null;
+        if (selected.isEmpty()) return new CompetitionTradeHistoryResponse(accountId, List.of(), pagination);
+
+        // 3. 응답할 주문의 체결만 모두 읽는다. LinkedHashMap에 먼저 주문 정렬 순서를 넣는다.
         var byOrder = new LinkedHashMap<Long, List<TradeRow>>();
-        for (var row : trades.findExecutedTrades(accountId)) {
+        var orderIds = selected.stream().map(p -> p.getOrderId()).toList();
+        orderIds.forEach(id -> byOrder.put(id, new ArrayList<>()));
+        for (var row : trades.findExecutedTrades(accountId, orderIds)) {
             if (row.getExecutedAt() == null) {
-                throw new CompetitionException(HttpStatus.INTERNAL_SERVER_ERROR, "INVALID_ORDER_DATA", "주문 체결 데이터를 확인해주세요.");
+                throw invalidOrderData();
             }
-            byOrder.computeIfAbsent(row.getOrderId(), key -> new ArrayList<>()).add(row);
+            byOrder.get(row.getOrderId()).add(row);
         }
         // 3. 합산과 응답 생성은 대결 서비스에서 독립적으로 처리한다.
         var names = new HashMap<String, String>();
-        var items = byOrder.values().stream().map(fills -> summarize(fills, names)).toList();
-        return new CompetitionTradeHistoryResponse(accountId, items);
+        var items = byOrder.values().stream().map(fills -> {
+            if (fills.isEmpty()) throw invalidOrderData();
+            return summarize(fills, names);
+        }).toList();
+        return new CompetitionTradeHistoryResponse(accountId, items, pagination);
+    }
+
+    private CompetitionException invalidOrderData() {
+        return new CompetitionException(HttpStatus.INTERNAL_SERVER_ERROR, "INVALID_ORDER_DATA", "주문 체결 데이터를 확인해주세요.");
     }
 
     private CompetitionTradeHistoryResponse.Item summarize(List<TradeRow> fills, Map<String, String> names) {

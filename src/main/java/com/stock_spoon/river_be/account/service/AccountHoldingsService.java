@@ -1,6 +1,7 @@
 package com.stock_spoon.river_be.account.service;
 
 import com.stock_spoon.river_be.account.dto.AccountHoldingsResponse;
+import com.stock_spoon.river_be.account.dto.AccountHoldingDetailResponse;
 import com.stock_spoon.river_be.account.dto.AccountHoldingsResponse.Item;
 import com.stock_spoon.river_be.account.exception.AccountException;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
@@ -43,6 +44,30 @@ public class AccountHoldingsService {
         this.prices = prices;
         read = new TransactionTemplate(transactions);
         read.setReadOnly(true);
+    }
+
+    /** 상세페이지의 보유 원가만 조회한다. 실시간 평가는 FE가 담당한다. */
+    public AccountHoldingDetailResponse get(
+            long userId, long accountId, String stockCode) {
+        if (stockCode == null || !stockCode.matches("[0-9A-Z]{6}")) {
+            throw new AccountException(HttpStatus.BAD_REQUEST, "INVALID_STOCK_CODE", "종목코드를 확인해주세요.");
+        }
+        return read.execute(status -> {
+            if (accounts.findByIdAndUserIdAndActiveTrue(accountId, userId).isEmpty()) {
+                throw new AccountException(HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND", "계좌를 찾을 수 없습니다.");
+            }
+            var owned = holdings.findByAccountIdAndStockCode(accountId, stockCode).orElse(null);
+            if (owned == null) {
+                return new AccountHoldingDetailResponse(
+                        accountId, stockCode, false, 0, BigDecimal.ZERO, BigDecimal.ZERO);
+            }
+            if (owned.getQuantity() <= 0 || owned.getTotalCost() == null || owned.getTotalCost().signum() <= 0) {
+                throw new AccountException(HttpStatus.INTERNAL_SERVER_ERROR, "INVALID_HOLDINGS_DATA", "보유 데이터를 확인해주세요.");
+            }
+            var average = owned.getTotalCost().divide(BigDecimal.valueOf(owned.getQuantity()), 2, RoundingMode.HALF_UP);
+            return new AccountHoldingDetailResponse(
+                    accountId, stockCode, true, owned.getQuantity(), owned.getTotalCost(), average);
+        });
     }
 
     public AccountHoldingsResponse list(long userId, long accountId, String sort, String order, String limit) {

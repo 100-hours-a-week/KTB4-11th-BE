@@ -176,4 +176,6 @@ Order withMarketQuote(String stockCode, Function<QuoteEvent, Order> execute)
 - Task 1 완료: USER/AI 출처를 받는 시장가 진입점 및 엔티티 생성 오버로드 추가, USER 보고서 생략, 계좌 소유권·유형 검증 유지, 평일 장중 판정과 저장 직전 시간·호가 재검사 적용.
 - 검증 기록: 주말·최종 검증 중 마감·최종 검증 중 호가 만료 테스트 3개가 기존 코드에서 실패함을 확인했다. USER 신규 진입점 테스트는 해당 오버로드가 없는 상태에서 컴파일 실패를 확인한 뒤 구현했다. 관련 시장가/지정가 서비스 테스트 통과 후 전체 `gradlew.bat build --build-cache --console=plain` 성공(SpotBugs 포함).
 - Task 1 추가 검증: USER 시장가 매수·매도 자산 계산·보고서 없음, 출처/계좌 불일치·타인 소유권·AI 보고서 필수값 거부, 09:00/15:29:59 허용, 실제 계좌 잠금과 마감 경계, 기존 동시 주문 및 저장 실패 롤백 테스트.
-- Task 2~4 미실행. 컨트롤러의 시장가 차단은 아직 유지하며 실제 API 복구 완료가 아니다. 실제 시세/Redis 연동과 배포 검증은 하지 않았다.
+- Task 2 완료: `OrderSubscriptionService.withMarketQuote()`에 요청별 임시 수요를 추가했다. 구독 종목은 PENDING 종목과 시장가 요청 종목의 합집합이며, 3초/50ms 호가 대기 후 유효한 QuoteEvent를 callback에 전달한다. 출처 누락·변경, 연결 오류·타임아웃·인터럽트는 503으로 거부하고 finally에서 자기 수요만 해제한다. 동시 요청 및 기존 지정가 수요를 보존하고 정리 실패는 이미 성공한 거래를 덮어쓰지 않는다.
+- Task 2 검증: 신규 진입점이 없는 상태의 컴파일 실패 확인 후 구현했다. 구독 확보·지연 도착·타임아웃·callback 실패·출처 변경/누락·동시 요청·인터럽트·정리 실패 및 기존 지정가 구독 테스트를 실행했다. 전체 `gradlew.bat build --build-cache --console=plain` 성공(SpotBugs 포함).
+- Task 3~4 미실행. 컨트롤러의 시장가 차단은 아직 유지하며 실제 API 복구 완료가 아니다. 실제 시세/Redis 연동과 배포 검증은 하지 않았다.

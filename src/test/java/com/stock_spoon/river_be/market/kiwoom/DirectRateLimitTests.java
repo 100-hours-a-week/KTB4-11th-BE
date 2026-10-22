@@ -118,7 +118,8 @@ class DirectRateLimitTests {
         });
         server.start();
         var tokens = mock(KiwoomTokenProvider.class); when(tokens.accessToken()).thenReturn("dummy");
-        var direct = new DirectKiwoomRestTransport(RestClient.builder().baseUrl("http://localhost:" + server.getAddress().getPort()).build(), tokens, () -> true);
+        var client = KiwoomConfig.createClient("http://localhost:" + server.getAddress().getPort());
+        var direct = new DirectKiwoomRestTransport(client, tokens, () -> true);
         try {
             var tasks = new ArrayList<Future<?>>();
             long batchStarted = System.nanoTime();

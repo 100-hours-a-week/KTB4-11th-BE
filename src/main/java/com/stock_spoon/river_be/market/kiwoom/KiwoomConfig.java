@@ -65,11 +65,15 @@ public class KiwoomConfig {
     }
 
     private RestClient createClient() {
+        return createClient("https://api.kiwoom.com");
+    }
+
+    static RestClient createClient(String baseUrl) {
         var factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(Duration.ofSeconds(3));
         factory.setReadTimeout(Duration.ofSeconds(5));
         var client = RestClient.builder()
-                .baseUrl("https://api.kiwoom.com")
+                .baseUrl(baseUrl)
                 .bufferContent((uri, method) -> true)
                 .requestFactory(factory).build();
         return client;

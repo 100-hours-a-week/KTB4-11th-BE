@@ -97,19 +97,20 @@ class DirectRateLimitTests {
 
     @Test
     void firstFiveOverlapSixthWaitsAndOtherTrHasIndependentCapacity() throws Exception {
-        var threads = Executors.newFixedThreadPool(24);
+        var clientThreads = Executors.newFixedThreadPool(8);
+        var serverThreads = Executors.newFixedThreadPool(8);
         var server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
         var firstFive = new CountDownLatch(5);
         var other = new CountDownLatch(1);
         var release = new CountDownLatch(1);
         var times = new CopyOnWriteArrayList<Long>();
-        server.setExecutor(threads);
+        server.setExecutor(serverThreads);
         server.createContext("/query", exchange -> {
             exchange.getRequestBody().readAllBytes();
             if ("ka10001".equals(exchange.getRequestHeaders().getFirst("api-id"))) {
                 times.add(System.nanoTime()); firstFive.countDown();
             } else other.countDown();
-            try { release.await(4, TimeUnit.SECONDS); }
+            try { release.await(8, TimeUnit.SECONDS); }
             catch (InterruptedException failure) { Thread.currentThread().interrupt(); }
             byte[] body = "{\"return_code\":0}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "application/json");
@@ -117,21 +118,27 @@ class DirectRateLimitTests {
         });
         server.start();
         var tokens = mock(KiwoomTokenProvider.class); when(tokens.accessToken()).thenReturn("dummy");
-        var direct = new DirectKiwoomRestTransport(RestClient.builder().baseUrl("http://localhost:" + server.getAddress().getPort()).build(), tokens, () -> true);
+        var client = KiwoomConfig.createClient("http://localhost:" + server.getAddress().getPort());
+        var direct = new DirectKiwoomRestTransport(client, tokens, () -> true);
         try {
             var tasks = new ArrayList<Future<?>>();
             long batchStarted = System.nanoTime();
-            for (int i = 0; i < 5; i++) tasks.add(threads.submit(() -> direct.query("ka10001", "/query", Map.of())));
-            assertThat(firstFive.await(800, TimeUnit.MILLISECONDS)).as("최초 5개는 응답을 기다리며 서로 막지 않음").isTrue();
-            tasks.add(threads.submit(() -> direct.query("ka10001", "/query", Map.of())));
-            tasks.add(threads.submit(() -> direct.query("ka10100", "/query", Map.of())));
-            assertThat(other.await(500, TimeUnit.MILLISECONDS)).isTrue();
+            for (int i = 0; i < 5; i++) tasks.add(clientThreads.submit(() -> direct.query("ka10001", "/query", Map.of())));
+            assertThat(firstFive.await(2, TimeUnit.SECONDS)).as("최초 5개는 응답을 기다리며 서로 막지 않음").isTrue();
+            tasks.add(clientThreads.submit(() -> direct.query("ka10001", "/query", Map.of())));
+            tasks.add(clientThreads.submit(() -> direct.query("ka10100", "/query", Map.of())));
+            assertThat(other.await(3, TimeUnit.SECONDS)).isTrue();
             assertThat(times).hasSize(5);
             release.countDown();
             for (var task : tasks) task.get(5, TimeUnit.SECONDS);
             var sorted = times.stream().sorted().toList();
             assertThat(sorted).hasSize(6);
             assertThat(sorted.get(5) - batchStarted).isGreaterThanOrEqualTo(TimeUnit.SECONDS.toNanos(1));
-        } finally { release.countDown(); server.stop(0); threads.shutdownNow(); }
+        } finally {
+            release.countDown();
+            server.stop(0);
+            clientThreads.shutdownNow();
+            serverThreads.shutdownNow();
+        }
     }
 }

@@ -20,15 +20,18 @@ public class DbMigrationWriteTransactionAuditConfiguration {
             LoggerFactory.getLogger(DbMigrationWriteTransactionAuditConfiguration.class);
 
     @Bean
-    static BeanPostProcessor dbMigrationWriteTransactionAuditConfigurer() {
+    static BeanPostProcessor dbMigrationWriteTransactionAuditConfigurer(
+            DbWriteReplayRequestContext writeReplayContext) {
         TransactionExecutionListener listener = new TransactionExecutionListener() {
             @Override
             public void afterCommit(TransactionExecution transaction, Throwable failure) {
+                writeReplayContext.markTransactionCommitted();
                 logOutcome(transaction, failure == null ? "commit_confirmed" : "commit_unconfirmed", failure);
             }
 
             @Override
             public void afterRollback(TransactionExecution transaction, Throwable failure) {
+                writeReplayContext.markTransactionRolledBack(failure == null);
                 logOutcome(transaction, failure == null ? "rollback_confirmed" : "rollback_unconfirmed", failure);
             }
         };

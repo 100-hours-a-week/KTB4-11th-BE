@@ -33,6 +33,7 @@ tasks.named('spotbugsTest') { enabled = false }   // 테스트 코드는 검사 
 
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+	implementation 'org.springframework.boot:spring-boot-starter-jackson'
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-security'
 
@@ -47,6 +48,8 @@ dependencies {
     implementation 'software.amazon.awssdk:auth'
     implementation 'software.amazon.awssdk:regions'
     implementation 'software.amazon.awssdk:http-auth-aws'
+    implementation 'software.amazon.awssdk:sqs'
+    implementation 'net.ttddyy:datasource-proxy:1.11.0'
   	implementation 'org.springframework.boot:spring-boot-health:4.1.1'
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	runtimeOnly 'com.mysql:mysql-connector-j'

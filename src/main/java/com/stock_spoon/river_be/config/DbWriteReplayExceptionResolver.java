@@ -1,6 +1,5 @@
 package com.stock_spoon.river_be.config;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
@@ -14,6 +13,7 @@ import org.springframework.web.servlet.HandlerMapping;
 import org.springframework.web.servlet.ModelAndView;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import tools.jackson.databind.json.JsonMapper;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
 
@@ -26,13 +26,13 @@ public class DbWriteReplayExceptionResolver implements HandlerExceptionResolver 
     private final DbWriteReplayProperties properties;
     private final DbWriteReplayRequestContext requestContext;
     private final SqsClient sqsClient;
-    private final ObjectMapper objectMapper;
+    private final JsonMapper objectMapper;
 
     public DbWriteReplayExceptionResolver(
             DbWriteReplayProperties properties,
             DbWriteReplayRequestContext requestContext,
             SqsClient sqsClient,
-            ObjectMapper objectMapper) {
+            JsonMapper objectMapper) {
         this.properties = properties;
         this.requestContext = requestContext;
         this.sqsClient = sqsClient;

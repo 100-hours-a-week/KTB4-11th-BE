@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.HandlerExceptionResolver;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
+import tools.jackson.databind.json.JsonMapper;
 import software.amazon.awssdk.services.sqs.SqsClient;
 
 @Configuration(proxyBeanMethods = false)
@@ -37,7 +38,7 @@ public class DbWriteReplayConfiguration {
             DbWriteReplayProperties properties,
             DbWriteReplayRequestContext requestContext,
             SqsClient sqsClient,
-            com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
+            JsonMapper objectMapper) {
         return new DbWriteReplayExceptionResolver(properties, requestContext, sqsClient, objectMapper);
     }
 

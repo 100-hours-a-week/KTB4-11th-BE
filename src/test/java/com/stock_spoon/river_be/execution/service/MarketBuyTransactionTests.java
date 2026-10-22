@@ -205,11 +205,163 @@ class MarketBuyTransactionTests {
         unchanged(account);
     }
 
+    @Test
+    void weekendMarketOrderIsRejectedWithoutSaving() {
+        var instant = Instant.parse("2026-10-03T01:00:00Z");
+        var account = account();
+        var service = new OrderExecutionService(accounts, orders, holdings, executions,
+                Clock.fixed(instant, ZoneOffset.UTC));
+        assertThatThrownBy(() -> new TransactionTemplate(transactions).execute(ignored ->
+                service.executeMarketBuy(account.getUser().getId(), account.getId(),
+                        "005930", 10, "근거", book(instant, LocalTime.of(10, 0)))))
+                .isInstanceOfSatisfying(OrderException.class,
+                        error -> assertThat(error.code()).isEqualTo("ORDER_WINDOW_CLOSED"));
+        unchanged(account);
+    }
+
+    @Test
+    void openingAndLastSecondBeforeCloseAreAccepted() {
+        for (var instant : List.of(Instant.parse("2026-10-01T00:00:00Z"), Instant.parse("2026-10-01T06:29:59Z"))) {
+            var account = account();
+            var service = new OrderExecutionService(accounts, orders, holdings, executions,
+                    Clock.fixed(instant, ZoneOffset.UTC));
+            var saved = new TransactionTemplate(transactions).execute(ignored -> service.executeMarketBuy(
+                    account.getUser().getId(), account.getId(), "005930", 10, "근거",
+                    book(instant, instant.atZone(java.time.ZoneId.of("Asia/Seoul")).toLocalTime())));
+            assertThat(saved.getStatus()).isEqualTo(Order.Status.EXECUTED);
+        }
+    }
+
+    @Test
+    void closeWhileAccountIsLockedRejectsWaitingOrderWithoutSaving() throws Exception {
+        var account = account();
+        var instant = new java.util.concurrent.atomic.AtomicReference<>(Instant.parse("2026-10-01T06:29:59Z"));
+        var clock = org.mockito.Mockito.mock(Clock.class);
+        org.mockito.Mockito.when(clock.instant()).thenAnswer(ignored -> instant.get());
+        var service = new OrderExecutionService(accounts, orders, holdings, executions, clock);
+        var locked = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var started = new CountDownLatch(1);
+        var snapshot = book(instant.get(), LocalTime.of(15, 29, 59));
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var holder = pool.submit(() -> new TransactionTemplate(transactions).execute(status -> {
+                accounts.findLockedById(account.getId()).orElseThrow();
+                locked.countDown();
+                try {
+                    if (!release.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("lock timeout");
+                } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(error);
+                }
+                return null;
+            }));
+            try {
+                assertThat(locked.await(2, TimeUnit.SECONDS)).isTrue();
+                var waiting = pool.submit(() -> new TransactionTemplate(transactions).execute(status -> {
+                    started.countDown();
+                    return service.executeMarketBuy(account.getUser().getId(), account.getId(), "005930", 10, "근거", snapshot);
+                }));
+                assertThat(started.await(2, TimeUnit.SECONDS)).isTrue();
+                instant.set(Instant.parse("2026-10-01T06:30:00Z"));
+                release.countDown();
+                holder.get(3, TimeUnit.SECONDS);
+                assertThatThrownBy(() -> waiting.get(3, TimeUnit.SECONDS))
+                        .rootCause().isInstanceOfSatisfying(OrderException.class,
+                                error -> assertThat(error.code()).isEqualTo("ORDER_WINDOW_CLOSED"));
+            } finally { release.countDown(); }
+        }
+        unchanged(account);
+    }
+
+    @Test
+    void marketSourceMustMatchAccountAndOwnerAndAiStillRequiresReportInputs() {
+        var ai = account();
+        var manual = new TransactionTemplate(transactions).execute(ignored ->
+                accounts.save(new Account(ai.getUser(), "수동 검증", 1000000, false)));
+        var userRequest = new OrderCreateRequest("005930", "buy", "market", null, 1L, null, null, null, null, null);
+        var aiRequest = new OrderCreateRequest("005930", "buy", "market", null, 1L, "근거", null, List.of(), 30.0, null);
+        var snapshot = book(NOW, LocalTime.of(10, 0));
+        for (var mismatch : List.of(java.util.Map.entry(ai, Order.Source.USER), java.util.Map.entry(manual, Order.Source.AI))) {
+            assertThatThrownBy(() -> execution.executeMarket(ai.getUser().getId(), mismatch.getKey().getId(),
+                    aiRequest, mismatch.getValue(), snapshot, java.util.Map.of(), () -> {}))
+                    .isInstanceOfSatisfying(OrderException.class, error -> assertThat(error.code()).isEqualTo("FORBIDDEN_ACCOUNT"));
+        }
+        assertThatThrownBy(() -> execution.executeMarket(-1, manual.getId(), userRequest,
+                Order.Source.USER, snapshot, java.util.Map.of(), () -> {}))
+                .isInstanceOfSatisfying(OrderException.class, error -> assertThat(error.code()).isEqualTo("FORBIDDEN_ACCOUNT"));
+        assertThatThrownBy(() -> execution.executeMarket(ai.getUser().getId(), ai.getId(), userRequest,
+                Order.Source.AI, snapshot, java.util.Map.of(), () -> {})).isInstanceOf(OrderException.class);
+        unchanged(ai);
+        unchanged(manual);
+    }
+
+    @Test
+    void closeReachedDuringFinalValidationLeavesAssetsUnchanged() {
+        var account = account();
+        var instant = new java.util.concurrent.atomic.AtomicReference<>(Instant.parse("2026-10-01T06:29:59Z"));
+        var clock = org.mockito.Mockito.mock(Clock.class);
+        org.mockito.Mockito.when(clock.instant()).thenAnswer(ignored -> instant.get());
+        var service = new OrderExecutionService(accounts, orders, holdings, executions, clock);
+        var request = new OrderCreateRequest("005930", "buy", "market", null, 1L, "근거", null, List.of(), 100.0, null);
+        var snapshot = book(instant.get(), LocalTime.of(15, 29, 59));
+        assertThatThrownBy(() -> new TransactionTemplate(transactions).execute(ignored ->
+                service.executeMarket(account.getUser().getId(), account.getId(), request, snapshot,
+                        java.util.Map.of(), () -> instant.set(Instant.parse("2026-10-01T06:30:00Z")))))
+                .isInstanceOfSatisfying(OrderException.class,
+                        error -> assertThat(error.code()).isEqualTo("ORDER_WINDOW_CLOSED"));
+        unchanged(account);
+    }
+
+    @Test
+    void quoteExpiresDuringFinalValidationLeavesAssetsUnchanged() {
+        var account = account();
+        var instant = new java.util.concurrent.atomic.AtomicReference<>(NOW);
+        var clock = org.mockito.Mockito.mock(Clock.class);
+        org.mockito.Mockito.when(clock.instant()).thenAnswer(ignored -> instant.get());
+        var service = new OrderExecutionService(accounts, orders, holdings, executions, clock);
+        var request = new OrderCreateRequest("005930", "buy", "market", null, 1L, "근거", null, List.of(), 100.0, null);
+        assertThatThrownBy(() -> new TransactionTemplate(transactions).execute(ignored ->
+                service.executeMarket(account.getUser().getId(), account.getId(), request,
+                        book(NOW, LocalTime.of(10, 0)), java.util.Map.of(), () -> instant.set(NOW.plusSeconds(6)))))
+                .isInstanceOfSatisfying(OrderException.class,
+                        error -> assertThat(error.code()).isEqualTo("MARKET_DATA_UNAVAILABLE"));
+        unchanged(account);
+    }
+
     private Account seller(long quantity, String cost) {
         var account = account();
         new TransactionTemplate(transactions).executeWithoutResult(ignored ->
                 holdings.save(new Holding(account, "005930", quantity, new BigDecimal(cost))));
         return account;
+    }
+
+    @Test
+    void userMarketBuyAndSellPersistSourceWithoutReport() {
+        var account = new TransactionTemplate(transactions).execute(ignored ->
+                accounts.save(new Account(users.save(new User("수동 시장가")), "수동 계좌", 1000000, false)));
+        var snapshot = new OrderBook("005930", List.of(
+                new QuoteLevel(BigDecimal.valueOf(70100), 2),
+                new QuoteLevel(BigDecimal.valueOf(70000), 1)), List.of(), LocalTime.of(10, 0), NOW);
+        var buyRequest = new OrderCreateRequest("005930", "buy", "market", null, 3L, null, null, null, null, null);
+        var buy = execution.executeMarket(account.getUser().getId(), account.getId(), buyRequest,
+                Order.Source.USER, snapshot, java.util.Map.of(), () -> {});
+        assertThat(buy.getSource()).isEqualTo(Order.Source.USER);
+        assertThat(buy.getReport()).isNull();
+        assertThat(buy.getStatus()).isEqualTo(Order.Status.EXECUTED);
+        assertThat(executions.findForOrder(buy.getId())).hasSize(2);
+        assertThat(accounts.findById(account.getId()).orElseThrow().getCashBalance()).isEqualTo(789800);
+        assertThat(holdings.findByAccountIdAndStockCode(account.getId(), "005930").orElseThrow().getTotalCost())
+                .isEqualByComparingTo("210200");
+        var sellRequest = new OrderCreateRequest("005930", "sell", "market", null, 3L, "저장하지 않을 근거", null, null, null, null);
+        var sell = execution.executeMarket(account.getUser().getId(), account.getId(), sellRequest,
+                Order.Source.USER, sellBook(), java.util.Map.of(), () -> {});
+        assertThat(sell.getSource()).isEqualTo(Order.Source.USER);
+        assertThat(sell.getReport()).isNull();
+        assertThat(sell.getStatus()).isEqualTo(Order.Status.EXECUTED);
+        assertThat(accounts.findById(account.getId()).orElseThrow().getCashBalance()).isEqualTo(1000400);
+        assertThat(holdings.findByAccountIdAndStockCode(account.getId(), "005930")).isEmpty();
+        assertThat(executions.findForOrder(sell.getId())).singleElement().satisfies(fill ->
+                assertThat(fill.getRealizedPnl()).isEqualByComparingTo("400"));
     }
 
     private OrderBook sellBook() {

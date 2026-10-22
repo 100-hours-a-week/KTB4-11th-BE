@@ -77,8 +77,9 @@ class OrderControllerTests {
         @org.springframework.context.annotation.Primary
         OrderExecutionService fixedExecution(AccountRepository accounts, OrderRepository orders,
                 HoldingRepository holdings, ExecutionRepository executions, MarketStream stream) {
-            return com.stock_spoon.river_be.execution.service.ExecutionTestFixture.withClock(accounts, orders, holdings, executions,
-                    java.time.Clock.fixed(Instant.parse("2026-10-01T01:00:00Z"), java.time.ZoneOffset.UTC));
+            var clock = org.mockito.Mockito.mock(java.time.Clock.class);
+            when(clock.instant()).thenAnswer(ignored -> MarketHours.now.get());
+            return com.stock_spoon.river_be.execution.service.ExecutionTestFixture.withClock(accounts, orders, holdings, executions, clock);
         }
     }
 
@@ -416,18 +417,121 @@ class OrderControllerTests {
     }
 
     @Test
-    void marketBuyAndSellAreRejectedWithoutChangingOrdersOrAssets() throws Exception {
+    void marketBuyAndSellAreRejectedOutsideTradingHoursWithoutChangingAssets() throws Exception {
+        MarketHours.now.set(Instant.parse("2026-10-01T06:30:00Z"));
         for (String side : java.util.List.of("buy", "sell")) {
             mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
                             .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
                             .content(marketBody(1, "null").replace("buy", side)))
-                    .andExpect(status().isBadRequest())
-                    .andExpect(jsonPath("$.code").value("MARKET_ORDER_DISABLED"));
+                    .andExpect(status().isConflict())
+                    .andExpect(jsonPath("$.code").value("ORDER_WINDOW_CLOSED"));
         }
         assertThat(orders.count()).isZero();
         assertThat(executions.count()).isZero();
         assertThat(account.getCashBalance()).isEqualTo(1_000_000);
         org.mockito.Mockito.verifyNoInteractions(market);
+        org.mockito.Mockito.verifyNoInteractions(stream);
+    }
+
+    private com.stock_spoon.river_be.market.QuoteEvent validMarketQuote() {
+        var now = MarketHours.now.get();
+        var levels = java.util.List.of(new QuoteLevel(java.math.BigDecimal.valueOf(70000), 100));
+        var book = new OrderBook("005930", levels, levels, now.atZone(java.time.ZoneId.of("Asia/Seoul")).toLocalTime(), now);
+        var quote = new com.stock_spoon.river_be.market.QuoteEvent("005930", "orderbook", now,
+                new com.stock_spoon.river_be.market.QuoteSource("subscriber", "session"), null, book);
+        org.mockito.Mockito.doReturn(java.util.Optional.of(quote)).when(stream).latestBookQuote("005930");
+        return quote;
+    }
+
+    @Test
+    void marketBuyAndSellExecuteForBothUserAndAi() throws Exception {
+        validMarketQuote();
+        var manual = accounts.save(new Account(user, "수동 시장가", 1000000, false));
+        for (var target : java.util.List.of(account, manual)) {
+            boolean ai = target.isAiManaged();
+            for (String side : java.util.List.of("buy", "sell")) {
+                String body = marketBody(2, "null").replace("buy", side);
+                if (!ai) body = """
+                        {"stock_code":"005930","order_side":"%s","order_type":"market","quantity":2}
+                        """.formatted(side);
+                mvc.perform(post("/api/v1/accounts/{accountId}/orders", target.getId())
+                                .cookie(ai ? aiCookie(user) : new Cookie("access_token", tokens.issue(user.getId()).accessToken()))
+                                .with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body))
+                        .andExpect(status().isCreated())
+                        .andExpect(jsonPath("$.order_status").value("executed"))
+                        .andExpect(jsonPath("$.order_type").value("market"))
+                        .andExpect(jsonPath("$.reserved_cash").value(0))
+                        .andExpect(jsonPath("$.executions[0].execution_price").value(70000));
+            }
+            assertThat(accounts.findById(target.getId()).orElseThrow().getCashBalance()).isEqualTo(1000000);
+            assertThat(holdings.findByAccountIdAndStockCode(target.getId(), "005930")).isEmpty();
+        }
+        entityManager.flush();
+        assertThat(orders.findAll()).hasSize(4).allSatisfy(order -> {
+            assertThat(order.getSource()).isEqualTo(order.getAccountId().equals(manual.getId()) ? Order.Source.USER : Order.Source.AI);
+            if (order.getSource() == Order.Source.USER) assertThat(order.getReport()).isNull();
+            else assertThat(order.getReport()).isNotNull();
+        });
+        org.mockito.Mockito.verifyNoInteractions(market);
+        org.mockito.Mockito.verify(stream, org.mockito.Mockito.never()).latestQuote(anyString());
+    }
+
+    @Test
+    void marketRejectsLimitPriceAndMissingQuoteWithoutSaving() throws Exception {
+        marketRequest(1, "70000").andExpect(status().isBadRequest());
+        marketRequest(1, "null").andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("MARKET_STREAM_UNAVAILABLE"));
+        assertThat(orders.count()).isZero();
+        assertThat(executions.count()).isZero();
+    }
+
+    @Test
+    @org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
+    void marketFailureLogsStageAndSeparatesCashQuantityAndLiquidity(org.springframework.boot.test.system.CapturedOutput output) throws Exception {
+        validMarketQuote();
+        marketRequest(15, "null").andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INSUFFICIENT_CASH"));
+        mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                        .cookie(aiCookie(user)).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content(marketBody(1, "null").replace("buy", "sell")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INSUFFICIENT_SELLABLE_QUANTITY"));
+        marketRequest(101, "null").andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INSUFFICIENT_MARKET_LIQUIDITY"));
+        assertThat(output.getOut()).contains("event=market_order_rejected stage=execution code=INSUFFICIENT_CASH");
+        assertThat(orders.count()).isZero();
+        assertThat(executions.count()).isZero();
+        assertThat(account.getCashBalance()).isEqualTo(1000000);
+    }
+
+    @Test
+    void marketStaleQuoteSourceChangeAndClosingBeforeSaveLeaveNoOrder() throws Exception {
+        var quote = validMarketQuote();
+        var stale = new OrderBook("005930", quote.orderBook().asks(), quote.orderBook().bids(),
+                java.time.LocalTime.of(9, 59, 54), MarketHours.now.get().minusSeconds(6));
+        org.mockito.Mockito.doReturn(java.util.Optional.of(
+                new com.stock_spoon.river_be.market.QuoteEvent("005930", "orderbook", stale.receivedAt(), quote.source(), null, stale)))
+                .when(stream).latestBookQuote("005930");
+        marketRequest(1, "null").andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("MARKET_DATA_UNAVAILABLE"));
+        quote = validMarketQuote();
+        org.mockito.Mockito.doThrow(new IllegalStateException("session changed"))
+                .when(stream).assertSource("005930", quote.source());
+        marketRequest(1, "null").andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("MARKET_STREAM_UNAVAILABLE"));
+        org.mockito.Mockito.doNothing().when(stream).assertSource(anyString(), org.mockito.ArgumentMatchers.any());
+        MarketHours.now.set(Instant.parse("2026-10-01T06:29:59Z"));
+        quote = validMarketQuote();
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        org.mockito.Mockito.doAnswer(ignored -> {
+            if (calls.incrementAndGet() == 2) MarketHours.now.set(Instant.parse("2026-10-01T06:30:00Z"));
+            return null;
+        }).when(stream).assertSource("005930", quote.source());
+        marketRequest(1, "null").andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("ORDER_WINDOW_CLOSED"));
+        assertThat(orders.count()).isZero();
+        assertThat(executions.count()).isZero();
+        assertThat(account.getCashBalance()).isEqualTo(1000000);
     }
 
     @Test

@@ -1,173 +1,144 @@
-# 지정가 주문 생성 API
+# 주문 생성 API: 지정가 예약과 장중 시장가
 
-`POST /api/v1/accounts/{accountId}/orders`는 키움에 실제 주문을 보내지 않고 BE의 모의 주문을 생성한다.
-사용자 직접 주문 지원의 클래스·메서드별 수정 사항은 [사용자 주문 생성 지원 변경 내역](user-order-create-changes.md)에 정리했다.
-구현 순서, 정책 결정 과정과 시장 검증의 자세한 설명은 [주문 생성 구현 흐름](stockspoon_order_create_flow.md)에 기록했다.
-종목별 WebSocket 구독, 장 마감 취소와 재기동 복구는 [주문 종목 WebSocket 생명주기](stockspoon_order_websocket_lifecycle.md)에 기록했다.
-요청 인증은 기존 access JWT 쿠키와 CSRF 토큰을 사용한다. 검증된 JWT의 `actor`는 `AI` 또는
-`USER`여야 하며 누락되거나 다른 값이면 `403 INVALID_ORDER_ACTOR`로 거절한다.
-JWT `sub`의 사용자와 주문 계좌 소유자가 일치해야 한다. AI는 AI 운용 계좌에만,
-사용자는 수동 운용 계좌에만 주문할 수 있다. 계좌 유형이 다르면 `403 FORBIDDEN_ACCOUNT`다.
-사용자 로그인·토큰 재발급 시 `actor: "USER"`를 발급한다. 이전 사용자 액세스 토큰에는
-`actor`가 없으므로 재발급 또는 재로그인이 필요하다.
+2026-10-22 `codex/restore-market-orders` 구현 기준. 배포 완료를 뜻하지 않는다.
+`POST /api/v1/accounts/{accountId}/orders`는 BE 내부 모의 주문을 만든다. 실제 증권사 주문 API는 호출하지 않는다.
+
+## 인증 및 주문 주체
+
+`access_token` 쿠키의 JWT와 CSRF 보호가 활성화된 환경의 CSRF 확인값을 사용한다.
+공통 Security 설정이 서명·발급자·유효기간·`type=access`를 검증한다. 컨트롤러는 검증된 JWT의
+`actor`가 `AI` 또는 `USER`인지 확인하고 주문 출처를 결정한다. 출처는 본문에서 받지 않는다.
+JWT `sub`는 사용자 ID이며, URL의 accountId는 그 사용자가 소유한 활성 계좌여야 한다.
+현재 계좌 유형 정책은 AI 주문은 AI 운용 계좌, USER 주문은 수동 계좌만 허용한다.
+대결에 연결된 계좌는 현재 거래 가능한 대결 상태여야 한다.
+
+사용자 로그인·재발급은 `actor=USER`를 발급한다. actor 없는 기존 액세스 토큰은 재발급 또는 재로그인이 필요하다.
+AI 호출도 사용자 ID sub를 사용해야 하며, 목록 조회 전용 `sub=ai-server` 토큰으로 주문할 수 없다.
 
 ## 요청
 
+USER 시장가 매수 예시:
+
 ```json
 {
   "stock_code": "005930",
-  "stock_name": "삼성전자",
   "order_side": "buy",
-  "order_type": "limit",
-  "limit_price": 70000,
-  "quantity": 2,
-  "holding_weight_limit_percent": 30.5,
-  "reason": "목표 가격에 접근해 매수를 결정했어요.",
-  "reasoning": [{"label": "가격", "body": "목표 가격에 접근했어요."}]
-}
-```
-
-AI 주문의 `reason`은 필수 문자열이며 공백만 있는 값은 거절한다. 최대 100,000자(Java UTF-16 길이)이며,
-기존 `decision_id`·`summary` 객체는 더 이상 받지 않는다. `ai_order_reports.reason`에 주문과
-같은 트랜잭션으로 저장한다. `order_id` UNIQUE 외래키로 주문당 최대 한 리포트를 보장한다.
-상세 조회와 DB 이관은 [AI 리포트 상세 조회](stockspoon_ai_report.md)를 참고한다.
-`order_source`는 body에서 받지 않고 검증된 토큰의 `actor`로 결정해 `AI` 또는 `USER`로 저장한다.
-AI 매수는 `holding_weight_limit_percent`(0~100), AI 매도는 `is_lower_triggered`가 필수다.
-사용자 주문은 `reason`, `stock_name`, `reasoning`, `holding_weight_limit_percent`,
-`is_lower_triggered`를 생략하거나 null로 보낼 수 있다. 사용자 주문에는 보고서 필수값 검증을
-적용하지 않으며, `reason`을 보내더라도 AI 보고서를 만들거나 근거를 저장하지 않는다.
-지정가·수량·종목·잔고·보유량·대결 상태 검증은 두 주체에 동일하게 적용한다.
-보고서 없는 사용자 주문도 체결·취소할 수 있고, 체결 내역은 같은 주문 조회 API에서
-`order_source: "USER"`, `reason.summary: null`로 반환한다.
-
-현재 주문 생성은 `ka10100`의 시장구분코드 `0`(코스피)과 `8`(국내 ETF)만 허용한다.
-`60/70/90`인 ETN과 `10`인 코스닥은 거절한다. `marketCode=0`만으로 보통주·우선주만을
-정확히 가려내는지는 검증되지 않았으므로, 이는 상품 유형을 엄격히 제한하는 검사와 다르다.
-
-이번 단계는 지정가만 접수한다. 시장가는 체결 엔진과 함께 구현한다. 동일 요청의 재전송도
-별도 주문으로 접수한다. 요청 재전송의 중복 방지는 현재 제공하지 않는다.
-
-## 접수 검증
-
-1. 서버 현재 시각을 `Asia/Seoul`로 변환해 **09:00:00 이상, 15:30:00 미만**이면
-   주문 생성 가능 시간으로 본다. 요일·휴일은 검사하지 않는다. 키움 `0s` 장 상태는
-   주문 접수 조건에 사용하지 않으며, 이 시간 규칙은 실제 장 개장을 보장하지 않는다.
-   원래 v1 정책 문서의 실제 거래일·정규장 검사 조건은 이후 합의에 따라 현재 단계에서 적용하지 않는다.
-2. 키움 종목정보 조회 `ka10100`으로 종목 코드와 시장구분을 확인한다. 조회 실패·불완전한
-   응답은 주문을 거절한다. 시장구분코드 `0`(코스피)과 `8`(국내 ETF)만 주문 대상으로 취급한다.
-   ETN 시장코드 `60/70/90`은 제외한다. **이후 합의한 현재 주문 접수 정책에 따라 개별 종목의 거래정지 여부는 검사하지 않는다.**
-   `state`(증거금·담보·신용 등의 종목상태)와 `orderWarning`(투자유의 분류)은 주문 판정에
-   사용하지 않는다. 이 응답으로 종목의 실제 거래 가능 여부를 보장하지 않는다.
-3. 지정가가 한국거래소 호가가격단위에 맞는지 확인한다. ETF는 2,000원 미만 1원,
-   이상 5원이다. 일반 KOSPI 주식은 가격대별 1·5·10·50·100·500·1,000원 단위다.
-4. 주문 종목의 WebSocket REG 성공을 최대 10초 기다린다. 이미 등록된 종목은 구독을 공유한다.
-   실패하거나 시간 안에 성공 응답을 받지 못하면 `503 MARKET_STREAM_UNAVAILABLE`로 거절하며
-   주문과 예약금을 저장하지 않는다.
-5. 계좌를 잠그고 소유자·활성 상태, 주문 가능 현금 또는 매도 가능 수량을 다시 확인한 뒤
-   `pending` 주문을 저장한다. 실패한 요청은 주문 행을 남기지 않는다.
-
-`ka10100`으로 종목을 검증한 뒤 주문 종목을 동적으로 구독한다. 구독은 해당 종목의 대기 주문이
-남아 있는 동안 유지한다. 여러 계좌가 같은 종목을 주문해도 구독은 공유한다.
-모든 종목의 대기 주문이 끝나면 웹소켓 연결도 종료한다. 다음 주문은 재연결과 REG가 성공해야 접수된다.
-
-## 성공 응답
-
-HTTP `201 Created`:
-
-```json
-{
-  "message": "success",
-  "order_id": 1001,
-  "account_id": 11,
-  "stock_code": "005930",
-  "stock_name": "삼성전자",
-  "order_side": "buy",
-  "order_type": "limit",
-  "limit_price": 70000,
-  "quantity": 2,
-  "order_status": "pending",
-  "reserved_cash": 140000,
-  "created_at": "2026-09-28T01:00:00Z",
-  "executions": []
-}
-```
-
-`created_at`은 UTC `Z` 형식으로 반환한다. 예를 들어 `2026-09-03T05:20:00Z`와
-한국 시각 `2026-09-03T14:20:00+09:00`은 같은 순간이다. FE는 표시할 때 한국 시각으로
-변환한다. 공유 API 문서의 주문 생성 응답에 있는 `+09:00` 예시도 실제 응답에 맞춰 UTC `Z`로
-수정해야 한다.
-주문 거절 시 `code`·`message`를 반환한다. 미인증 요청은 401, 타인 계좌는 403,
-주문 가능 시간 밖은 `409 ORDER_WINDOW_CLOSED`, 키움 종목정보 확인 실패는 503이다.
-
-## 연동 확인 사항
-
-AI 팀은 BE와 같은 시크릿·발급자(`iss`)로 `type: "access"`, 사용자 ID `sub`, 만료 시각,
-`actor: "AI"`를 담은 JWT를 생성한다. BE는 서명·발급자·만료·토큰 종류를 검증하고 주문 API에서
-AI 출처를 확인한다. JWT 공유 시크릿은 AI 서버가 모든 사용자에 대한 AI 토큰을 만들 수 있는
-권한이므로, 사용자에게 노출하거나 클라이언트 코드에 포함하면 안 된다.
-
-키움 `ka10100`의 시장구분코드는 공식 명세를 기준으로 했다. 삼성전자(보통주)와
-KODEX 200(ETF)은 실제 조회로 확인했으며, 우선주의 시장구분 응답은
-추가 검증해야 한다. 시간 제한만으로 휴장일·임시 개장 지연·조기 마감을 반영할 수 없으므로
-주문 가능 시간은 실제 거래 가능 상태와 다를 수 있다.
-
-근거: [키움 공식 API 명세](https://github.com/Kiwoom-Securities/Kiwoom-REST-API/blob/main/kiwoom/_data/kiwoom_api_spec.json),
-[한국거래소 주식 호가가격단위](https://regulation.krx.co.kr/contents/RGL/03/03010100/RGL03010100T3.jsp),
-[한국거래소 ETF 호가가격단위](https://regulation.krx.co.kr/contents/RGL/03/03060101/RGL03060101.jsp).
-
-
-## AI 종목명·판단 흐름 계약
-
-주문 생성의 stock_name은 선택 문자열이며 생략 또는 null을 허용한다. 값을 보내는 경우 공백은 불가하며 최대 255 Java UTF-16 코드 단위까지 허용한다.
-AI가 제공한 원문을 ai_order_reports.stock_name에 저장하고, 주문 생성 응답과 리포트 상세 조회의
-stock_name으로 그대로 반환한다. 이 이름을 반환하기 위해 외부 종목정보를 조회하지 않는다.
-기존 리포트의 이름은 SQL로 추정해 채우지 않으며, 이름이 NULL이면 기존 상세 응답의
-"[더미] 종목명"을 유지한다.
-
-reason은 기존처럼 필수이며 상세 조회에서는 summary가 된다.
-reasoning은 선택 항목인 순서 있는 [{label, body}] 배열이다. label은 공백 불가·최대 255자,
-body는 공백 불가·최대 16,000자(Java UTF-16 기준)이고 null 항목은 거절한다.
-생략·null·빈 목록은 빈 배열로 저장/반환한다. API 필드명은 thoughts가 아니라 reasoning이다.
-매수·매도, 지정가·시장가 모두 같은 리포트 계약을 사용한다.
-
-reasoning은 ai_report_reasoning 테이블에 report_id와 reasoning_index로 순서를 보존하여
-주문·리포트와 같은 트랜잭션으로 저장한다. 상세 조회에는 reasoning을 그대로 반환한다.
-focused_news·decision_summary를 reason에 JSON 문자열로 저장하는 계약은 추가하지 않았다.
-
-기존 DB에는 새 앱 배포 전에 db/ai_report_reasoning.sql을 1회 적용해야 한다.
-이 SQL은 자동 실행되지 않으며 운영 DB 적용은 별도 배포 작업이다.
-
-
-## AI 주문 리포트 추가 입력
-
-| 필드 | Java 타입 | 매수 | 매도 |
-|---|---|---|---|
-| holding_weight_limit_percent | Double | 필수 | 생략/null 또는 값 허용 |
-| is_lower_triggered | Boolean | 생략/null 또는 값 허용 | 필수 |
-
-holding_weight_limit_percent는 0~100의 유한한 숫자이며 소수 자릿수 제한 없이 Double 정밀도로 저장한다.
-is_lower_triggered는 JSON true/false로 받는다. false도 유효하며 문자열 "false"나 숫자 0/1은 거절한다.
-방향별 필수값 누락/null 및 잘못된 값은 400이다. 반대 방향 필드도 보내면 받아 저장한다.
-두 값은 시장가·지정가 모두 주문별 ai_order_reports에 주문과 같은 트랜잭션으로 저장한다.
-비중 상한은 표시용이며 실제 비중 비교·주문 거절 기준으로 사용하지 않는다.
-손실 제한 결과는 AI가 보낸 값이며 BE가 수익률로 재계산하거나 강제 매도를 추가하지 않는다.
-
-매도 요청 예시:
-
-```json
-{
-  "stock_code": "005930",
-  "stock_name": "삼성전자",
-  "order_side": "sell",
   "order_type": "market",
   "limit_price": null,
-  "quantity": 1,
-  "is_lower_triggered": false,
-  "reason": "상승 흐름이 약해져 매도했어요.",
-  "reasoning": [{"label": "흐름 검토", "body": "보유분을 정리하기로 했어요."}]
+  "quantity": 1
 }
 ```
 
-기존 DB에는 db/ai_report_order_inputs.sql을 배포 전에 1회 적용한다.
-SQL은 자동 실행되지 않으며 기존 리포트의 두 열은 NULL로 유지한다.
-이번 변경은 요청 검증과 저장만 반영한다. 주문 생성 응답과 리포트 상세조회 응답 구조는 변경하지 않는다.
+USER 지정가 매수 예시:
+
+```json
+{
+  "stock_code": "005930",
+  "order_side": "buy",
+  "order_type": "limit",
+  "limit_price": 70000,
+  "quantity": 2
+}
+```
+
+- stock_code는 숫자 6자리, quantity는 1 이상의 정수다. order_side는 buy/sell, order_type은 limit/market을 사용한다.
+- 지정가 limit_price는 양수이며 일반 주식 호가 단위에 맞아야 한다. 시장가 limit_price는 생략하거나 null이어야 한다. 0도 허용하지 않는다.
+- AI는 reason이 공백이 아닌 최대 100,000 Java UTF-16 코드 단위의 문자열이어야 한다. AI 매수는 holding_weight_limit_percent(유한한 0~100), AI 매도는 is_lower_triggered(JSON boolean)가 필수다.
+- AI stock_name은 선택이며, 보내면 공백 불가·최대 255자다. reasoning은 선택 배열이며 label은 공백 불가·최대 255자, body는 공백 불가·최대 16,000자다. null 배열 원소는 거부한다.
+- USER는 보고서 필드를 생략/null로 보낼 수 있고 AI 보고서를 만들지 않는다. 값을 실제로 보내면 DTO의 타입·길이 등 공통 제약은 적용되며 reason을 보내더라도 근거를 저장하지 않는다.
+- holding_weight_limit_percent는 보고서 표시값이며 BE가 실제 비중 상한을 강제하는 조건이 아니다.
+
+## 접수·체결 정책
+
+| 유형 | 접수 시간 | 성공 결과 | 시세 연결 실패 |
+|---|---|---|---|
+| 지정가 | 장전·장후·야간·주말 포함 상시 | pending 또는 즉시 executed | 저장된 예약 유지 |
+| 시장가 | 한국 시간 평일 09:00 이상, 15:30 미만 | 전량 executed | 신규 주문 저장 없이 실패 |
+
+공휴일·임시 휴장 달력과 실제 거래소 장 상태는 연동하지 않는다. 시장가는 유효한 최신 호가가 있어야 체결한다.
+지정가 접수의 OrderMarketValidator는 현재 가격의 호가 단위만 검사한다. 과거 ka10100 종목정보 조회·시장코드 검사·ETF 전용 단위 적용은 현재 이 경로에서 수행하지 않는다.
+
+## 호출 흐름
+
+```text
+POST /api/v1/accounts/{accountId}/orders
+ → Security 인증·CSRF → JSON 변환·@Valid
+ → order.controller.OrderController.create(jwt, accountId, request)
+   → actor → source, sub → userId, 주문 입력 검사
+   → order.service.OrderService.assertOrderableAccount(userId, accountId, source)
+   ├─ limit
+   │  → order.validator.OrderMarketValidator.validateLimit(limitPrice)
+   │  → OrderSubscriptionService.create(stockCode, 저장 작업)
+   │     → OrderService.reserveLimit(userId, accountId, request, source)
+   │        → 계좌 잠금·재검증 → OrderRepository.save() → 커밋
+   │     → refresh(): 구독 수요 갱신
+   │  → execution.listener.OrderExecutionListener.orderCreated(order)
+   │     → 유효한 당일 장중 시세가 있으면 최초 지정가 체결 판단
+   └─ market
+      → OrderController.createMarketOrder(userId, accountId, request, source, side)
+         → OrderExecutionService.isTradingTime()
+         → AI 매수만 OrderBuyPriceService.fetch(accountId, stockCode)
+         → OrderSubscriptionService.withMarketQuote(stockCode, 체결 작업)
+            → 임시 구독 수요 추가 → 최신 QuoteEvent 확보
+            → OrderExecutionService.executeMarket(userId, accountId, request,
+                 source, quote.orderBook(), prices, validate)
+               → 계좌 잠금·검증·호가별 체결 계산
+               → 저장 직전 시간·호가·출처·대결 상태 재검사
+               → 주문·체결·자산 변경 → EXECUTED 커밋
+            → finally: 자기 임시 수요 해제
+ → OrderExecutionListener.response(accountId, orderId)
+   → OrderCreateResponse.from(order, executions) → HTTP 201
+```
+
+OrderController는 JWT, URL 계좌 ID, 요청 DTO를 각각 jwt/accountId/request로 받는다.
+계좌 사전 검사는 소유권·활성·운용 유형·대결 상태를 확인한다. 실제 예약·체결 서비스는 계좌 잠금 후 이를 다시 검사한다.
+지정가는 별도 트랜잭션에서 예약을 커밋한 뒤 시세 구독과 최초 체결 판단을 수행한다. 장외 또는 시세가 없으면 새 이벤트까지 기다린다.
+시장가는 아직 DB 주문이 없어도 종목을 구독할 수 있도록 임시 수요를 추가한다. 최신 호가를 최대 3초 동안 50ms 간격으로 확인한다.
+이 대기 시간은 계좌 잠금·DB 커밋을 포함한 전체 요청 제한 시간이 아니다. 호가 대기 중에는 DB 계좌 잠금을 잡지 않는다.
+이미 구독 캐시에 호가가 있으면 즉시 체결 서비스로 전달한다. 이 호가가 만료되었으면 새 호가를 기다리지 않고 503으로 거부한다.
+
+withMarketQuote는 호가의 종목·유형·출처를 확인하고 체결 작업에 QuoteEvent를 넘긴다.
+executeMarket은 전달받은 book으로 가격·잔량을 계산하고 validate로 저장 직전 구독 출처를 재검증한다.
+거래 시간과 호가 신선도는 계좌 잠금 후 및 자산 변경 직전에 검사한다. 호가 수신은 현재 이하·5초 이내,
+호가 시각은 현재보다 과거 5초/미래 1초 범위이며 당일이어야 한다. exchangeTimestamp가 있으면 호가 시각과 일치해야 한다.
+AI 매수의 다른 보유 종목 평가 가격은 기존 Redis 조회를 사용하며, 시장가 체결 가격을 대신하지 않는다.
+
+구독 대상은 DB PENDING 종목과 처리 중인 시장가 요청 종목의 합집합이다. 같은 종목의 요청 수를 세므로
+한 요청이 끝나도 다른 시장가 요청이나 지정가 예약의 구독을 제거하지 않는다. 정리 오류는 이미 성공한 거래 결과를 덮어쓰지 않는다.
+
+## 자산 계산과 트랜잭션
+
+- 가용 현금 = 현금 잔액 − 기존 PENDING 주문 예약금.
+- 매도 가능 수량 = 보유 수량 − 기존 PENDING 매도 수량.
+- 시장가 매수는 매도호가를 낮은 가격부터, 매도는 매수호가를 높은 가격부터 소비한다.
+- 예: 70,000원 1주와 70,100원 2주를 매수하면 3주, 210,200원, 체결 2행이다.
+- 시장가는 전량 체결이 가능한 경우만 저장한다. 잔량 부족 시 부분 주문·체결을 남기지 않는다.
+- 주문·체결·현금·보유량을 같은 트랜잭션으로 처리한다. 후속 체결 저장 실패도 전체 롤백한다.
+- 지정가 예약은 실제 현금·보유량을 접수 시 차감하지 않으며 체결·취소 시 예약을 해제한다.
+- 동일 요청 재전송은 별도 주문으로 처리한다. 여러 요청 사이 호가 잔량을 공유 차감하는 기능은 없다.
+
+## 응답·오류
+
+성공은 HTTP 201이며 기존 OrderCreateResponse 구조를 사용한다. 시장가는 order_type=market,
+limit_price=null, order_status=executed, reserved_cash=0과 executions를 반환한다.
+지정가는 pending이면 executions가 비어 있다. created_at은 UTC Z 형식이다.
+사용자 주문의 보고서 기반 stock_name은 null이며, 저장된 출처는 trade_orders.order_source의 AI/USER다.
+
+| HTTP / code | 조건 |
+|---|---|
+| 401 UNAUTHORIZED / INVALID_TOKEN | 인증 실패 또는 사용자 ID 해석 실패 |
+| 403 INVALID_CSRF_TOKEN | 활성화된 CSRF 검사 실패 |
+| 403 INVALID_ORDER_ACTOR | actor 누락 또는 AI/USER 이외 값 |
+| 403 FORBIDDEN_ACCOUNT | 계좌 소유권·활성 또는 운용 유형 검사 실패 |
+| 409 COMPETITION_NOT_IN_PROGRESS | 대결 거래 제한 |
+| 409 ORDER_WINDOW_CLOSED | 시장가 장외·주말 또는 잠금/처리 중 마감 도달 |
+| 503 MARKET_STREAM_UNAVAILABLE | 구독·출처·호가 도착 대기 실패 |
+| 503 MARKET_DATA_UNAVAILABLE | 체결용 호가 시간·가격 데이터 오류 |
+| 400 INSUFFICIENT_CASH | 시장가 매수 가용 현금 부족 |
+| 400 INSUFFICIENT_SELLABLE_QUANTITY | 시장가 매도 가능 수량 부족 |
+| 400 INSUFFICIENT_MARKET_LIQUIDITY | 시장가 상대 호가 잔량 부족 |
+| 400 INVALID_ORDER | 기타 주문 입력·지정가 검증 실패 |
+
+시장가 단계별 로그와 CloudWatch 검색은 [로그 문서](cloudwatch-logging.md#시장가-주문-실패-추적)를 참고한다.
+클래스별 복구 계획·실행 기록은 [시장가 복구 계획](superpowers/plans/2026-10-22-restore-market-orders.md)에 있다.
+과거 AI 리포트 컬럼 이관은 [AI 리포트 문서](stockspoon_ai_report.md)를 참고한다. 이번 복구의 새 스키마 변경은 없다.

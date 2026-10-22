@@ -97,15 +97,24 @@ public class Order {
     public static Order pendingMarket(Account account, String stockCode, Side side, long quantity,
             String reason, String stockName, java.util.List<ReportReasoning> reasoning,
             Double holdingWeightLimitPercent, Boolean isLowerTriggered, Instant now) {
+        return pendingMarket(account, stockCode, side, quantity, Source.AI, reason, stockName, reasoning,
+                holdingWeightLimitPercent, isLowerTriggered, now);
+    }
+
+    public static Order pendingMarket(Account account, String stockCode, Side side, long quantity,
+            Source source, String reason, String stockName, java.util.List<ReportReasoning> reasoning,
+            Double holdingWeightLimitPercent, Boolean isLowerTriggered, Instant now) {
         var order = new Order();
         order.account = account;
         order.stockCode = stockCode;
         order.side = side;
         order.type = Type.MARKET;
         order.status = Status.PENDING;
-        order.source = Source.AI;
+        order.source = source;
         order.quantity = quantity;
-        order.report = new AiOrderReport(order, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered);
+        if (source == Source.AI) {
+            order.report = new AiOrderReport(order, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered);
+        }
         order.createdAt = now;
         return order;
     }

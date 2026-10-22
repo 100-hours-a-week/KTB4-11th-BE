@@ -3,12 +3,12 @@
 -- ALTER TABLE stocks ADD COLUMN sector VARCHAR(100) NULL;
 CREATE TABLE IF NOT EXISTS stocks (
     stock_id BIGINT NOT NULL AUTO_INCREMENT,
-    symbol VARCHAR(20) NOT NULL,
+    stock_code VARCHAR(20) NOT NULL,
     name VARCHAR(100) NOT NULL,
     market VARCHAR(10) NOT NULL,
     sector VARCHAR(100) NULL,
     PRIMARY KEY (stock_id),
-    UNIQUE KEY uk_stocks_market_symbol (market, symbol)
+    UNIQUE KEY uk_stocks_market_stock_code (market, stock_code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS watchlist_stocks (

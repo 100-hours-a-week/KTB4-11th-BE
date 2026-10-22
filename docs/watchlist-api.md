@@ -46,7 +46,7 @@ POST /api/v2/users/me/watchlist
     → validate(code)
     → requireUser(userId, true)
       → EntityManager.find(User.class, userId, PESSIMISTIC_WRITE)
-    → watchlist.repository.StockRepository.findAllBySymbol(code)
+    → watchlist.repository.StockRepository.findAllByStockCode(code)
       → 0건: 404 / 2건 이상: 409
     → WatchlistRepository.existsById(new WatchlistId(userId, stock.getId()))
       → 이미 등록: false 반환
@@ -60,7 +60,7 @@ POST 요청의 JSON은 `WatchlistAddRequest`로 변환된다. 중첩 클래스 `
 
 Controller의 `add(jwt, request)`는 JWT subject를 long 사용자 ID로 변환하고, DTO의 `stockCode()`와 함께 Service의 `add(userId, code)`에 전달한다. 계좌 ID나 FE가 지정한 사용자 ID는 사용하지 않는다.
 
-Service는 코드 형식을 다시 확인하고 실제 사용자 행을 조회·잠근다. 종목 마스터에서는 `symbol=code` 조건으로 조회한다. 조회된 종목이 하나일 때 내부 stock_id를 얻고 `(userId, stockId)`가 이미 등록됐는지 확인한다. 새 등록은 Repository.save()가 아니라 **EntityManager.persist()**로 저장한다. `Watchlist` 생성자가 `Instant.now()`로 등록 시각을 설정한다.
+Service는 코드 형식을 다시 확인하고 실제 사용자 행을 조회·잠근다. 종목 마스터에서는 `stock_code=code` 조건으로 조회한다. 조회된 종목이 하나일 때 내부 stock_id를 얻고 `(userId, stockId)`가 이미 등록됐는지 확인한다. 새 등록은 Repository.save()가 아니라 **EntityManager.persist()**로 저장한다. `Watchlist` 생성자가 `Instant.now()`로 등록 시각을 설정한다.
 
 같은 사용자의 등록·해제는 사용자 행 잠금으로 직렬화한다. 두 등록 요청이 동시에 들어오면 먼저 처리된 요청이 커밋된 후 다음 요청이 중복 여부를 확인한다. 복합 PK도 같은 사용자·종목의 중복 행을 막는다. 트랜잭션 커밋이 실패하면 성공 응답을 반환하지 않는다.
 
@@ -93,7 +93,7 @@ GET /api/v2/users/me/watchlist
 
 Controller의 `list(jwt)`는 인증 사용자의 ID만 Service에 전달한다. Service의 `list(userId)`는 읽기 전용 트랜잭션에서 사용자 존재를 확인한다. 이때는 변경용 잠금을 걸지 않는다.
 
-Repository의 `list(userId)`는 해당 사용자의 관심 행과 종목을 한 번에 조회한다. Service는 각 Stock의 symbol·name·sector를 각각 stock_code·stock_name·sector로 옮겨 응답을 만든다. 가장 최근 등록한 항목이 먼저 나오고 등록 시각이 같으면 내부 종목 ID가 큰 항목이 먼저 나온다. 페이지네이션과 서버 업종 필터 파라미터는 현재 없다.
+Repository의 `list(userId)`는 해당 사용자의 관심 행과 종목을 한 번에 조회한다. Service는 각 Stock의 stock_code·name·sector를 각각 stock_code·stock_name·sector로 옮겨 응답을 만든다. 가장 최근 등록한 항목이 먼저 나오고 등록 시각이 같으면 내부 종목 ID가 큰 항목이 먼저 나온다. 페이지네이션과 서버 업종 필터 파라미터는 현재 없다.
 
 ```json
 {
@@ -116,7 +116,7 @@ DELETE /api/v2/users/me/watchlist/{stockCode}
     → validate(code)
     → requireUser(userId, true): 사용자 행 잠금
     → WatchlistRepository.remove(userId, code)
-      → 해당 사용자의 행 중, 종목 symbol이 code인 행만 삭제
+      → 해당 사용자의 행 중, 종목 stock_code이 code인 행만 삭제
     → 트랜잭션 커밋
   → {"message":"delete_success"}
   → 200 OK
@@ -131,7 +131,7 @@ Repository는 `user_id`와 종목코드 조건을 모두 사용하므로 다른 
 | 값 | 출처 | 사용처 |
 |---|---|---|
 | userId | 인증 Jwt.getSubject() → Long.parseLong | 사용자 확인, 관심 조회·중복 확인·삭제 조건 |
-| code | 등록 JSON의 stock_code 또는 삭제 URL의 stockCode | 마스터 symbol 조회, 삭제 대상 확인 |
+| code | 등록 JSON의 stock_code 또는 삭제 URL의 stockCode | 마스터 stock_code 조회, 삭제 대상 확인 |
 | stockId | 조회된 Stock.getId() | 관심 복합 PK와 stock_id FK |
 | created | WatchlistService.add 반환 boolean | Controller가 201 또는 200 결정 |
 | createdAt | new Watchlist에서 Instant.now() | 등록 시각 저장·조회 정렬 |
@@ -147,12 +147,14 @@ Repository는 `user_id`와 종목코드 조건을 모두 사용하므로 다른 
 | 컬럼 | SQL 타입 | NULL | 제약·역할 |
 |---|---|---|---|
 | stock_id | BIGINT | 불가 | AUTO_INCREMENT PK, 내부 식별자 |
-| symbol | VARCHAR(20) | 불가 | 공개 종목코드, 관심 API 입력은 숫자·영문 대문자 6자리 |
+| stock_code | VARCHAR(20) | 불가 | 공개 종목코드, 관심 API 입력은 숫자·영문 대문자 6자리 |
 | name | VARCHAR(100) | 불가 | 종목명 |
 | market | VARCHAR(10) | 불가 | 소속 시장, 현재 Entity에 enum 검증 없음 |
 | sector | VARCHAR(100) | 가능 | 업종 표시·FE 필터용 데이터 |
 
-`uk_stocks_market_symbol(market, symbol)` 유일 제약을 둔다. symbol 단독 유일 제약은 없으므로 등록 API가 조회 결과 2건 이상을 409로 처리한다.
+`uk_stocks_market_stock_code(market, stock_code)` 유일 제약을 둔다. stock_code 단독 유일 제약은 없으므로 등록 API가 조회 결과 2건 이상을 409로 처리한다.
+
+기존 DB가 `symbol` 컬럼을 사용한다면 애플리케이션을 중지하고 `db/rename-stocks-symbol-to-stock-code.sql`을 적용한 뒤 새 버전을 배포한다. 기존 값과 stock_id/FK는 유지한다. 신규 DB는 `db/watchlist.sql`을 사용한다. Hibernate 자동 스키마 갱신에 컬럼명 변경을 맡기지 않는다.
 
 신규 테이블용 SQL을 제공했으며 기존 운영 stocks를 대체하거나 축소하지 않는다. 기존 stocks가 있으면 CREATE TABLE IF NOT EXISTS는 필드를 보완하지 않는다. sector가 없을 때 적용할 `ALTER TABLE stocks ADD COLUMN sector VARCHAR(100) NULL`은 SQL 주석에만 있다. 실제 테이블·기존 제약·데이터와 비교한 후 필요한 변경만 적용해야 한다. 기존 마스터가 stock_code 등 다른 컬럼을 사용한다면 매핑부터 대조해야 한다.
 

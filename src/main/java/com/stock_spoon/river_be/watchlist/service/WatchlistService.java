@@ -30,7 +30,7 @@ public class WatchlistService {
         requireUser(userId, false);
         var items = watchlists.list(userId).stream().map(row -> {
             var stock = row.getStock();
-            return new WatchlistResponse.Item(stock.getSymbol(), stock.getName(), stock.getSector());
+            return new WatchlistResponse.Item(stock.getStockCode(), stock.getName(), stock.getSector());
         }).toList();
         return new WatchlistResponse("success", items);
     }
@@ -40,7 +40,7 @@ public class WatchlistService {
     public boolean add(long userId, String code) {
         validate(code);
         requireUser(userId, true);
-        var matches = stocks.findAllBySymbol(code);
+        var matches = stocks.findAllByStockCode(code);
         if (matches.isEmpty()) {
             throw new WatchlistException(HttpStatus.NOT_FOUND, "STOCK_NOT_FOUND", "종목을 찾을 수 없습니다.");
         }

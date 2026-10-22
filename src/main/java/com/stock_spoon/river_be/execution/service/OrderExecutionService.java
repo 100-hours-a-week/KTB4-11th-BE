@@ -105,10 +105,19 @@ public class OrderExecutionService {
     @Transactional
     public Order executeMarket(long userId, long accountId, OrderCreateRequest request, OrderBook book,
             java.util.Map<String, BigDecimal> prices, Runnable validate) {
+        return executeMarket(userId, accountId, request, Order.Source.AI, book, prices, validate);
+    }
+
+    @Transactional
+    public Order executeMarket(long userId, long accountId, OrderCreateRequest request, Order.Source source,
+            OrderBook book, java.util.Map<String, BigDecimal> prices, Runnable validate) {
+        var side = Order.Side.valueOf(request.orderSide().toUpperCase(java.util.Locale.ROOT));
+        if (request.limitPrice() != null) throw new OrderException("시장가 주문의 지정가는 null이어야 합니다.");
+        if (source == Order.Source.AI) request.validateReportInputs(side);
         return executeMarket(userId, accountId, request.stockCode(),
-                Order.Side.valueOf(request.orderSide().toUpperCase(java.util.Locale.ROOT)),
-                request.quantity(), request.reason(), book, request.stockName(), request.reasoning(),
-                request.holdingWeightLimitPercent(), request.isLowerTriggered(), prices, validate);
+                side, request.quantity(), source == Order.Source.AI ? request.reason() : null,
+                book, request.stockName(), request.reasoning(),
+                request.holdingWeightLimitPercent(), request.isLowerTriggered(), prices, validate, source);
     }
 
     @Transactional
@@ -120,14 +129,15 @@ public class OrderExecutionService {
     /** 공개 메서드의 트랜잭션 안에서 주문·체결·자산을 전량 반영한다. */
     private Order executeMarket(long userId, long accountId, String stockCode, Order.Side side,
             long quantity, String reason, OrderBook book) {
-        return executeMarket(userId, accountId, stockCode, side, quantity, reason, book, null, java.util.List.of(), null, null, java.util.Map.of(), () -> {});
+        return executeMarket(userId, accountId, stockCode, side, quantity, reason, book, null, java.util.List.of(), null, null, java.util.Map.of(), () -> {}, Order.Source.AI);
     }
 
     private Order executeMarket(long userId, long accountId, String stockCode, Order.Side side,
             long quantity, String reason, OrderBook book, String stockName, java.util.List<ReportReasoning> reasoning,
-            Double holdingWeightLimitPercent, Boolean isLowerTriggered, java.util.Map<String, BigDecimal> prices, Runnable validate) {
-        if (stockCode == null || !stockCode.matches("[0-9]{6}") || quantity <= 0
-                || reason == null || reason.isBlank() || reason.length() > 100000) {
+            Double holdingWeightLimitPercent, Boolean isLowerTriggered, java.util.Map<String, BigDecimal> prices,
+            Runnable validate, Order.Source source) {
+        if (source == null || side == null || stockCode == null || !stockCode.matches("[0-9]{6}") || quantity <= 0
+                || (source == Order.Source.AI && (reason == null || reason.isBlank() || reason.length() > 100000))) {
             throw new OrderException("주문 입력값을 확인하세요.");
         }
         var account = accounts.findLockedById(accountId)
@@ -136,32 +146,17 @@ public class OrderExecutionService {
             throw new OrderException(HttpStatus.FORBIDDEN,
                     "FORBIDDEN_ACCOUNT", "이 계좌에 주문할 권한이 없습니다.");
         }
-        if (!account.isActive() || !account.isAiManaged()) {
-            throw new OrderException("운용 가능한 자동매매 계좌가 아닙니다.");
+        if (!account.isActive()) throw new OrderException("활성 계좌가 아닙니다.");
+        if (account.isAiManaged() != (source == Order.Source.AI)) {
+            throw new OrderException(HttpStatus.FORBIDDEN, "FORBIDDEN_ACCOUNT",
+                    "주문 주체와 계좌 운용 유형이 일치하지 않습니다.");
         }
         if (accounts.hasNonTradingCompetition(accountId, clock.instant().atZone(SEOUL))) {
             throw new OrderException(HttpStatus.CONFLICT, "COMPETITION_NOT_IN_PROGRESS", "진행 중인 대결만 주문할 수 있습니다.");
         }
         var now = clock.instant();
-        var local = now.atZone(SEOUL);
-        if (local.toLocalTime().isBefore(LocalTime.of(9, 0))
-                || !local.toLocalTime().isBefore(LocalTime.of(15, 30))) {
-            throw new OrderException(HttpStatus.CONFLICT,
-                    "ORDER_WINDOW_CLOSED", "주문 생성은 한국 시간 09:00부터 15:30 전까지 가능합니다.");
-        }
-        if (book == null || !stockCode.equals(book.stockCode()) || book.receivedAt() == null
-                || book.quoteTime() == null || book.receivedAt().isAfter(now)
-                || book.receivedAt().isBefore(now.minusSeconds(5))) {
-            throw unavailableBook();
-        }
-        var quotedAt = local.toLocalDate().atTime(book.quoteTime()).atZone(SEOUL).toInstant();
-        if (book.exchangeTimestamp() != null && !book.exchangeTimestamp().equals(quotedAt)) {
-            throw unavailableBook();
-        }
-        if (!book.receivedAt().atZone(SEOUL).toLocalDate().equals(local.toLocalDate())
-                || quotedAt.isBefore(now.minusSeconds(5)) || quotedAt.isAfter(now.plusSeconds(1))) {
-            throw unavailableBook();
-        }
+        assertMarketTime(now);
+        validateMarketBook(stockCode, book, now);
         var levels = side == Order.Side.BUY ? book.asks() : book.bids();
         var priority = Comparator.comparing(QuoteLevel::price);
         if (side == Order.Side.SELL) priority = priority.reversed();
@@ -217,10 +212,14 @@ public class OrderExecutionService {
         }
         // 계좌 잠금·DB 조회를 기다리는 동안 담당이나 연결 세션이 바뀌었으면 자산을 변경하지 않는다.
         validate.run();
-        if (accounts.hasNonTradingCompetition(accountId, clock.instant().atZone(SEOUL))) {
+        now = clock.instant();
+        assertMarketTime(now);
+        validateMarketBook(stockCode, book, now);
+        if (accounts.hasNonTradingCompetition(accountId, now.atZone(SEOUL))) {
             throw new OrderException(HttpStatus.CONFLICT, "COMPETITION_NOT_IN_PROGRESS", "진행 중인 대결만 주문할 수 있습니다.");
         }
-        var order = orders.save(Order.pendingMarket(account, stockCode, side, quantity, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered, now));
+        var order = orders.save(Order.pendingMarket(account, stockCode, side, quantity, source, reason,
+                stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered, now));
         account.changeCash(cashDelta);
         var cost = BigDecimal.valueOf(amount);
         if (side == Order.Side.BUY) {
@@ -244,6 +243,26 @@ public class OrderExecutionService {
         if (order.getSide() == Order.Side.BUY) recordBuyWeight(order, account, amount, quantity, prices);
         order.execute();
         return order;
+    }
+
+    private static void assertMarketTime(java.time.Instant now) {
+        if (!inTradingHours(now.atZone(SEOUL))) {
+            throw new OrderException(HttpStatus.CONFLICT, "ORDER_WINDOW_CLOSED",
+                    "시장가 주문은 한국 시간 평일 09:00부터 15:30 전까지 가능합니다.");
+        }
+    }
+
+    private static void validateMarketBook(String stockCode, OrderBook book, java.time.Instant now) {
+        if (book == null || !stockCode.equals(book.stockCode()) || book.receivedAt() == null
+                || book.quoteTime() == null || book.receivedAt().isAfter(now)
+                || book.receivedAt().isBefore(now.minusSeconds(5))) throw unavailableBook();
+        var local = now.atZone(SEOUL);
+        var quotedAt = local.toLocalDate().atTime(book.quoteTime()).atZone(SEOUL).toInstant();
+        if (book.exchangeTimestamp() != null && !book.exchangeTimestamp().equals(quotedAt)) throw unavailableBook();
+        if (!book.receivedAt().atZone(SEOUL).toLocalDate().equals(local.toLocalDate())
+                || quotedAt.isBefore(now.minusSeconds(5)) || quotedAt.isAfter(now.plusSeconds(1))) {
+            throw unavailableBook();
+        }
     }
 
     private void recordBuyWeight(Order order,

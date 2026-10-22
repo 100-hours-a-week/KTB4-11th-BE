@@ -55,3 +55,51 @@ fields @timestamp, @message
 ```
 
 해당 행의 `requestId`로 같은 요청의 공통 HTTP 로그를 찾는다. `stage=transaction_commit`은 서비스 메서드 본문 이후 커밋 과정에서 발생한 오류이며, 로그의 대결·계좌 ID가 롤백 후 DB에 존재하지 않을 수 있다. 실제 CloudWatch 수집 연결은 배포 환경에서 별도 확인해야 한다.
+
+## 시장가 주문 실패 추적
+
+2026-10-22 시장가 복구 브랜치 기준이며 CloudWatch 실제 수집·배포 검증은 별도다.
+`OrderController.createMarketOrder()`는 `event=market_order_completed` 또는
+`event=market_order_rejected`를 기록한다. 실패 로그에는 stage, code, accountId, stockCode,
+side, source, causeType과 기존 MDC requestId가 포함된다. 토큰·본문·AI 판단 근거는 기록하지 않는다.
+
+| stage | 의미 |
+|---|---|
+| trading_time | 호가 구독 전에 장중 여부 확인 |
+| quote_acquisition | AI 매수 평가 가격 조회 및 임시 구독·호가 확보 |
+| execution | 호가 확보 후 체결 서비스 호출·검증·저장·커밋 |
+
+주문 성공 로그는 체결 서비스가 커밋하고 임시 수요 정리를 마친 뒤 기록된다.
+계좌 소유권·actor·요청 DTO 등 공통 사전 검사에서 실패하면 시장가 전용 메서드에 도달하지 않는다.
+그 경우 기존 `api_rejected`, `security_rejected`, `http_request` 로그와 응답 code/message를 확인한다.
+
+| code | 해석 |
+|---|---|
+| ORDER_WINDOW_CLOSED | 평일 장중이 아니거나 잠금·처리 중 15:30 도달 |
+| MARKET_STREAM_UNAVAILABLE | 구독 갱신 실패, 3초 내 호가 미도착, 출처 누락·변경, 대기 중 인터럽트 |
+| MARKET_DATA_UNAVAILABLE | 확보한 호가의 수신·거래소 시각 또는 가격 데이터 오류 |
+| INSUFFICIENT_CASH | 지정가 예약금을 제외한 현금 부족 |
+| INSUFFICIENT_SELLABLE_QUANTITY | 지정가 매도 예약을 제외한 보유 수량 부족 |
+| INSUFFICIENT_MARKET_LIQUIDITY | 전량 체결에 필요한 상대 호가 잔량 부족 |
+| INTERNAL_ERROR | 예상하지 못한 런타임 오류. causeType과 같은 requestId의 DB·HTTP 로그 확인 |
+
+```text
+fields @timestamp, @message
+| filter @message like /event=market_order_rejected|event=market_order_completed/
+| sort @timestamp desc
+| limit 100
+```
+
+특정 요청은 응답의 X-Request-Id를 아래 예시 값 대신 넣어 검색한다.
+
+```text
+fields @timestamp, @message
+| filter @message like /검색할-requestId/
+| sort @timestamp asc
+| limit 200
+```
+
+예: `stage=execution code=INSUFFICIENT_CASH`는 호가 확보 이후 자산 검증 단계의 실패다.
+`stage=quote_acquisition code=MARKET_STREAM_UNAVAILABLE`는 체결 전 호가 확보 실패다.
+`order_subscription_refresh_failed`만 있고 market_order_completed가 있으면 구독 정리 오류가
+거래 결과를 되돌렸다는 의미가 아니다. DB의 커밋된 주문·체결 결과를 기준으로 확인한다.

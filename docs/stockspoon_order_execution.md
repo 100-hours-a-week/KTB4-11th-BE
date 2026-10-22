@@ -1,6 +1,6 @@
 # 지정가 주문 자동 체결 구현 과정과 코드 흐름 (v1)
 
-> 2026-10-16 정책 변경: 이 문서는 v1 구현 기록입니다. 현재 지정가는 상시 접수하고 장 마감·날짜 변경으로 취소하지 않습니다. 장외 예약은 다음 장중 새 시세에서 판단하며 시장가 API는 차단합니다. 최신 동작은 [지정가 예약 주문](reserved-limit-orders.md)을 참고하세요. 아래의 당일 만료·접수 전 구독 대기·REST 최초 판단 설명은 이전 정책입니다.
+> 이 문서는 v1 구현 기록입니다. 2026-10-22 복구 브랜치에서는 지정가 상시 예약과 평일 장중 시장가 전량 체결을 함께 지원합니다. 지정가는 장 마감·날짜 변경으로 취소하지 않으며, 장외 예약은 다음 장중 새 시세로 판단합니다. 시장가는 장외 생성하지 않습니다. 최신 호출 흐름은 [주문 생성 API](stockspoon_order_create.md), 예약 정책은 [지정가 예약 주문](reserved-limit-orders.md)을 참고하세요. 아래의 시장가 미구현·차단, 당일 만료·접수 전 구독 대기·REST 최초 판단 설명은 과거 기록입니다. 실제 배포 여부는 별도입니다.
 
 ## 작업 개요
 
@@ -288,7 +288,7 @@ REST 호출은 서버 설정상 연결 3초·읽기 5초 제한을 사용한다.
 
 [KiwoomConfig.java](../src/main/java/com/stock_spoon/river_be/market/kiwoom/KiwoomConfig.java)가 스트림의 가격 콜백을 `ApplicationEventPublisher.publishEvent()`에 연결한다. 여기서 이벤트는 BE 프로세스 안의 알림이며 FE로 전송되는 메시지가 아니다.
 
-[KiwoomStockStream.java](../src/main/java/com/stock_spoon/river_be/market/kiwoom/KiwoomStockStream.java):
+`KiwoomStockStream.java`(과거 파일명, 현재 시세 인터페이스는 [MarketStream.java](../src/main/java/com/stock_spoon/river_be/market/MarketStream.java)):
 
 1. `Session.onText()`가 웹소켓 메시지를 받는다.
 2. 분할 메시지를 합친 뒤 `accept()`가 파싱한다.

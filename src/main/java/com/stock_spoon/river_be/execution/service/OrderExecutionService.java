@@ -186,7 +186,8 @@ public class OrderExecutionService {
         } catch (ArithmeticException error) {
             throw new OrderException("호가 또는 주문금액이 허용 범위를 초과합니다.");
         }
-        if (remaining != 0) throw new OrderException("시장가 주문을 전량 체결할 상대 호가 잔량이 부족합니다.");
+        if (remaining != 0) throw new OrderException(HttpStatus.BAD_REQUEST, "INSUFFICIENT_MARKET_LIQUIDITY",
+                "시장가 주문을 전량 체결할 상대 호가 잔량이 부족합니다.");
         var owned = holdings.findByAccountIdAndStockCode(accountId, stockCode).orElse(null);
         // 체결별 원가 계산은 보유정보 갱신 전의 동일한 수량·총 취득원가를 사용한다.
         long originalQuantity = owned == null ? 0 : owned.getQuantity();
@@ -194,11 +195,12 @@ public class OrderExecutionService {
         if (side == Order.Side.BUY) {
             long available = Math.subtractExact(account.getCashBalance(),
                     orders.reservedCash(accountId, Order.Status.PENDING));
-            if (available < amount) throw new OrderException("주문 가능 현금이 부족합니다.");
+            if (available < amount) throw new OrderException(HttpStatus.BAD_REQUEST, "INSUFFICIENT_CASH",
+                    "주문 가능 현금이 부족합니다.");
         } else {
             long pending = orders.pendingSellQuantity(accountId, stockCode, Order.Side.SELL, Order.Status.PENDING);
             if (Math.subtractExact(originalQuantity, pending) < quantity) {
-                throw new OrderException("매도 가능 수량이 부족합니다.");
+                throw new OrderException(HttpStatus.BAD_REQUEST, "INSUFFICIENT_SELLABLE_QUANTITY", "매도 가능 수량이 부족합니다.");
             }
             if (originalCost == null || originalCost.signum() <= 0) {
                 throw new IllegalStateException("취득원가는 양수여야 합니다.");

@@ -133,7 +133,7 @@ Order withMarketQuote(String stockCode, Function<QuoteEvent, Order> execute)
 - [ ] MockMvc에서 USER/AI 각각 장중 시장가 매수·매도 `201 executed`, limit_price null, 출처·보고서 정책을 검증하는 실패 테스트부터 작성한다. 기존 무조건 시장가 거부 테스트는 장외 거부 및 지정가 입력이 있는 시장가 거부로 바꾼다.
 - [ ] `MARKET_ORDER_DISABLED` 분기를 제거한다. 공통 actor/방향/AI 입력 검증과 계좌 사전 검사는 유지한다. 시장가는 limit_price null, 지정가는 기존 양수·호가단위 검사를 적용한다.
 - [ ] 시장가 분기에서 `marketExecution.isTradingTime()`이 false면 `409 ORDER_WINDOW_CLOSED`로 즉시 거부한다. 호가 구독·자산 변경은 발생하지 않아야 한다.
-- [ ] AI 매수의 보고서 평가에 필요한 다른 보유 종목 가격만 기존 buyPrices.fetch로 확보한다. 이 REST 가격은 시장가 체결 가격으로 사용하지 않는다. USER 및 매도는 빈 prices를 전달한다.
+- [ ] AI 매수의 보고서 평가에 필요한 다른 보유 종목 가격만 기존 buyPrices.fetch로 확보한다. 현재 구현은 Redis 가격을 사용하며, 이 평가 가격은 시장가 체결 가격으로 사용하지 않는다. USER 및 매도는 빈 prices를 전달한다.
 - [ ] `withMarketQuote()` callback 안에서 QuoteEvent의 book·source를 보존하고, `stream.assertSource()` 실패를 `503 MARKET_STREAM_UNAVAILABLE`로 변환하는 validate를 전달해 executeMarket을 호출한다.
 - [ ] 트랜잭션 서비스 정상 반환 후 시장가 완료 로그를 기록한다: `event=market_order_completed orderId accountId stockCode side source`. 실패는 시장가 분기에서 `event=market_order_rejected stage code accountId stockCode side source`로 기록하고 같은 예외를 전파한다. stage는 `trading_time`, `quote_acquisition`, `execution`으로 구분한다. 기존 requestId를 사용하고 토큰·본문·근거 원문은 기록하지 않는다. 공통 INVALID_ORDER에 대해서도 잔고/수량/잔량 등 실제 거부 원인이 구분되도록 시장가 서비스의 해당 예외에 전용 코드 `INSUFFICIENT_CASH`, `INSUFFICIENT_SELLABLE_QUANTITY`, `INSUFFICIENT_MARKET_LIQUIDITY`를 부여한다.
 - [ ] 계좌 소유권·유형·대결 실패, 호가 미도착/만료/세션 변경, 현금·수량·상대 잔량 부족을 API로 검증한다. 실패 시 주문·체결 행과 잔액·보유량이 요청 전과 동일해야 한다.
@@ -178,4 +178,7 @@ Order withMarketQuote(String stockCode, Function<QuoteEvent, Order> execute)
 - Task 1 추가 검증: USER 시장가 매수·매도 자산 계산·보고서 없음, 출처/계좌 불일치·타인 소유권·AI 보고서 필수값 거부, 09:00/15:29:59 허용, 실제 계좌 잠금과 마감 경계, 기존 동시 주문 및 저장 실패 롤백 테스트.
 - Task 2 완료: `OrderSubscriptionService.withMarketQuote()`에 요청별 임시 수요를 추가했다. 구독 종목은 PENDING 종목과 시장가 요청 종목의 합집합이며, 3초/50ms 호가 대기 후 유효한 QuoteEvent를 callback에 전달한다. 출처 누락·변경, 연결 오류·타임아웃·인터럽트는 503으로 거부하고 finally에서 자기 수요만 해제한다. 동시 요청 및 기존 지정가 수요를 보존하고 정리 실패는 이미 성공한 거래를 덮어쓰지 않는다.
 - Task 2 검증: 신규 진입점이 없는 상태의 컴파일 실패 확인 후 구현했다. 구독 확보·지연 도착·타임아웃·callback 실패·출처 변경/누락·동시 요청·인터럽트·정리 실패 및 기존 지정가 구독 테스트를 실행했다. 전체 `gradlew.bat build --build-cache --console=plain` 성공(SpotBugs 포함).
-- Task 3~4 미실행. 컨트롤러의 시장가 차단은 아직 유지하며 실제 API 복구 완료가 아니다. 실제 시세/Redis 연동과 배포 검증은 하지 않았다.
+- Task 3 완료: OrderController의 전면 차단을 제거하고 장중 시장가 → 임시 호가 구독 → source 포함 체결 서비스 → 기존 응답 조회를 연결했다. 시장가 limit_price는 null만 허용하며, 지정가 양수·호가단위·예약 흐름은 유지한다. 장중 검사와 호가 확보·체결 단계의 실패 로그 및 현금/수량/잔량별 오류 코드를 추가했다.
+- Task 3 검증: API 테스트에서 기존 전면 차단으로 실패함을 확인한 뒤 연결했다. 호가 mock의 기본 메서드 stubbing 오류는 doReturn으로 수정했다. USER/AI 매수·매도, 장외·입력 오류·호가 없음/만료/출처 변경·저장 직전 마감·자산 부족 및 실패 로그를 검증했다. 주문 컨트롤러·체결·구독 회귀 테스트 86개 중 85개 통과, 외부 환경 테스트 1개 건너뜀, 실패 0.
+- Task 3 판단: 계획의 과거 REST 평가 가격 설명은 현행 OrderBuyPriceService의 Redis 구현에 맞춰 수정했다. 기존 Redis 조회를 재사용하며 외부 REST 의존성을 다시 도입하지 않는다.
+- Task 4 미실행. 전체 문서 정리·최종 전체 빌드·독립 코드 검토는 다음 단계다. 실제 시세/Redis 연동과 배포 검증은 하지 않았다.

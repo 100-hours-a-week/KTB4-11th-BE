@@ -1,6 +1,6 @@
 # 관심 종목 마스터 지연 적재 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 관심 등록 시 stocks에 종목이 있으면 재사용하고, 없으면 기존 키움 인증으로 키움 서버를 직접 조회해 기본정보를 확보해 저장한 뒤 관심 등록한다(B안).
 
@@ -12,12 +12,13 @@
 
 ## Global Constraints
 
-- 작성 기준은 dev HEAD `9ba8078`. 실행 전 대상 브랜치·미커밋 변경·최신 호출부를 재확인한다. 이번 요청은 계획 작성이며 구현·외부 API 실행·DB 변경·커밋·푸시를 수행하지 않는다.
+- 작성 기준은 `feat/184-stock-data-watchlist-fix` HEAD `abd6d9b`. 실행 전 대상 브랜치·미커밋 변경·최신 호출부를 재확인한다. 계획 승인 후 현재 브랜치에서 구현한다. 실제 외부 API 실행·운영 DB 변경·커밋·푸시는 수행하지 않는다.
 - 기존 GET/POST/DELETE `/api/v2/users/me/watchlist`, 응답 DTO, 사용자 단위 목록·정렬·중복 등록·삭제 정책을 유지한다. 신규 등록 201, 이미 관심 등록된 경우 200이다.
 - stocks/watchlist_stocks와 FK·복합 PK·`(market, stock_code)` 유일 제약을 유지한다. symbol → stock_code 컬럼명 변경만 수행한다. 기존 데이터와 stock_id/FK를 유지하며 별도 키·의존성은 추가하지 않는다.
 - 관심 목록 GET과 DELETE에서는 키움·Redis를 호출하거나 종목 마스터를 생성하지 않는다. POST에서 DB miss가 난 경우에만 메타데이터 확보 경로에 진입한다.
 - 현재가·등락률·랭킹은 stocks에 저장하지 않는다. 종목코드·이름·시장·업종만 저장한다.
 - 기존 키움 토큰 발급·transport를 재사용하되 종목 마스터 조회는 Redis 메타데이터 캐시를 거치지 않는다. 키 값을 코드·문서·로그에 넣지 않는다.
+- 여기서 직접 조회는 종목정보 캐시를 사용하지 않는다는 뜻이다. 수집 담당 서버에서는 DirectKiwoomRestTransport, 일반 서버에서는 RemoteKiwoomRestTransport.query() → /internal/kiwoom/query → 담당 서버의 직접 조회를 사용한다. 담당 서버 탐색·소유권 확인용 Redis는 기존 구조대로 필요하므로 Redis 장애에서도 전체 경로가 동작한다고 보장하지 않는다. /internal/kiwoom/metadata와 transport.metadata()는 이 기능에서 호출하지 않는다.
 - B안은 요청된 종목만 적재하는 방식이다. 전체 종목 일괄 수집, 정기 갱신, 기존 종목명·업종 덮어쓰기는 이번 범위에 없다.
 
 ## 현재 코드와 변경 이유
@@ -71,6 +72,12 @@ resolveStockId()는 기본정보를 확보하고 종목 저장을 커밋한 뒤 
 4. 외부 조회가 느린 동안 같은 사용자의 기존 관심 삭제 등 DB 작업을 사용자 잠금으로 막으면 안 된다. Task 3 latch 테스트.
 5. 유일 제약 이외의 DB 오류를 중복 등록 성공으로 숨기면 안 되고, 사용자 삭제·종목 중복 발생도 마지막 트랜잭션에서 확인해야 한다. Task 2·3 테스트.
 
+## 완료된 선행 작업
+
+- [x] Stock의 DB 컬럼을 stock_code, Java 필드를 stockCode로 변경하고 Repository·Service·삭제 JPQL·DDL·문서를 함께 수정했다.
+- [x] 기존 MySQL용 컬럼·인덱스 이름 변경 SQL을 준비했다. 운영 DB 실행은 별도다.
+- [x] 기존 관심 종목 테스트 8개 통과. 신규 키움 직접 조회·자동 적재 테스트는 아직 없다.
+
 ## Task 1: 키움 직접 조회 종목 마스터 응답 추가
 
 **Files:**
@@ -80,11 +87,12 @@ resolveStockId()는 기본정보를 확보하고 종목 저장을 커밋한 뒤 
 
 **Interfaces:** `public StockMaster stockMaster(String stockCode)` 및 내부 public record `StockMaster(String stockCode, String stockName, String marketCode, String sector)`를 추가한다. 기존 stockDetails()/stockInfo()의 계약은 변경하지 않는다.
 
-- [ ] 테스트 먼저 작성: 정상 응답 `005930/삼성전자/0/반도체`, 업종 누락·공백이면 sector=null, 요청 코드와 응답 코드 불일치·이름/시장 누락·길이 초과·잘못된 타입은 실패.
-- [ ] 이름은 trim 후 1~100자, marketCode는 trim 후 1~10자, 업종은 trim 후 최대 100자로 검증한다. 길이를 임의 절단하지 않는다. 종목코드는 기존 숫자/영문 대문자 6자리 규칙이다.
-- [ ] 실패 테스트를 실행해 신규 진입점 부재를 확인한 뒤, stockInfoResponse()를 한 번 호출해 네 필드를 구성한다. 캐시 유무와 무관하게 직접 조회한다.
-- [ ] 캐시가 주입되어 있어도 Redis를 호출하지 않고 transport.query()를 한 번 호출하는지, 공급자 실패 시 정상 데이터로 위장하지 않는지 검증한다.
-- [ ] 실행: `.\gradlew.bat test --tests '*KiwoomMarketClientTests' --tests '*StockMetadataCacheTests' --console=plain` → 실패 0. 실제 키움 API·키를 호출하지 않는다.
+- [x] 테스트 먼저 작성: 정상 응답 `005930/삼성전자/0/반도체`, 업종 누락·공백이면 sector=null, 요청 코드와 응답 코드 불일치·이름/시장 누락·길이 초과·잘못된 타입은 실패.
+- [x] 이름은 trim 후 1~100자, marketCode는 trim 후 1~10자, 업종은 trim 후 최대 100자로 검증한다. 길이를 임의 절단하지 않는다. 종목코드는 기존 숫자/영문 대문자 6자리 규칙이다.
+- [x] 실패 테스트를 실행해 신규 진입점 부재를 확인한 뒤, stockInfoResponse()를 한 번 호출해 네 필드를 구성한다. 캐시 유무와 무관하게 직접 조회한다.
+- [x] 캐시가 주입되어 있어도 Redis를 호출하지 않고 transport.query()를 한 번 호출하는지, 공급자 실패 시 정상 데이터로 위장하지 않는지 검증한다.
+- [x] 위 캐시 미호출 검증은 StockMetadataCache mock에 대한 verifyNoInteractions()로 확인한다. transport 내부 담당 서버 탐색용 Redis까지 미호출이라고 검증하거나 문서화하지 않는다. 기존 인증 재시도·호출 제한은 유지한다.
+- [x] 실행: `.\gradlew.bat test --tests '*KiwoomMarketClientTests' --tests '*StockMetadataCacheTests' --console=plain` → 실패 0. 실제 키움 API·키를 호출하지 않는다.
 
 ## Task 2: DB 우선 종목 확보 및 동시 적재 처리
 
@@ -92,18 +100,18 @@ resolveStockId()는 기본정보를 확보하고 종목 저장을 커밋한 뒤 
 - Create: `src/main/java/com/stock_spoon/river_be/watchlist/service/StockCatalogService.java`
 - Modify: `src/main/java/com/stock_spoon/river_be/watchlist/repository/StockRepository.java`
 - Create: `src/test/java/com/stock_spoon/river_be/watchlist/StockCatalogServiceTests.java`
-- Create: `src/test/java/com/stock_spoon/river_be/watchlist/StockCatalogConcurrencyTests.java`
+- Create: `src/test/java/com/stock_spoon/river_be/watchlist/WatchlistBackfillTests.java`
 
-**Interfaces:** `public long resolveStockId(String code)`. 기존 findAllByStockCode()을 우선 사용하고, 경합 진단용 `Optional<Stock> findByMarketAndStockCode(String market, String stockCode)`를 추가한다. PlatformTransactionManager로 읽기/쓰기 TransactionTemplate을 구성하고 독립 트랜잭션(REQUIRES_NEW) 경계를 명시한다.
+**Interfaces:** `public long resolveStockId(String code)`. 기존 findAllByStockCode()를 우선 사용하고, 경합 진단용 `Optional<Stock> findByMarketAndStockCode(String market, String stockCode)`를 추가한다. PlatformTransactionManager로 읽기/쓰기 TransactionTemplate을 구성하고 독립 트랜잭션(REQUIRES_NEW) 경계를 명시한다.
 
-- [ ] DB hit, DB ambiguity, miss 후 저장, 업종 null, 외부 실패 시 마스터 미저장 테스트를 작성하고 실패를 확인한다. DB hit에서는 market.stockMaster()를 호출하지 않는다.
-- [ ] 외부 메서드 호출 시 실제 트랜잭션이 활성화되지 않았음을 test callback에서 확인한다. 반환된 원격 필드 검증은 Task 1에서 담당하며 마스터 서비스는 code 일치와 DTO 유효성 계약을 따른다.
-- [ ] 외부 조회 이후 새 쓰기 트랜잭션에서 stock_code을 재조회한다. 이미 있으면 재사용하고, 없으면 Stock 생성 후 saveAndFlush()로 저장한다. 커밋 실패도 호출 밖으로 전파되도록 한다.
-- [ ] DataIntegrityViolationException은 쓰기 트랜잭션이 종료된 밖에서 처리한다. 새 읽기에서 `(marketCode, code)` 행이 실제 존재하고 stock_code 조회도 유일할 때만 경합 성공으로 간주한다. 해당 행이 없으면 원래 DB 예외를 전파한다. 무한 재시도나 모든 DB 예외 무시는 금지한다.
-- [ ] 키움의 IllegalStateException·RestClientException은 `503 STOCK_INFO_UNAVAILABLE`의 WatchlistException으로 변환한다. 공급자의 일반 실패 응답으로 404를 추측하지 않는다. 정확한 미존재 응답 코드 매핑은 별도 근거가 있을 때만 추가한다.
-- [ ] 동시 DB miss 두 요청을 barrier로 맞춘 뒤 실제 H2 트랜잭션에서 stock 1행·같은 ID 반환을 검증한다. 경합이 아닌 길이·DB 오류는 성공으로 삼지 않는지도 검증한다. 이 테스트에는 외곽 @Transactional을 적용하지 않는다.
-- [ ] 로그는 `event=watchlist_stock_resolved source=database|kiwoom stockCode stockId`, 실패는 `event=watchlist_stock_resolution_failed stage code causeType stockCode`를 사용한다. kiwoom는 직접 키움 조회를 뜻한다. 원문 응답·키·토큰·예외 원문은 기록하지 않는다.
-- [ ] 실행: `.\gradlew.bat test --tests '*StockCatalog*Tests' --console=plain` → 실패 0.
+- [x] DB hit, DB ambiguity, miss 후 저장, 업종 null, 외부 실패 시 마스터 미저장 테스트를 작성하고 실패를 확인한다. DB hit에서는 market.stockMaster()를 호출하지 않는다.
+- [x] 외부 메서드 호출 시 실제 트랜잭션이 활성화되지 않았음을 test callback에서 확인한다. 반환된 원격 필드 검증은 Task 1에서 담당하며 마스터 서비스는 code 일치와 DTO 유효성 계약을 따른다.
+- [x] 외부 조회 이후 새 쓰기 트랜잭션에서 stock_code를 재조회한다. 이미 있으면 재사용하고, 없으면 Stock 생성 후 saveAndFlush()로 저장한다. 커밋 실패도 호출 밖으로 전파되도록 한다.
+- [x] DataIntegrityViolationException은 쓰기 트랜잭션이 종료된 밖에서 처리한다. 새 읽기에서 `(marketCode, code)` 행이 실제 존재하고 stock_code 조회도 유일할 때만 경합 성공으로 간주한다. 해당 행이 없으면 원래 DB 예외를 전파한다. 무한 재시도나 모든 DB 예외 무시는 금지한다.
+- [x] 키움의 IllegalStateException·RestClientException은 `503 STOCK_INFO_UNAVAILABLE`의 WatchlistException으로 변환한다. 공급자의 일반 실패 응답으로 404를 추측하지 않는다. 정확한 미존재 응답 코드 매핑은 별도 근거가 있을 때만 추가한다.
+- [x] 동시 DB miss 두 요청을 barrier로 맞춘 뒤 실제 H2 트랜잭션에서 stock 1행·같은 ID 반환을 검증한다. 경합이 아닌 길이·DB 오류는 성공으로 삼지 않는지도 검증한다. 이 테스트에는 외곽 @Transactional을 적용하지 않는다.
+- [x] 로그는 `event=watchlist_stock_resolved source=database|kiwoom stockCode stockId`, 실패는 `event=watchlist_stock_resolution_failed stage code causeType stockCode`를 사용한다. kiwoom은 직접 키움 조회를 뜻한다. 원문 응답·키·토큰·예외 원문은 기록하지 않는다.
+- [x] 실행: `.\gradlew.bat test --tests '*StockCatalog*Tests' --console=plain` → 실패 0.
 
 ## Task 3: 관심 등록 연결 및 기존 계약 회귀 검증
 
@@ -115,16 +123,16 @@ resolveStockId()는 기본정보를 확보하고 종목 저장을 커밋한 뒤 
 
 **Interfaces:** 기존 `boolean add(long userId, String code)`는 유지한다. StockCatalogService와 PlatformTransactionManager를 주입한다. add() 외곽 @Transactional만 제거하고, 사전 사용자 확인은 readOnly TransactionTemplate, 최종 사용자 잠금·관심 저장은 쓰기 TransactionTemplate에서 실행한다. list()/remove()의 기존 트랜잭션은 유지한다.
 
-- [ ] 기존 WatchlistControllerTests의 클래스 외곽 @Transactional을 제거하고 fixture 저장을 실제 커밋하도록 조정한다. 마스터의 독립 트랜잭션이 테스트의 미커밋 fixture를 읽지 못하는 문제를 피한다. @AfterEach에서 해당 테스트가 만든 사용자·관심 행·종목 ID만 FK 순서에 맞춰 정리하고, 다른 테스트의 데이터를 일괄 삭제하지 않는다.
-- [ ] MockMvc 실패 테스트 추가: 미등록 종목을 키움 mock으로 확보해 201, 재등록은 200, GET의 이름·업종 일치, stocks 1행/관심 1행. 기존 DB hit는 키움 장애와 관계없이 성공.
-- [ ] 현재 `999999`가 DB에 없으면 무조건 404라는 테스트를 새 정책에 맞게 바꾼다. 외부 실패 mock은 503, 잘못된 입력은 기존 400, 모호한 코드 409·미인증/CSRF 계약은 유지한다.
-- [ ] 최종 쓰기에서는 사용자 잠금을 다시 잡고 stock_code을 재조회한다. 정확히 1행인 Stock으로 기존 복합 PK 중복 검사를 수행하고 EntityManager.persist()를 재사용한다. 중간 삭제는 404, 복수 행은 409로 관심 저장 없이 종료한다.
-- [ ] 사용자 존재 확인 실패 시 외부 호출 없음, 외부 대기 중 사용자 삭제 시 최종 등록 거부를 검증한다. 이미 적재된 정상 공유 마스터는 남을 수 있다는 정책도 검증한다.
-- [ ] 같은 사용자의 동시 최초 등록은 201/200, 다른 사용자의 동시 최초 등록은 각 201이며 master 1행/사용자별 관심 1행을 실제 트랜잭션으로 확인한다.
-- [ ] 키움 mock을 latch로 지연시킨 동안 다른 스레드에서 해당 사용자의 기존 관심 삭제가 완료되는지 확인해 외부 호출 중 사용자 잠금 부재를 검증한다. GET·DELETE에서 종목 적재·외부 호출이 없고 기존 등록순 정렬·사용자 격리가 유지되는지도 확인한다.
-- [ ] 문서에 DB→키움 직접 조회→master 저장→관심 등록 호출 흐름, 트랜잭션 경계, 신규 시장코드 저장 방식, 503 정책·공유 마스터 잔존 가능성을 설명한다. 현재가 조회와 정기 갱신을 구현했다고 쓰지 않는다.
-- [ ] 실행: `.\gradlew.bat test --tests '*Watchlist*Tests' --tests '*StockCatalog*Tests' --tests '*KiwoomMarketClientTests' --tests '*StockMetadataCacheTests' --console=plain` → 실패 0.
-- [ ] 전체 `.\gradlew.bat build --build-cache --console=plain`, `git diff --check` 및 최종 코드 검토를 수행한다. H2 검증과 실제 MySQL·키움 연동 검증을 구분해 보고한다. 실제 키 유효성은 자동 테스트 통과로 보장하지 않는다.
+- [x] 기존 WatchlistControllerTests의 클래스 외곽 @Transactional을 제거하고 fixture 저장을 실제 커밋하도록 조정한다. 마스터의 독립 트랜잭션이 테스트의 미커밋 fixture를 읽지 못하는 문제를 피한다. @AfterEach에서 해당 테스트가 만든 사용자·관심 행·종목 ID만 FK 순서에 맞춰 정리하고, 다른 테스트의 데이터를 일괄 삭제하지 않는다.
+- [x] MockMvc 실패 테스트 추가: 미등록 종목을 키움 mock으로 확보해 201, 재등록은 200, GET의 이름·업종 일치, stocks 1행/관심 1행. 기존 DB hit는 키움 장애와 관계없이 성공.
+- [x] 현재 `999999`가 DB에 없으면 무조건 404라는 테스트를 새 정책에 맞게 바꾼다. 외부 실패 mock은 503, 잘못된 입력은 기존 400, 모호한 코드 409·미인증/CSRF 계약은 유지한다.
+- [x] 최종 쓰기에서는 사용자 잠금을 다시 잡고 stock_code를 재조회한다. 정확히 1행인 Stock으로 기존 복합 PK 중복 검사를 수행하고 EntityManager.persist()를 재사용한다. 중간 삭제는 404, 복수 행은 409로 관심 저장 없이 종료한다.
+- [x] 사용자 존재 확인 실패 시 외부 호출 없음, 외부 대기 중 사용자 삭제 시 최종 등록 거부를 검증한다. 이미 적재된 정상 공유 마스터는 남을 수 있다는 정책도 검증한다.
+- [x] 같은 사용자의 동시 최초 등록은 201/200, 다른 사용자의 동시 최초 등록은 각 201이며 master 1행/사용자별 관심 1행을 실제 트랜잭션으로 확인한다.
+- [x] 키움 mock을 latch로 지연시킨 동안 다른 스레드에서 해당 사용자의 기존 관심 삭제가 완료되는지 확인해 외부 호출 중 사용자 잠금 부재를 검증한다. GET·DELETE에서 종목 적재·외부 호출이 없고 기존 등록순 정렬·사용자 격리가 유지되는지도 확인한다.
+- [x] 문서에 DB→키움 직접 조회→master 저장→관심 등록 호출 흐름, 트랜잭션 경계, 신규 시장코드 저장 방식, 503 정책·공유 마스터 잔존 가능성을 설명한다. 현재가 조회와 정기 갱신을 구현했다고 쓰지 않는다.
+- [x] 실행: `.\gradlew.bat test --tests '*Watchlist*Tests' --tests '*StockCatalog*Tests' --tests '*KiwoomMarketClientTests' --tests '*StockMetadataCacheTests' --console=plain` → 실패 0.
+- [x] 전체 `.\gradlew.bat build --build-cache --console=plain`, `git diff --check` 및 최종 코드 검토를 수행한다. H2 검증과 실제 MySQL·키움 연동 검증을 구분해 보고한다. 실제 키 유효성은 자동 테스트 통과로 보장하지 않는다.
 
 ## 완료 기준과 범위
 
@@ -140,11 +148,25 @@ resolveStockId()는 기본정보를 확보하고 종목 저장을 커밋한 뒤 
 | 외부 대기 중 사용자 삭제 | 관심 행 미생성, 정상 master는 남을 수 있음 |
 | DB 장애 | 중복 성공으로 숨기지 않고 실패 전파 |
 
-계획만 작성했다. 실제 종목 적재·구현·테스트 실행·키움 키 사용·커밋은 하지 않았다.
+계획 작성 이후 종목 직접 조회·자동 적재를 구현했다. 컬럼명 변경과 기존 관심 테스트 8개 통과는 이전 작업 결과이며 새 적재 기능의 검증 결과가 아니다. 아래 실행 기록이 이번 구현 결과다.
 
-## 컬럼명 변경 적용
+## 배포 및 실행 순서
 
 - Stock.stockCode / getStockCode(), findAllByStockCode(), 삭제 JPQL을 함께 변경했다.
 - 신규 DB는 db/watchlist.sql을 사용한다.
 - 기존 MySQL은 애플리케이션 중지 후 db/rename-stocks-symbol-to-stock-code.sql을 먼저 적용하고 새 버전을 배포한다. Hibernate update에 컬럼명 변경을 맡기지 않는다.
 - 이 SQL은 수동 적용용이며 운영 DB에는 아직 실행하지 않았다.
+- 구현은 Task 1 → Task 2 → Task 3 순서로 진행하고 각 단계의 파일·메서드·동작·검증 결과를 설명한다.
+- 실제 DB 적용·실제 키움 호출·커밋·푸시는 계획 작성에 포함하지 않는다.
+
+## 실행 기록 (2026-10-22)
+
+- Task 1 완료: stockMaster 부재로 컴파일 실패 확인 후 직접 조회 구현. StockMasterTests와 기존 KiwoomMarketClientTests/StockMetadataCacheTests 통과.
+- Task 2 완료: StockCatalogService 부재로 실패 확인 후 DB 우선 조회·독립 저장·충돌 재조회 구현. StockCatalogServiceTests에서 직접 DB 경합과 별개 제약 오류 전파 검증.
+- Task 3 완료: 기존 API가 404를 반환하는 실패 확인 후 관심 등록 연결. WatchlistBackfillTests에서 동시 최초 등록·키움 대기 중 잠금 부재·사용자 삭제 검증.
+- Ruling: 기존 트랜잭션 호출자가 있어도 외부 요청 동안 트랜잭션을 유지하지 않도록 add/resolveStockId에 NOT_SUPPORTED를 사용한다.
+- Ruling: StockCatalogConcurrencyTests 별도 파일 대신 StockCatalogServiceTests와 WatchlistBackfillTests에 실제 트랜잭션 경합 테스트를 배치했다.
+- 독립 읽기 전용 코드 검토에서 수정 필요한 확정 결함 없음. 운영 DB·Redis·운영 담당 서버 연결은 미실행. 실제 키움 단독 조회는 후속 실연동 테스트로 확인했다.
+- 전체 gradlew.bat build --build-cache --console=plain 성공: 테스트 438개 중 422개 통과·16개 건너뜀·실패 0개, SpotBugs 통과. 커밋·푸시·DB 적용은 하지 않았다.
+
+- 후속 실연동 검증: KiwoomMarketLiveTests.retrievesStockMasterDirectly 1개 통과(건너뜀 0). 실제 키움 인증 후 005930 / 삼성전자 / 시장코드 0 / 업종 전기/전자 확인. 운영 담당 서버 경유와 DB 적재는 이 테스트 범위가 아니다.

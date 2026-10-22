@@ -11,17 +11,28 @@ import jakarta.persistence.LockModeType;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class WatchlistService {
     private final WatchlistRepository watchlists;
     private final StockRepository stocks;
     private final EntityManager entityManager;
+    private final StockCatalogService catalog;
+    private final TransactionTemplate read;
+    private final TransactionTemplate write;
 
-    public WatchlistService(WatchlistRepository watchlists, StockRepository stocks, EntityManager entityManager) {
+    public WatchlistService(WatchlistRepository watchlists, StockRepository stocks, EntityManager entityManager,
+            StockCatalogService catalog, PlatformTransactionManager manager) {
         this.watchlists = watchlists;
         this.stocks = stocks;
         this.entityManager = entityManager;
+        this.catalog = catalog;
+        read = new TransactionTemplate(manager);
+        read.setReadOnly(true);
+        write = new TransactionTemplate(manager);
     }
 
     /** 사용자 존재를 확인하고, 모든 계좌에서 공유하는 관심 목록을 최근 등록순으로 반환한다. */
@@ -36,9 +47,15 @@ public class WatchlistService {
     }
 
     /** 종목을 확인해 관심 목록에 등록한다. 신규 등록은 true, 기존 등록은 false를 반환한다. */
-    @Transactional
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public boolean add(long userId, String code) {
         validate(code);
+        read.executeWithoutResult(status -> requireUser(userId, false));
+        catalog.resolveStockId(code);
+        return write.execute(status -> addResolved(userId, code));
+    }
+
+    private boolean addResolved(long userId, String code) {
         requireUser(userId, true);
         var matches = stocks.findAllByStockCode(code);
         if (matches.isEmpty()) {

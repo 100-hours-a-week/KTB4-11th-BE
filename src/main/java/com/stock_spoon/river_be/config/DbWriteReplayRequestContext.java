@@ -7,8 +7,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Holds JDBC write capture and transaction completion state for the current HTTP request.
@@ -17,7 +15,6 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 @Component
 public class DbWriteReplayRequestContext {
     private final ThreadLocal<RequestState> current = new ThreadLocal<>();
-    private final Object transactionResourceKey = new Object();
 
     public void beginRequest(String requestId, String writeId) {
         current.set(new RequestState(requestId, writeId));
@@ -28,52 +25,55 @@ public class DbWriteReplayRequestContext {
     }
 
     void recordSuccessfulWrite(Map<String, Object> statement, boolean mayDependOnGeneratedKey) {
-        TransactionState transaction = currentTransactionState();
-        if (transaction == null) {
-            RequestState request = current.get();
-            if (request != null) request.untrackedDmlObserved = true;
-            return;
-        }
+        RequestState state = current.get();
+        if (state == null) return;
 
-        transaction.dmlObserved = true;
-        transaction.statements.add(statement);
+        state.dmlObserved = true;
+        state.statements.add(statement);
         // A rolled-back auto-increment INSERT can receive a different ID on replay. Until
         // generated-key remapping exists, replaying later statements could corrupt references.
-        if (mayDependOnGeneratedKey) transaction.replayable = false;
+        if (mayDependOnGeneratedKey) state.replayable = false;
     }
 
     void markUnreplayableWrite() {
-        TransactionState transaction = currentTransactionState();
-        if (transaction == null) {
-            RequestState request = current.get();
-            if (request != null) request.untrackedDmlObserved = true;
-            return;
+        RequestState state = current.get();
+        if (state != null) {
+            state.dmlObserved = true;
+            state.replayable = false;
         }
-        transaction.dmlObserved = true;
-        transaction.replayable = false;
     }
 
     void observeFallbackFailure(SQLException error, List<Map<String, Object>> statements,
             boolean replayable, boolean dmlObserved) {
-        RequestState request = current.get();
-        if (request == null) return;
+        RequestState state = current.get();
+        if (state == null) return;
 
-        TransactionState transaction = currentTransactionState();
-        if (transaction == null) {
-            request.untrackedFallbackError = error;
-            return;
+        state.dmlObserved |= dmlObserved;
+        if (state.proxySqlError != null && state.proxySqlError != error) {
+            state.replayable = false;
         }
+        state.proxySqlError = error;
+        state.replayable &= replayable;
+        if (statements == null || statements.isEmpty()) {
+            state.replayable = false;
+        } else {
+            state.statements.addAll(statements);
+        }
+    }
 
-        transaction.dmlObserved |= dmlObserved;
-        if (transaction.proxySqlError != null && transaction.proxySqlError != error) {
-            transaction.replayable = false;
+    void markTransactionCommitted() {
+        RequestState state = current.get();
+        if (state != null) {
+            state.committedTransactionSeen = true;
+            state.rollbackConfirmed = false;
         }
-        transaction.proxySqlError = error;
-        transaction.replayable &= replayable;
-        if (statements != null) {
-            // The failing statement is included when it is a DML statement. An empty list is
-            // valid when an earlier DML in this same transaction was followed by a failing read.
-            transaction.statements.addAll(statements);
+    }
+
+    void markTransactionRolledBack(boolean confirmed) {
+        RequestState state = current.get();
+        if (state != null) {
+            state.rollbackCount++;
+            state.rollbackConfirmed = confirmed && state.rollbackCount == 1;
         }
     }
 
@@ -82,134 +82,63 @@ public class DbWriteReplayRequestContext {
     }
 
     String enqueueBlockReason(SQLException error) {
-        RequestState request = current.get();
-        if (request == null) return "request_context_missing";
-
-        TransactionState transaction = findTransaction(request, error);
-        if (transaction == null) {
-            return request.untrackedFallbackError == error
-                    ? "transaction_tracking_unavailable"
-                    : "fallback_error_not_observed";
-        }
-        if (transaction.proxySqlError != error) return "fallback_error_not_observed";
-        if (transaction.accepted != null) return "already_accepted";
-        if (!transaction.completionObserved
-                || transaction.completionStatus != TransactionSynchronization.STATUS_ROLLED_BACK) {
-            if (transaction.completionObserved
-                    && transaction.completionStatus == TransactionSynchronization.STATUS_COMMITTED) {
-                return "failed_transaction_not_rolled_back";
-            }
-            return "rollback_not_confirmed";
-        }
-        if (!transaction.dmlObserved) return "no_dml_before_fallback";
-        if (!transaction.replayable) return "dml_not_replayable";
-        if (transaction.statements.isEmpty()) return "no_captured_sql";
+        RequestState state = current.get();
+        if (state == null) return "request_context_missing";
+        if (state.proxySqlError != error) return "fallback_error_not_observed";
+        if (state.accepted != null) return "already_accepted";
+        if (state.committedTransactionSeen) return "transaction_already_committed";
+        if (!state.rollbackConfirmed) return "rollback_not_confirmed";
+        if (!state.dmlObserved) return "no_dml_before_fallback";
+        if (!state.replayable) return "dml_not_replayable";
+        if (state.statements.isEmpty()) return "no_captured_sql";
         return null;
     }
 
     ReplaySnapshot snapshot(SQLException error) {
-        RequestState request = current.get();
-        if (request == null) return null;
-        TransactionState transaction = findTransaction(request, error);
-        if (transaction == null || transaction.proxySqlError != error) return null;
+        RequestState state = current.get();
+        if (state == null || state.proxySqlError != error) return null;
 
         String replayRequestId = UUID.randomUUID().toString();
         Map<String, Object> envelope = new LinkedHashMap<>();
         envelope.put("schemaVersion", 2);
         envelope.put("operation", "SQL_TRANSACTION");
         envelope.put("requestId", replayRequestId);
-        envelope.put("transactionId", transaction.transactionId);
-        envelope.put("httpRequestId", request.requestId);
-        if (request.writeId != null && !request.writeId.isBlank()) {
-            envelope.put("writeId", request.writeId);
+        envelope.put("transactionId", replayRequestId);
+        envelope.put("httpRequestId", state.requestId);
+        if (state.writeId != null && !state.writeId.isBlank()) {
+            envelope.put("writeId", state.writeId);
         }
-        envelope.put("statements", List.copyOf(transaction.statements));
-        return new ReplaySnapshot(
-                replayRequestId, transaction.transactionId, request.requestId, envelope);
+        envelope.put("statements", List.copyOf(state.statements));
+        return new ReplaySnapshot(replayRequestId, replayRequestId, state.requestId, envelope);
     }
 
     AcceptedReplay acceptedReplay(SQLException error) {
-        RequestState request = current.get();
-        if (request == null) return null;
-        TransactionState transaction = findTransaction(request, error);
-        if (transaction == null || transaction.proxySqlError != error) return null;
-        return transaction.accepted;
+        RequestState state = current.get();
+        if (state == null || state.proxySqlError != error) return null;
+        return state.accepted;
     }
 
     void markEnqueued(SQLException error, AcceptedReplay accepted) {
-        RequestState request = current.get();
-        if (request == null) return;
-        TransactionState transaction = findTransaction(request, error);
-        if (transaction != null && transaction.proxySqlError == error) {
-            transaction.accepted = accepted;
-        }
-    }
-
-    private TransactionState currentTransactionState() {
-        RequestState request = current.get();
-        if (request == null
-                || !TransactionSynchronizationManager.isActualTransactionActive()
-                || !TransactionSynchronizationManager.isSynchronizationActive()) {
-            return null;
-        }
-
-        Object existing = TransactionSynchronizationManager.getResource(transactionResourceKey);
-        if (existing instanceof TransactionState transaction) return transaction;
-        if (existing != null) return null;
-
-        TransactionState transaction = new TransactionState(UUID.randomUUID().toString());
-        request.transactions.add(transaction);
-        try {
-            TransactionSynchronizationManager.bindResource(transactionResourceKey, transaction);
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCompletion(int status) {
-                    transaction.completionObserved = true;
-                    transaction.completionStatus = status;
-                    TransactionSynchronizationManager.unbindResourceIfPossible(transactionResourceKey);
-                }
-            });
-            return transaction;
-        } catch (RuntimeException trackingFailure) {
-            TransactionSynchronizationManager.unbindResourceIfPossible(transactionResourceKey);
-            request.transactions.remove(transaction);
-            return null;
-        }
-    }
-
-    private static TransactionState findTransaction(RequestState request, SQLException error) {
-        for (int index = request.transactions.size() - 1; index >= 0; index--) {
-            TransactionState transaction = request.transactions.get(index);
-            if (transaction.proxySqlError == error) return transaction;
-        }
-        return null;
+        RequestState state = current.get();
+        if (state != null && state.proxySqlError == error) state.accepted = accepted;
     }
 
     private static final class RequestState {
         private final String requestId;
+        @SuppressWarnings("unused")
         private final String writeId;
-        private final List<TransactionState> transactions = new ArrayList<>();
-        private boolean untrackedDmlObserved;
-        private SQLException untrackedFallbackError;
+        private final List<Map<String, Object>> statements = new ArrayList<>();
+        private boolean dmlObserved;
+        private SQLException proxySqlError;
+        private boolean rollbackConfirmed;
+        private boolean committedTransactionSeen;
+        private int rollbackCount;
+        private boolean replayable = true;
+        private AcceptedReplay accepted;
 
         private RequestState(String requestId, String writeId) {
             this.requestId = requestId;
             this.writeId = writeId;
-        }
-    }
-
-    private static final class TransactionState {
-        private final String transactionId;
-        private final List<Map<String, Object>> statements = new ArrayList<>();
-        private boolean dmlObserved;
-        private SQLException proxySqlError;
-        private boolean replayable = true;
-        private boolean completionObserved;
-        private int completionStatus = TransactionSynchronization.STATUS_UNKNOWN;
-        private AcceptedReplay accepted;
-
-        private TransactionState(String transactionId) {
-            this.transactionId = transactionId;
         }
     }
 

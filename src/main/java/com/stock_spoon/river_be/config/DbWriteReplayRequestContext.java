@@ -24,9 +24,14 @@ public class DbWriteReplayRequestContext {
         current.remove();
     }
 
-    void markSuccessfulWrite() {
+    void recordSuccessfulWrite(Map<String, Object> statement, boolean mayDependOnGeneratedKey) {
         RequestState state = current.get();
-        if (state != null) state.successfulWriteSeen = true;
+        if (state == null) return;
+
+        state.statements.add(statement);
+        // A rolled-back auto-increment INSERT can receive a different ID on replay. Until
+        // generated-key remapping exists, replaying later statements could corrupt references.
+        if (mayDependOnGeneratedKey) state.replayable = false;
     }
 
     void markUnreplayableWrite() {
@@ -34,7 +39,7 @@ public class DbWriteReplayRequestContext {
         if (state != null) state.replayable = false;
     }
 
-    void observeProxyFailure(SQLException error, List<Map<String, Object>> statements, boolean replayable) {
+    void observeFallbackFailure(SQLException error, List<Map<String, Object>> statements, boolean replayable) {
         RequestState state = current.get();
         if (state == null) return;
 
@@ -52,12 +57,18 @@ public class DbWriteReplayRequestContext {
 
     void markTransactionCommitted() {
         RequestState state = current.get();
-        if (state != null) state.rollbackConfirmed = false;
+        if (state != null) {
+            state.committedTransactionSeen = true;
+            state.rollbackConfirmed = false;
+        }
     }
 
     void markTransactionRolledBack(boolean confirmed) {
         RequestState state = current.get();
-        if (state != null) state.rollbackConfirmed = confirmed;
+        if (state != null) {
+            state.rollbackCount++;
+            state.rollbackConfirmed = confirmed && state.rollbackCount == 1;
+        }
     }
 
     boolean canEnqueue(SQLException error) {
@@ -65,9 +76,9 @@ public class DbWriteReplayRequestContext {
         return state != null
                 && state.proxySqlError == error
                 && state.rollbackConfirmed
-                && !state.successfulWriteSeen
+                && !state.committedTransactionSeen
                 && state.replayable
-                && state.statements.size() == 1
+                && !state.statements.isEmpty()
                 && state.accepted == null;
     }
 
@@ -107,7 +118,8 @@ public class DbWriteReplayRequestContext {
         private final List<Map<String, Object>> statements = new ArrayList<>();
         private SQLException proxySqlError;
         private boolean rollbackConfirmed;
-        private boolean successfulWriteSeen;
+        private boolean committedTransactionSeen;
+        private int rollbackCount;
         private boolean replayable = true;
         private AcceptedReplay accepted;
 

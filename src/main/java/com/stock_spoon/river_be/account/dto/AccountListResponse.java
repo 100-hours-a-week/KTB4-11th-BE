@@ -8,6 +8,7 @@ public record AccountListResponse(
         @JsonProperty("account_name") String accountName,
         @JsonProperty("is_duel_account") boolean duelAccount,
         @JsonProperty("cash_balance") long cashBalance,
+        @JsonProperty("available_cash") long availableCash,
         @JsonProperty("total_assets") long totalAssets,
         @JsonProperty("return_percent") double returnPercent) {
 
@@ -16,6 +17,10 @@ public record AccountListResponse(
     }
 
     public static AccountListResponse from(Account account, long holdingsMarketValue, boolean duelAccount) {
+        return from(account, holdingsMarketValue, duelAccount, account.getCashBalance());
+    }
+
+    public static AccountListResponse from(Account account, long holdingsMarketValue, boolean duelAccount, long availableCash) {
         long totalAssets = Math.addExact(account.getCashBalance(), holdingsMarketValue);
         double returnPercent = java.math.BigDecimal.valueOf(totalAssets)
                 .subtract(java.math.BigDecimal.valueOf(account.getInitialCapital()))
@@ -23,6 +28,6 @@ public record AccountListResponse(
                 .divide(java.math.BigDecimal.valueOf(account.getInitialCapital()), 4, java.math.RoundingMode.HALF_UP)
                 .doubleValue();
         return new AccountListResponse(account.getId(), account.getName(), duelAccount,
-                account.getCashBalance(), totalAssets, returnPercent);
+                account.getCashBalance(), availableCash, totalAssets, returnPercent);
     }
 }

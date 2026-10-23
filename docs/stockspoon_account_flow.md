@@ -126,6 +126,7 @@ Cookie: access_token={StockSpoon Access JWT}
     "account_name": "장기 투자",
     "is_duel_account": false,
     "cash_balance": 5000000,
+    "available_cash": 5000000,
     "total_assets": 5000000,
     "return_percent": 0.0
   }
@@ -134,7 +135,10 @@ Cookie: access_token={StockSpoon Access JWT}
 
 목록의 `total_assets`와 `return_percent`는 상세와 같은 기준으로 전체 보유종목 평가액을 반영한다. `is_duel_account=false`는 임시 표시값이다. `cash_balance`는 계좌 생성 시 초기자본으로 초기화되고 매매 체결 시 갱신된다.
 
+홈 화면의 원화 금액은 목록의 `available_cash`를 사용한다. 현금 잔액에서 미체결 매수 주문의 예약금을 차감한 금액이며, `total_assets` 계산에는 기존 `cash_balance`를 사용한다.
+
 ## 5. 계좌명 수정
+
 
 ```http
 PATCH /api/v1/users/me/accounts/2

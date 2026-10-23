@@ -25,6 +25,21 @@ import static org.mockito.Mockito.*;
 @SpringBootTest
 @Transactional
 class AccountAssetsTests {
+    @Test void listExcludesPendingBuyReservationsFromAvailableCash() {
+        var user = users.save(new User("사용가능 현금"));
+        var first = accounts.save(new Account(user, "첫 계좌", 1000000));
+        var second = accounts.save(new Account(user, "둘째 계좌", 1000000));
+        var now = java.time.Instant.now();
+        orders.save(Order.pendingLimit(first, "005930", Order.Side.BUY, 2, 100000,
+                Order.Source.USER, null, now));
+        var cancelled = orders.save(Order.pendingLimit(first, "005930", Order.Side.BUY, 1, 100000,
+                Order.Source.USER, null, now));
+        cancelled.cancel(now);
+        var result = service.list(user.getId());
+        assertThat(result).extracting("availableCash").containsExactly(800000L, 1000000L);
+        assertThat(result).extracting(r -> r.cashBalance()).containsExactly(1000000L, 1000000L);
+        assertThat(result).extracting(r -> r.totalAssets()).containsExactly(1000000L, 1000000L);
+    }
     @Autowired AccountService service;
     @Autowired AccountRepository accounts;
     @Autowired UserRepository users;

@@ -87,6 +87,8 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
                 }
                 try { channels.addMessageListener(this, topics(code)); }
                 catch (RuntimeException error) {
+                    log.warn("event=quote_subscription_failed stage=channel_registration stockCode={} causeType={}",
+                            code, error.getClass().getSimpleName());
                     synchronized (this) {
                         var retained = new HashSet<>(desired);
                         retained.remove(code);
@@ -128,8 +130,8 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
         if (event != null) {
             try { events.publishEvent(event); }
             catch (RuntimeException error) {
-                log.warn("event=direct_quote_event_failed stockCode={} causeType={}",
-                        event.stockCode(), error.getClass().getSimpleName());
+                log.warn("event=direct_quote_event_failed stockCode={} causeType={} stage=event_publication quoteType={}",
+                        event.stockCode(), error.getClass().getSimpleName(), event.type());
             }
         }
     }
@@ -165,7 +167,9 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
             books.put(code, event);
             return event;
         } catch (RuntimeException error) {
-            log.warn("event=ai_quote_rejected stockCode={} causeType={}", code, error.getClass().getSimpleName());
+            log.warn("event=ai_quote_rejected stockCode={} causeType={} stage=message_validation quoteType={}",
+                    code, error.getClass().getSimpleName(),
+                    new String(message.getChannel(), StandardCharsets.UTF_8).startsWith("price:") ? "price" : "orderbook");
             return null;
         }
     }
@@ -182,6 +186,7 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
 
     public synchronized void assertAvailable(String code) {
         if (!channels.isListening() || !desired.contains(code) || !sessions.containsKey(code)) {
+            log.warn("event=quote_stream_unavailable stage=availability_check code=SUBSCRIPTION_NOT_READY");
             throw new IllegalStateException("Redis 시세 구독을 사용할 수 없습니다.");
         }
     }
@@ -189,6 +194,7 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
     public synchronized void assertSource(String code, QuoteSource source) {
         assertAvailable(code);
         if (source == null || !source.equals(sessions.get(code))) {
+            log.warn("event=quote_source_rejected stage=source_check code=SUBSCRIPTION_SOURCE_MISMATCH");
             throw new IllegalStateException("이전 Redis 구독 연결의 알림입니다.");
         }
     }
@@ -212,7 +218,11 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
         String value = redis.opsForValue().get("price:" + code);
         if (value == null) return Optional.empty();
         try { return Optional.of(price(JSON.readTree(value), code, null)); }
-        catch (RuntimeException error) { return Optional.empty(); }
+        catch (RuntimeException error) {
+            log.warn("event=quote_snapshot_invalid stage=snapshot_conversion quoteType=price stockCode={} causeType={}",
+                    code, error.getClass().getSimpleName());
+            return Optional.empty();
+        }
     }
 
     public Optional<OrderBook> latestOrderBook(String code) {
@@ -220,7 +230,11 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
         String value = redis.opsForValue().get("orderbook:" + code);
         if (value == null) return Optional.empty();
         try { return Optional.of(book(JSON.readTree(value), code, null)); }
-        catch (RuntimeException error) { return Optional.empty(); }
+        catch (RuntimeException error) {
+            log.warn("event=quote_snapshot_invalid stage=snapshot_conversion quoteType=orderbook stockCode={} causeType={}",
+                    code, error.getClass().getSimpleName());
+            return Optional.empty();
+        }
     }
 
     private static StockPrice price(JsonNode node, String code, Instant receivedAt) {

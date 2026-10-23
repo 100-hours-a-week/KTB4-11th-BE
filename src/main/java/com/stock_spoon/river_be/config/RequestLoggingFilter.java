@@ -76,11 +76,20 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
         if (fallbackError != null) {
             String signal = DbMigrationWriteFallbackClassifier.isMySqlCommunicationsLinkFailure(fallbackError)
                     ? "mysql_communications_link_failure"
-                    : "proxysql_error_9001";
+                    : DbMigrationWriteFallbackClassifier.isMySqlReadOnlyFailure(fallbackError)
+                            ? "mysql_read_only_server_1290"
+                            : "proxysql_error_9001";
             log.error("event=database_fallback_signal_observed signal={} method={} route={} "
                             + "writeHttpMethod={} sqlErrorCode={} sqlState={}",
                     signal, method, route, writeHttpMethod,
                     fallbackError.getErrorCode(), fallbackError.getSQLState());
+            if (fallbackError.getErrorCode()
+                    == DbMigrationWriteFallbackClassifier.PROXYSQL_HOSTGROUP_CONNECT_TIMEOUT) {
+                log.error("event=proxysql_connect_timeout_observed method={} route={} "
+                                + "writeHttpMethod={} sqlErrorCode={} sqlState={}",
+                        method, route, writeHttpMethod,
+                        fallbackError.getErrorCode(), fallbackError.getSQLState());
+            }
             if (writeHttpMethod) {
                 log.error("event=db_migration_write_fallback_candidate_observed signal={} "
                                 + "method={} route={} sqlErrorCode={} sqlState={} action=none",

@@ -1,18 +1,12 @@
 # syntax=docker/dockerfile:1
 
-FROM eclipse-temurin:21-jdk-jammy AS builder
+FROM eclipse-temurin:21-jre-jammy AS builder
 
 WORKDIR /workspace
 
-# Keep dependency resolution cached when only application code changes.
-COPY gradlew build.gradle settings.gradle ./
-COPY gradle ./gradle
-RUN chmod +x gradlew
-RUN --mount=type=cache,target=/root/.gradle ./gradlew dependencies --no-daemon
-
-COPY src ./src
-RUN --mount=type=cache,target=/root/.gradle ./gradlew bootJar --no-daemon \
-    && cp build/libs/*.jar application.jar
+# Package the JAR already built and tested by CI without compiling it again.
+COPY build/libs/application.jar application.jar
+RUN java -Djarmode=tools -jar application.jar extract --layers --destination extracted
 
 FROM eclipse-temurin:21-jre-jammy AS runtime
 
@@ -21,7 +15,11 @@ RUN groupadd --system spring \
 
 WORKDIR /app
 
-COPY --from=builder --chown=spring:spring /workspace/application.jar ./application.jar
+# Stable dependencies are reused when only application code changes.
+COPY --from=builder --chown=spring:spring /workspace/extracted/dependencies/ ./
+COPY --from=builder --chown=spring:spring /workspace/extracted/spring-boot-loader/ ./
+COPY --from=builder --chown=spring:spring /workspace/extracted/snapshot-dependencies/ ./
+COPY --from=builder --chown=spring:spring /workspace/extracted/application/ ./
 
 USER spring:spring
 

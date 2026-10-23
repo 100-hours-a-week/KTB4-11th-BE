@@ -79,3 +79,7 @@ tasks.named('test') {
     // A manifest classpath also keeps spawned test JVMs below Windows' command-line limit.
     systemProperty 'test.runtime.classpath', testRuntimeClasspathJar.get().archiveFile.get().asFile.absolutePath
 }
+
+tasks.named('bootJar') {
+    archiveFileName = 'application.jar'
+}

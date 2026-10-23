@@ -1,17 +1,16 @@
 name: Backend V2 ECS CD
 
 on:
-  workflow_call:
-    inputs:
-      image_tag:
-        required: true
-        type: string
   workflow_dispatch:
     inputs:
       image_tag:
-        dsecription: Existing ECR image tag (40-character commit SHA)
+        description: Existing ECR image tag (40-character commit SHA)
         required: true
         type: string
+      automatic:
+        description: Skip deployment if the image is no longer the dev branch head
+        default: false
+        type: boolean
 
 concurrency:
   group: stockspoon-v2-prod-ecs-backend-deploy
@@ -39,11 +38,11 @@ jobs:
         id: source
         env:
           GH_TOKEN: ${{ github.token }}
+          AUTOMATIC: ${{ inputs.automatic }}
         run: |
           set -Eeuo pipefail
           [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid commit SHA' >&2; exit 1; }
-          if [[ "$GITHUB_EVENT_NAME" != 'workflow_dispatch' ]]; then
-            [[ "$IMAGE_TAG" == "$GITHUB_SHA" ]] || { echo 'Source SHA does not match caller' >&2; exit 1; }
+          if [[ "$AUTOMATIC" == 'true' ]]; then
             current_dev_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/dev" --jq .sha)"
             [[ "$current_dev_sha" =~ ^[0-9a-f]{40}$ ]]
             if [[ "$IMAGE_TAG" != "$current_dev_sha" ]]; then
@@ -82,6 +81,12 @@ jobs:
         id: register
         run: |
           set -Eeuo pipefail
+          started=$SECONDS
+          report_timing() {
+            local status=$?
+            echo "TIMING phase=register_task_definition seconds=$((SECONDS - started)) status=$status" | tee -a "$GITHUB_STEP_SUMMARY"
+          }
+          trap report_timing EXIT
           jq --arg name "$CONTAINER_NAME" --arg image "$IMAGE" \
             '.containerDefinitions |= map(if .name == $name then .image = $image else . end)' \
             "$TASK_TEMPLATE" > next.json
@@ -97,6 +102,12 @@ jobs:
           TASK_DEFINITION_ARN: ${{ steps.register.outputs.task_definition_arn }}
         run: |
           set -Eeuo pipefail
+          started=$SECONDS
+          report_timing() {
+            local status=$?
+            echo "TIMING phase=update_service seconds=$((SECONDS - started)) status=$status" | tee -a "$GITHUB_STEP_SUMMARY"
+          }
+          trap report_timing EXIT
           response="$(aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" \
             --task-definition "$TASK_DEFINITION_ARN")"
           deployment_id="$(jq -r --arg arn "$TASK_DEFINITION_ARN" \
@@ -112,6 +123,14 @@ jobs:
           TASK_DEFINITION_ARN: ${{ steps.register.outputs.task_definition_arn }}
         run: |
           set -Eeuo pipefail
+          started=$SECONDS
+          fully_running=false
+          seen_events=' '
+          report_timing() {
+            local status=$?
+            echo "TIMING phase=ecs_rollout_wait seconds=$((SECONDS - started)) status=$status" | tee -a "$GITHUB_STEP_SUMMARY"
+          }
+          trap report_timing EXIT
           deadline=$((SECONDS + 35 * 60))
           print_events() {
             aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
@@ -128,7 +147,22 @@ jobs:
               exit 1
             fi
             state="$(jq -r .rolloutState <<<"$deployment")"
-            echo "Deployment $DEPLOYMENT_ID: $state running=$(jq -r .runningCount <<<"$deployment")/$(jq -r .desiredCount <<<"$deployment") failed=$(jq -r .failedTasks <<<"$deployment")"
+            running="$(jq -r .runningCount <<<"$deployment")"
+            desired="$(jq -r .desiredCount <<<"$deployment")"
+            echo "TIMING phase=ecs_progress seconds=$((SECONDS - started)) state=$state running=$running/$desired pending=$(jq -r .pendingCount <<<"$deployment") failed=$(jq -r .failedTasks <<<"$deployment")"
+            if [[ "$fully_running" == 'false' ]] && (( desired > 0 && running >= desired )); then
+              fully_running=true
+              echo "TIMING phase=first_observed_new_tasks_running seconds=$((SECONDS - started))" | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+            # Service events distinguish target registration, draining and steady state.
+            while IFS=$'\t' read -r event_id created_at message; do
+              [[ -n "$event_id" ]] || continue
+              if [[ "$seen_events" != *" $event_id "* ]]; then
+                echo "ECS_EVENT at=$created_at message=$message"
+                seen_events+="$event_id "
+              fi
+            done < <(jq -r --arg since "$(jq -r .createdAt <<<"$deployment")" \
+              '.services[0].events // [] | sort_by(.createdAt)[] | select(.createdAt >= $since) | [.id, .createdAt, .message] | @tsv' <<<"$response")
             case "$state" in
               COMPLETED) exit 0 ;;
               IN_PROGRESS) ;;
@@ -143,6 +177,30 @@ jobs:
           echo '::error::Timed out waiting for deployment'
           print_events
           exit 1
+
+      - name: Collect optional ECS task timestamps
+        if: always() && steps.update.outputs.deployment_id != ''
+        timeout-minutes: 1
+        continue-on-error: true
+        env:
+          DEPLOYMENT_ID: ${{ steps.update.outputs.deployment_id }}
+        run: |
+          set -Eeuo pipefail
+          # Detailed timing is optional: the deployment role may only allow service reads.
+          if ! tasks="$(aws ecs list-tasks --cluster "$ECS_CLUSTER" --started-by "$DEPLOYMENT_ID" --output json)"; then
+            echo '::notice::Task timestamps unavailable; ecs:ListTasks permission is required. Service timing remains available.'
+            exit 0
+          fi
+          mapfile -t task_arns < <(jq -r '.taskArns[:100][]' <<<"$tasks")
+          if (( ${#task_arns[@]} == 0 )); then
+            echo '::notice::No running tasks found for this deployment.'
+            exit 0
+          fi
+          if ! details="$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "${task_arns[@]}" --output json)"; then
+            echo '::notice::Task timestamps unavailable; ecs:DescribeTasks permission is required.'
+            exit 0
+          fi
+          jq '.tasks[] | {taskArn, lastStatus, createdAt, pullStartedAt, pullStoppedAt, startedAt, stoppingAt, stoppedAt}' <<<"$details"
 
       - name: Add deployment summary
         if: always()

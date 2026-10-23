@@ -38,6 +38,8 @@ public class OrderController {
     private final OrderExecutionService marketExecution;
     private final OrderBuyPriceService buyPrices;
     private final MarketStream stream;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.stock_spoon.river_be.order.messaging.OrderRequestService queuedRequests;
 
     // Spring이 생성자에 서비스 객체를 넣어 준다(의존성 주입).
     // orders.reserveLimit()을 따라갈 때는 orders의 타입인 OrderService를 연다.
@@ -91,8 +93,9 @@ public class OrderController {
     // 반환 DTO는 Spring이 JSON으로 변환하며 @ResponseStatus에 따라 HTTP 201을 보낸다.
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public OrderCreateResponse create(@AuthenticationPrincipal Jwt jwt,
-            @PathVariable long accountId, @Valid @RequestBody OrderCreateRequest request) {
+    public Object create(@AuthenticationPrincipal Jwt jwt,
+            @PathVariable long accountId, @Valid @RequestBody OrderCreateRequest request,
+            @org.springframework.web.bind.annotation.RequestHeader(name = "Idempotency-Key", required = false) String eventId) {
         String actor = jwt.getClaimAsString("actor");
         Order.Source source;
         if ("AI".equals(actor)) {
@@ -130,6 +133,13 @@ public class OrderController {
             userId = Long.parseLong(jwt.getSubject());
         } catch (NumberFormatException error) {
             throw new OrderException(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", "인증 정보를 확인하세요.");
+        }
+        if (queuedRequests != null) {
+            if (source != Order.Source.USER) {
+                throw new OrderException(HttpStatus.FORBIDDEN, "AI_ORDER_USE_QUEUE", "AI 주문은 주문 큐를 이용하세요.");
+            }
+            return org.springframework.http.ResponseEntity.accepted()
+                    .body(queuedRequests.submit(userId, accountId, eventId, request));
         }
         // [2. 계좌 검사] 토큰의 사용자 ID로 계좌 소유권·활성 상태·AI 운용 여부를 확인한다.
         orders.assertOrderableAccount(userId, accountId, source);

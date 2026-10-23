@@ -24,6 +24,13 @@ spring:
       ddl-auto: ${JPA_DDL_AUTO}
     open-in-view: false
 
+order:
+  queue:
+    enabled: ${ORDER_QUEUE_ENABLED:false}
+    consumer-enabled: ${ORDER_QUEUE_CONSUMER_ENABLED:true}
+    url: ${ORDER_QUEUE_URL:}
+    region: ${AWS_REGION:ap-northeast-2}
+
 kakao:
   client-id: ${KAKAO_CLIENT_ID}
   client-secret: ${KAKAO_CLIENT_SECRET}

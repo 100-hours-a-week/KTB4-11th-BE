@@ -49,6 +49,7 @@ dependencies {
     implementation 'software.amazon.awssdk:regions'
     implementation 'software.amazon.awssdk:http-auth-aws'
     implementation 'software.amazon.awssdk:sqs'
+    implementation 'io.awspring.cloud:spring-cloud-aws-sqs:4.1.1'
     implementation 'net.ttddyy:datasource-proxy:1.11.0'
   	implementation 'org.springframework.boot:spring-boot-health:4.1.1'
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
@@ -61,7 +62,20 @@ dependencies {
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
+def testRuntimeClasspathJar = tasks.register('testRuntimeClasspathJar', Jar) {
+    inputs.files(sourceSets.test.runtimeClasspath)
+    archiveFileName = 'test-runtime-classpath.jar'
+    destinationDirectory = layout.buildDirectory.dir('test-classpath')
+    doFirst {
+        manifest.attributes('Class-Path': sourceSets.test.runtimeClasspath.files.collect {
+            it.toURI().toASCIIString()
+        }.join(' '))
+    }
+}
+
 tasks.named('test') {
 	useJUnitPlatform()
-	systemProperty 'test.runtime.classpath', sourceSets.test.runtimeClasspath.asPath
+    dependsOn testRuntimeClasspathJar
+    // A manifest classpath also keeps spawned test JVMs below Windows' command-line limit.
+    systemProperty 'test.runtime.classpath', testRuntimeClasspathJar.get().archiveFile.get().asFile.absolutePath
 }

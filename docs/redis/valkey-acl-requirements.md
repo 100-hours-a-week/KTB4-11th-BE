@@ -12,6 +12,7 @@
 | 읽기·쓰기 키 | `token:*` | 남은 키움 REST 토큰 |
 | 읽기·쓰기 키 | `coord:*` | 남은 키움 REST 담당 상태 |
 | 읽기·쓰기 키 | `session:*` | 팀에서 정한 임시 상태 영역. 현재 ACL 테스트에서 TTL 저장만 확인 |
+| 읽기·쓰기 키 | `order:temporary:*` | SQS 사용자 주문 임시 예약과 복구 계좌 인덱스. 주문 큐 활성화 시 필요 |
 
 원본 읽기는 `%R~price:* %R~orderbook:*`, 채널은 `&price:* &orderbook:*`로 구분한다. `quotes:*` 중계 채널과 과거 `quote:{code}:price/orderbook/subscription`은 사용하지 않는다.
 
@@ -21,6 +22,7 @@
 - 시세 채널: `SUBSCRIBE`, `UNSUBSCRIBE`
 - 연결·검증: `AUTH`, `HELLO`, `PING`, `CLIENT SETINFO/SETNAME/ID`, `TTL`, `PTTL`
 - BE의 `PUBLISH`, `PSUBSCRIBE`, `KEYS`, ACL 관리 권한은 필요하지 않다.
+- 주문 큐 활성화 시 추가: `HVALS`, `HGET`, `HSET`, `HSETNX`, `HDEL`, `HLEN`, `SADD`, `SREM`, `SSCAN`. 기존 Lua 권한도 필요하다. 상세 동작은 [SQS 주문 생성](../sqs-order-requests.md)을 따른다. 배포 ACL을 자동 변경하지 않는다.
 
 로컬 ACL 테스트는 위 범위와 원본 시세 쓰기·삭제·발행 거절을 검증한다. Serverless·Cluster·TLS·IAM의 실제 배포 권한은 별도 확인해야 한다. 배포 ACL을 자동 변경하는 작업은 포함하지 않는다.
 

@@ -59,12 +59,34 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
     }
 
     private static void logSqlExceptionIfPresent(HttpServletRequest request, Throwable error) {
-        SQLException sqlError = findSqlException(error);
+        SQLException fallbackError =
+                DbMigrationWriteFallbackClassifier.findWriteFallbackFailure(error);
+        SQLException sqlError = fallbackError != null ? fallbackError : findSqlException(error);
         if (sqlError == null) return;
 
+        String method = request.getMethod();
+        String route = routePattern(request);
+        boolean writeHttpMethod = DbMigrationWriteFallbackClassifier.isWriteHttpMethod(method);
+        String sqlMessage = sanitizeMessage(sqlError.getMessage());
+
         log.error("event=database_exception_observed method={} route={} exceptionType={} sqlErrorCode={} sqlState={} sqlMessage={}",
-                request.getMethod(), routePattern(request), sqlError.getClass().getSimpleName(),
-                sqlError.getErrorCode(), sqlError.getSQLState(), sanitizeMessage(sqlError.getMessage()));
+                method, route, sqlError.getClass().getSimpleName(),
+                sqlError.getErrorCode(), sqlError.getSQLState(), sqlMessage);
+
+        if (fallbackError != null) {
+            String signal = DbMigrationWriteFallbackClassifier.isMySqlCommunicationsLinkFailure(fallbackError)
+                    ? "mysql_communications_link_failure"
+                    : "proxysql_error_9001";
+            log.error("event=database_fallback_signal_observed signal={} method={} route={} "
+                            + "writeHttpMethod={} sqlErrorCode={} sqlState={}",
+                    signal, method, route, writeHttpMethod,
+                    fallbackError.getErrorCode(), fallbackError.getSQLState());
+            if (writeHttpMethod) {
+                log.error("event=db_migration_write_fallback_candidate_observed signal={} "
+                                + "method={} route={} sqlErrorCode={} sqlState={} action=none",
+                        signal, method, route, fallbackError.getErrorCode(), fallbackError.getSQLState());
+            }
+        }
     }
 
     private static SQLException findSqlException(Throwable error) {

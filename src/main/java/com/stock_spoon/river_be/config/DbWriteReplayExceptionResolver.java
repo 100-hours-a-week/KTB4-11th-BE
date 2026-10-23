@@ -9,7 +9,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.web.servlet.HandlerExceptionResolver;
-import org.springframework.web.servlet.HandlerMapping;
 import org.springframework.web.servlet.ModelAndView;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -45,20 +44,19 @@ public class DbWriteReplayExceptionResolver implements HandlerExceptionResolver 
             HttpServletResponse response,
             Object handler,
             Exception exception) {
-        SQLException proxySqlError =
-                DbMigrationWriteFallbackClassifier.findProxySqlConnectTimeout(exception);
-        if (proxySqlError == null
-                || !properties.getProxySqlErrorCodes().contains(proxySqlError.getErrorCode())) {
+        SQLException fallbackError =
+                DbMigrationWriteFallbackClassifier.findWriteFallbackFailure(exception);
+        if (fallbackError == null || !isEnabledFallbackSignal(fallbackError)
+                || !DbMigrationWriteFallbackClassifier.isWriteHttpMethod(request.getMethod())) {
             return null;
         }
-        if (!isKnownSingleDmlRoute(request)) return null;
 
         DbWriteReplayRequestContext.AcceptedReplay accepted =
-                requestContext.acceptedReplay(proxySqlError);
+                requestContext.acceptedReplay(fallbackError);
         if (accepted != null) return acceptedResponse(response, accepted);
-        if (!requestContext.canEnqueue(proxySqlError)) return null;
+        if (!requestContext.canEnqueue(fallbackError)) return null;
 
-        DbWriteReplayRequestContext.ReplaySnapshot snapshot = requestContext.snapshot(proxySqlError);
+        DbWriteReplayRequestContext.ReplaySnapshot snapshot = requestContext.snapshot(fallbackError);
         if (snapshot == null) return null;
 
         try {
@@ -80,13 +78,14 @@ public class DbWriteReplayExceptionResolver implements HandlerExceptionResolver 
             accepted = new DbWriteReplayRequestContext.AcceptedReplay(
                     snapshot.replayRequestId(), snapshot.transactionId(),
                     snapshot.httpRequestId(), result.messageId());
-            requestContext.markEnqueued(proxySqlError, accepted);
-            log.info("event=db_write_replay_queued requestId={} replayRequestId={} sqlErrorCode={} statementCount=1",
-                    snapshot.httpRequestId(), snapshot.replayRequestId(), proxySqlError.getErrorCode());
+            requestContext.markEnqueued(fallbackError, accepted);
+            log.info("event=db_write_replay_queued requestId={} replayRequestId={} sqlErrorCode={} sqlState={}",
+                    snapshot.httpRequestId(), snapshot.replayRequestId(),
+                    fallbackError.getErrorCode(), fallbackError.getSQLState());
             return acceptedResponse(response, accepted);
         } catch (Exception enqueueFailure) {
-            log.error("event=db_write_replay_enqueue_failed requestId={} sqlErrorCode={} failureType={}",
-                    snapshot.httpRequestId(), proxySqlError.getErrorCode(),
+            log.error("event=db_write_replay_enqueue_failed requestId={} sqlErrorCode={} sqlState={} failureType={}",
+                    snapshot.httpRequestId(), fallbackError.getErrorCode(), fallbackError.getSQLState(),
                     enqueueFailure.getClass().getSimpleName());
             return null;
         }
@@ -112,17 +111,9 @@ public class DbWriteReplayExceptionResolver implements HandlerExceptionResolver 
         return new ModelAndView();
     }
 
-    /**
-     * The current SQL capture can only replay statements that reached JDBC. Keep it to
-     * handlers whose transaction is known to contain one DML statement; later Hibernate
-     * actions may not have reached JDBC after an earlier statement failed.
-     */
-    private static boolean isKnownSingleDmlRoute(HttpServletRequest request) {
-        Object matchedPattern = request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
-        if (!(matchedPattern instanceof String route)) return false;
-        return ("POST".equals(request.getMethod())
-                        && "/api/v1/users/me/accounts".equals(route))
-                || ("PATCH".equals(request.getMethod())
-                        && "/api/v1/users/me/accounts/{accountId}".equals(route));
+    private boolean isEnabledFallbackSignal(SQLException sqlError) {
+        // 9001 remains configurable. ErrorCode 0 requires MySQL SQLState 08S01.
+        return DbMigrationWriteFallbackClassifier.isMySqlCommunicationsLinkFailure(sqlError)
+                || properties.getProxySqlErrorCodes().contains(sqlError.getErrorCode());
     }
 }

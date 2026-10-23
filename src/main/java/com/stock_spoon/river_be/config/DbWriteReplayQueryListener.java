@@ -17,11 +17,14 @@ import net.ttddyy.dsproxy.ExecutionInfo;
 import net.ttddyy.dsproxy.QueryInfo;
 import net.ttddyy.dsproxy.listener.QueryExecutionListener;
 import net.ttddyy.dsproxy.proxy.ParameterSetOperation;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-/** Captures the failed DML and JDBC bind operations needed by the replay Lambda. */
+/** Captures ordered transactional DML and JDBC bind operations for replay. */
 public class DbWriteReplayQueryListener implements QueryExecutionListener {
     private static final Pattern WRITE_SQL =
             Pattern.compile("(?i)^(INSERT|UPDATE|DELETE|REPLACE)\\b");
+    private static final Pattern INSERT_OR_REPLACE_SQL =
+            Pattern.compile("(?i)^(INSERT|REPLACE)\\b");
 
     private final DbWriteReplayRequestContext requestContext;
 
@@ -37,7 +40,7 @@ public class DbWriteReplayQueryListener implements QueryExecutionListener {
     @Override
     public void afterQuery(ExecutionInfo executionInfo, List<QueryInfo> queryInfoList) {
         Throwable failure = executionInfo.getThrowable();
-        SQLException proxySqlError = DbMigrationWriteFallbackClassifier.findProxySqlConnectTimeout(failure);
+        SQLException fallbackError = DbMigrationWriteFallbackClassifier.findWriteFallbackFailure(failure);
         List<Map<String, Object>> failedWrites = new ArrayList<>();
         boolean replayable = true;
         boolean sawWrite = false;
@@ -46,11 +49,20 @@ public class DbWriteReplayQueryListener implements QueryExecutionListener {
             for (QueryInfo queryInfo : queryInfoList) {
                 if (queryInfo == null || !isWriteSql(queryInfo.getQuery())) continue;
                 sawWrite = true;
-                if (failure == null) {
-                    requestContext.markSuccessfulWrite();
+                if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+                    requestContext.markUnreplayableWrite();
                     continue;
                 }
-                if (proxySqlError == null) {
+                if (failure == null) {
+                    try {
+                        requestContext.recordSuccessfulWrite(
+                                toReplayStatement(queryInfo), mayDependOnGeneratedKey(queryInfo.getQuery()));
+                    } catch (RuntimeException unsupportedBindValue) {
+                        requestContext.markUnreplayableWrite();
+                    }
+                    continue;
+                }
+                if (fallbackError == null) {
                     requestContext.markUnreplayableWrite();
                     continue;
                 }
@@ -62,9 +74,13 @@ public class DbWriteReplayQueryListener implements QueryExecutionListener {
             }
         }
 
-        if (proxySqlError != null) {
-            requestContext.observeProxyFailure(proxySqlError, failedWrites, sawWrite && replayable);
+        if (fallbackError != null) {
+            requestContext.observeFallbackFailure(fallbackError, failedWrites, sawWrite && replayable);
         }
+    }
+
+    private static boolean mayDependOnGeneratedKey(String sql) {
+        return INSERT_OR_REPLACE_SQL.matcher(stripLeadingComments(sql)).find();
     }
 
     private static boolean isWriteSql(String sql) {

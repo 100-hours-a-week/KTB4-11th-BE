@@ -63,6 +63,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
     runs-on: ubuntu-26.04
     permissions:
+      actions: write
       contents: read
       id-token: write
     env:
@@ -92,25 +93,14 @@ jobs:
           docker build -t "$IMAGE_URI" .
           docker push "$IMAGE_URI"
 
-  deploy-dev:
-    needs: push-image
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/cd-dev.yaml
-    with:
-      image_tag: ${{ github.sha }}
-    secrets: inherit
-
-  # 개발 EC2 배포가 성공한 동일 이미지를 운영 ECS에 배포한다.
-  deploy-ecs:
-    needs: deploy-dev
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/cd-ecs-v2.yaml
-    with:
-      image_tag: ${{ github.sha }}
-    secrets: inherit
+      # 별도 CD 실행을 요청하고 배포 완료를 기다리지 않는다.
+      - name: Dispatch independent development and ECS deployments
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -Eeuo pipefail
+          dispatch_status=0
+          gh workflow run cd-dev.yaml --ref dev -f "image_tag=$IMAGE_TAG" -f automatic=true || dispatch_status=1
+          gh workflow run cd-ecs-v2.yaml --ref dev -f "image_tag=$IMAGE_TAG" -f automatic=true || dispatch_status=1
+          exit "$dispatch_status"

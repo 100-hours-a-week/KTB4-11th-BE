@@ -1,17 +1,16 @@
 name: Backend V2 ECS CD
 
 on:
-  workflow_call:
-    inputs:
-      image_tag:
-        required: true
-        type: string
   workflow_dispatch:
     inputs:
       image_tag:
-        dsecription: Existing ECR image tag (40-character commit SHA)
+        description: Existing ECR image tag (40-character commit SHA)
         required: true
         type: string
+      automatic:
+        description: Skip deployment if the image is no longer the dev branch head
+        default: false
+        type: boolean
 
 concurrency:
   group: stockspoon-v2-prod-ecs-backend-deploy
@@ -39,11 +38,11 @@ jobs:
         id: source
         env:
           GH_TOKEN: ${{ github.token }}
+          AUTOMATIC: ${{ inputs.automatic }}
         run: |
           set -Eeuo pipefail
           [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid commit SHA' >&2; exit 1; }
-          if [[ "$GITHUB_EVENT_NAME" != 'workflow_dispatch' ]]; then
-            [[ "$IMAGE_TAG" == "$GITHUB_SHA" ]] || { echo 'Source SHA does not match caller' >&2; exit 1; }
+          if [[ "$AUTOMATIC" == 'true' ]]; then
             current_dev_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/dev" --jq .sha)"
             [[ "$current_dev_sha" =~ ^[0-9a-f]{40}$ ]]
             if [[ "$IMAGE_TAG" != "$current_dev_sha" ]]; then

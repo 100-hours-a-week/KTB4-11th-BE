@@ -1,12 +1,16 @@
 name: Backend Dev CD (V2)
 
 on:
-  workflow_call:
+  workflow_dispatch:
     inputs:
       image_tag:
-        description: Backend image tag pushed by Backend Dev CI
+        description: Existing backend image tag (40-character commit SHA)
         required: true
         type: string
+      automatic:
+        description: Skip deployment if the image is no longer the dev branch head
+        default: false
+        type: boolean
 
 concurrency:
   group: stockspoon-v2-dev-backend-deploy
@@ -14,7 +18,10 @@ concurrency:
 
 jobs:
   verify-image:
+    if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-26.04
+    outputs:
+      deploy: ${{ steps.source.outputs.deploy }}
     permissions:
       contents: read
       id-token: write
@@ -23,13 +30,34 @@ jobs:
       ECR_REPOSITORY: stockspoon-v2-backend
       IMAGE_TAG: ${{ inputs.image_tag }}
     steps:
+      - name: Validate deployment source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTOMATIC: ${{ inputs.automatic }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid commit SHA' >&2; exit 1; }
+          if [[ "$AUTOMATIC" == 'true' ]]; then
+            current_dev_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/dev" --jq .sha)"
+            [[ "$current_dev_sha" =~ ^[0-9a-f]{40}$ ]]
+            if [[ "$IMAGE_TAG" != "$current_dev_sha" ]]; then
+              echo '::notice::Skipping stale automatic deployment'
+              echo 'deploy=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo 'deploy=true' >> "$GITHUB_OUTPUT"
+
       - name: Configure AWS credentials with OIDC
+        if: steps.source.outputs.deploy == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_V2_DEV_ECR_PUSH_ROLE_ARN }}
           aws-region: ${{ env.ECR_REGION }}
 
       - name: Verify the V2 image in Public ECR
+        if: steps.source.outputs.deploy == 'true'
         run: |
           set -Eeuo pipefail
           IMAGE_DIGEST="$(aws ecr-public describe-images \
@@ -48,6 +76,7 @@ jobs:
 
   deploy:
     needs: verify-image
+    if: needs.verify-image.outputs.deploy == 'true'
     runs-on: ubuntu-26.04
     environment: development
     permissions:

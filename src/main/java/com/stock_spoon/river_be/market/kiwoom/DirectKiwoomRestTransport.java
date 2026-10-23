@@ -26,7 +26,10 @@ public final class DirectKiwoomRestTransport implements KiwoomRestTransport {
     }
 
     private void assertCollector() {
-        if (!collector.getAsBoolean()) throw new IllegalStateException("키움 수집 담당 서버를 사용할 수 없습니다.");
+        if (!collector.getAsBoolean()) {
+            log.warn("event=kiwoom_query_unavailable stage=collector_check code=COLLECTOR_LEASE_UNAVAILABLE");
+            throw new IllegalStateException("키움 수집 담당 서버를 사용할 수 없습니다.");
+        }
     }
 
     // 고정 담당의 한 계좌에 대해 개별 TR의 최근 1초 호출 시작 횟수를 제한한다.
@@ -53,7 +56,10 @@ public final class DirectKiwoomRestTransport implements KiwoomRestTransport {
             for (;;) {
                 long now = System.nanoTime();
                 long waitRemaining = java.util.concurrent.TimeUnit.SECONDS.toNanos(3) - (now - waitingStarted);
-                if (waitRemaining <= 0) throw new IllegalStateException("키움 조회 대기 시간이 초과되었습니다.");
+                if (waitRemaining <= 0) {
+                    log.warn("event=kiwoom_query_permit_failed stage=rate_limit_wait apiId={} code=WAIT_TIMEOUT", apiId);
+                    throw new IllegalStateException("키움 조회 대기 시간이 초과되었습니다.");
+                }
                 while (!gate.starts.isEmpty() && now - gate.starts.getFirst() >= 1_000_000_000L) {
                     gate.starts.removeFirst();
                 }
@@ -67,6 +73,7 @@ public final class DirectKiwoomRestTransport implements KiwoomRestTransport {
                 try {
                     java.util.concurrent.TimeUnit.NANOSECONDS.timedWait(gate, Math.min(remaining, waitRemaining));
                 } catch (InterruptedException error) {
+                    log.warn("event=kiwoom_query_permit_failed stage=rate_limit_wait apiId={} code=WAIT_INTERRUPTED", apiId);
                     Thread.currentThread().interrupt();
                     throw new IllegalStateException("키움 조회 대기가 중단되었습니다.");
                 }
@@ -84,7 +91,7 @@ public final class DirectKiwoomRestTransport implements KiwoomRestTransport {
                     .body(body).retrieve().body(JSON);
             String returnCode = safeReturnCode(response);
             if (!"0".equals(returnCode)) {
-                log.warn("event=kiwoom_query_rejected apiId={} returnCode={} detailCode={} elapsedMs={}",
+                log.warn("event=kiwoom_query_rejected apiId={} returnCode={} detailCode={} elapsedMs={} stage=provider_response",
                         apiId, returnCode, safeDetailCode(response), (System.nanoTime() - started) / 1_000_000);
             } else {
                 log.debug("event=kiwoom_query_completed apiId={} elapsedMs={}",
@@ -95,8 +102,9 @@ public final class DirectKiwoomRestTransport implements KiwoomRestTransport {
         } catch (RestClientException error) {
             int status = error instanceof org.springframework.web.client.RestClientResponseException http
                     ? http.getStatusCode().value() : 0;
-            log.error("event=kiwoom_query_failed apiId={} httpStatus={} causeType={} elapsedMs={}",
-                    apiId, status, error.getClass().getSimpleName(), (System.nanoTime() - started) / 1_000_000);
+            log.error("event=kiwoom_query_failed apiId={} httpStatus={} causeType={} elapsedMs={} stage=provider_http_call nestedCauseType={}",
+                    apiId, status, error.getClass().getSimpleName(), (System.nanoTime() - started) / 1_000_000,
+                    error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
             throw error;
         }
     }

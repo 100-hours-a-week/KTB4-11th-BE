@@ -82,7 +82,7 @@ public class KiwoomTokenProvider {
         }
         // 앱 인증 정보가 없으면 외부 요청 전에 설정 오류로 종료한다.
         if (appKey == null || appKey.isBlank() || appSecret == null || appSecret.isBlank()) {
-            log.error("event=kiwoom_token_not_configured");
+            log.error("event=kiwoom_token_not_configured stage=configuration_check code=APP_CREDENTIALS_MISSING");
             throw new IllegalStateException("KIWOOM_APP_KEY와 KIWOOM_APP_SECRET 설정이 필요합니다.");
         }
 
@@ -106,8 +106,9 @@ public class KiwoomTokenProvider {
             // HTTP 오류이면 상태 코드를, 연결 실패 등 HTTP 응답이 없으면 0을 기록한다.
             int status = error instanceof org.springframework.web.client.RestClientResponseException http
                     ? http.getStatusCode().value() : 0;
-            log.error("event=kiwoom_token_failed httpStatus={} causeType={} elapsedMs={}",
-                    status, error.getClass().getSimpleName(), (System.nanoTime() - started) / 1_000_000);
+            log.error("event=kiwoom_token_failed httpStatus={} causeType={} elapsedMs={} stage=token_http_call nestedCauseType={}",
+                    status, error.getClass().getSimpleName(), (System.nanoTime() - started) / 1_000_000,
+                    error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
             // 공급자 예외에는 응답 본문이 포함될 수 있으므로 원문을 전달하지 않는다.
             // 예외의 가장 안쪽 원인까지 따라간다. 메시지 원문 대신 예외 종류만 사용한다.
             Throwable root = error;
@@ -120,7 +121,7 @@ public class KiwoomTokenProvider {
         }
         // 키움은 HTTP 성공 응답에서도 return_code로 인증/업무 실패를 알릴 수 있다.
         if (response != null && !"0".equals(String.valueOf(response.get("return_code")))) {
-            log.warn("event=kiwoom_token_rejected returnCode={} detailCode={}",
+            log.warn("event=kiwoom_token_rejected returnCode={} detailCode={} stage=provider_response",
                     KiwoomMarketClient.safeReturnCode(response), KiwoomMarketClient.safeDetailCode(response));
             // return_msg의 [8050:...] 같은 표기에서 숫자 상세 오류 코드만 추출한다.
             var detail = java.util.regex.Pattern.compile("\\[(\\d{3,5}):")
@@ -191,12 +192,15 @@ public class KiwoomTokenProvider {
 
     /** 잘못된 발급 응답을 처리할 때 공통 로그와 예외를 만든다. 실제 throw는 호출부가 수행한다. */
     private IllegalStateException invalidResponse() {
-        log.warn("event=kiwoom_token_response_invalid");
+        log.warn("event=kiwoom_token_response_invalid stage=token_response_validation");
         return new IllegalStateException(
                 "키움 토큰 발급 응답이 유효하지 않습니다. 앱 키, 시크릿, 허용 IP 및 서버 시간을 확인하세요.");
     }
 
     private void assertCollector() {
-        if (!collector.getAsBoolean()) throw new IllegalStateException("키움 수집 담당 서버를 사용할 수 없습니다.");
+        if (!collector.getAsBoolean()) {
+            log.warn("event=kiwoom_token_unavailable stage=collector_check code=COLLECTOR_LEASE_UNAVAILABLE");
+            throw new IllegalStateException("키움 수집 담당 서버를 사용할 수 없습니다.");
+        }
     }
 }

@@ -31,7 +31,7 @@ public class KiwoomMarketClient {
         if (!stockCode.equals(response.get("code"))
                 || !(response.get("marketCode") instanceof String marketCode)
                 || marketCode.isBlank()) {
-            log.warn("event=kiwoom_response_invalid apiId=ka10100 stockCode={}", stockCode);
+            log.warn("event=kiwoom_response_invalid apiId=ka10100 stockCode={} stage=stock_info_validation code=STOCK_CODE_OR_MARKET_INVALID", stockCode);
             throw new IllegalStateException("키움 종목정보 응답 형식이 올바르지 않습니다.");
         }
         String state = response.get("state") instanceof String value ? value : "";
@@ -48,6 +48,8 @@ public class KiwoomMarketClient {
         try {
             response = transport.query("ka10001", "/api/dostk/stkinfo", Map.of("stk_cd", stockCode));
         } catch (RestClientException error) {
+            log.warn("event=kiwoom_market_lookup_failed stage=current_price_query apiId=ka10001 stockCode={} causeType={}",
+                    stockCode, error.getClass().getSimpleName());
             throw new IllegalStateException("키움 현재가 조회에 실패했습니다.");
         }
         if (response == null || !"0".equals(String.valueOf(response.get("return_code")))) {
@@ -59,7 +61,8 @@ public class KiwoomMarketClient {
             if (price <= 0) throw new IllegalArgumentException();
             return price;
         } catch (RuntimeException error) {
-            log.warn("event=kiwoom_response_invalid apiId=ka10001 stockCode={}", stockCode);
+            log.warn("event=kiwoom_response_invalid apiId=ka10001 stockCode={} stage=current_price_conversion causeType={}",
+                    stockCode, error.getClass().getSimpleName());
             throw new IllegalStateException("키움 현재가 응답 형식이 올바르지 않습니다.");
         }
     }
@@ -75,11 +78,15 @@ public class KiwoomMarketClient {
             response = transport.query("ka10081", "/api/dostk/chart",
                     Map.of("stk_cd", stockCode, "base_dt", day, "upd_stkpc_tp", "0"));
         } catch (RestClientException error) {
+            log.warn("event=kiwoom_market_lookup_failed stage=closing_price_query apiId=ka10081 stockCode={} tradeDate={} causeType={}",
+                    stockCode, day, error.getClass().getSimpleName());
             throw new IllegalStateException("키움 종가 조회에 실패했습니다.");
         }
         if (response == null || !"0".equals(String.valueOf(response.get("return_code")))
                 || !stockCode.equals(response.get("stk_cd"))
                 || !(response.get("stk_dt_pole_chart_qry") instanceof java.util.List<?> rows)) {
+            log.warn("event=kiwoom_response_invalid stage=closing_price_response apiId=ka10081 stockCode={} tradeDate={} returnCode={} detailCode={}",
+                    stockCode, day, safeReturnCode(response), safeDetailCode(response));
             throw new IllegalStateException("키움 종가 응답을 확인할 수 없습니다.");
         }
         for (Object row : rows) {
@@ -88,10 +95,14 @@ public class KiwoomMarketClient {
                     long price = number(values.get("cur_prc")).abs().longValueExact();
                     if (price > 0) return price;
                 } catch (RuntimeException error) {
+                    log.warn("event=kiwoom_response_invalid stage=closing_price_conversion apiId=ka10081 stockCode={} tradeDate={} causeType={}",
+                            stockCode, day, error.getClass().getSimpleName());
                     throw new IllegalStateException("키움 종가 형식이 올바르지 않습니다.");
                 }
             }
         }
+        log.warn("event=kiwoom_closing_price_unavailable stage=closing_price_selection apiId=ka10081 stockCode={} tradeDate={} code=MATCHING_POSITIVE_PRICE_MISSING",
+                stockCode, day);
         throw new IllegalStateException("해당 거래일의 종가가 아직 없습니다.");
     }
 
@@ -100,12 +111,12 @@ public class KiwoomMarketClient {
         var response = metadata == null ? stockInfoResponse(stockCode) : metadata(stockCode);
         if (!stockCode.equals(response.get("code")) || !(response.get("name") instanceof String name)
                 || name.isBlank()) {
-            log.warn("event=kiwoom_response_invalid apiId=ka10100 stockCode={} field=name", stockCode);
+            log.warn("event=kiwoom_response_invalid apiId=ka10100 stockCode={} field=name stage=stock_details_validation", stockCode);
             throw new IllegalStateException("키움 종목명 응답 형식이 올바르지 않습니다.");
         }
         Object sector = response.get("upName");
         if (sector != null && !(sector instanceof String)) {
-            log.warn("event=kiwoom_response_invalid apiId=ka10100 stockCode={} field=sector", stockCode);
+            log.warn("event=kiwoom_response_invalid apiId=ka10100 stockCode={} field=sector stage=stock_details_validation", stockCode);
             throw new IllegalStateException("키움 업종명 응답 형식이 올바르지 않습니다.");
         }
         return new StockDetails(stockCode, name, sector == null ? "" : ((String) sector).trim());
@@ -147,6 +158,8 @@ public class KiwoomMarketClient {
         try {
             response = transport.query("ka10100", "/api/dostk/stkinfo", Map.of("stk_cd", stockCode));
         } catch (RestClientException error) {
+            log.warn("event=kiwoom_market_lookup_failed stage=stock_info_query apiId=ka10100 stockCode={} causeType={}",
+                    stockCode, error.getClass().getSimpleName());
             throw new IllegalStateException("키움 종목정보 조회에 실패했습니다.");
         }
         if (response == null || !"0".equals(String.valueOf(response.get("return_code")))) {

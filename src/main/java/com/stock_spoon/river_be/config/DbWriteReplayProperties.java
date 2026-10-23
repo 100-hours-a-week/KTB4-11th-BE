@@ -8,7 +8,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class DbWriteReplayProperties {
     private boolean enabled;
     private String queueUrl = "";
-    private List<Integer> proxySqlErrorCodes = new ArrayList<>(List.of(9001));
+    private List<Integer> proxySqlErrorCodes =
+            new ArrayList<>(List.of(9001, DbMigrationWriteFallbackClassifier.MYSQL_READ_ONLY_SERVER));
 
     public boolean isEnabled() {
         return enabled;
@@ -32,7 +33,7 @@ public class DbWriteReplayProperties {
 
     public void setProxySqlErrorCodes(List<Integer> proxySqlErrorCodes) {
         this.proxySqlErrorCodes = proxySqlErrorCodes == null || proxySqlErrorCodes.isEmpty()
-                ? List.of(9001)
+                ? List.of(9001, DbMigrationWriteFallbackClassifier.MYSQL_READ_ONLY_SERVER)
                 : List.copyOf(proxySqlErrorCodes);
     }
 }

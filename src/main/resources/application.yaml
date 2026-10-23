@@ -44,6 +44,12 @@ jwt:
   access-expiration: ${JWT_ACCESS_EXPIRATION:15m}
   refresh-expiration: ${JWT_REFRESH_EXPIRATION:14d}
 
+loadtest:
+  token-issuer:
+    enabled: ${LOADTEST_TOKEN_ISSUER_ENABLED:false}
+    secret: ${LOADTEST_TOKEN_ISSUER_SECRET:}
+    user-ids: ${LOADTEST_TOKEN_ISSUER_USER_IDS:}
+
 kiwoom:
   app-key: ${KIWOOM_APP_KEY:}
   app-secret: ${KIWOOM_APP_SECRET:}

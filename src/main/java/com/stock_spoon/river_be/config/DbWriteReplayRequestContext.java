@@ -28,6 +28,7 @@ public class DbWriteReplayRequestContext {
         RequestState state = current.get();
         if (state == null) return;
 
+        state.dmlObserved = true;
         state.statements.add(statement);
         // A rolled-back auto-increment INSERT can receive a different ID on replay. Until
         // generated-key remapping exists, replaying later statements could corrupt references.
@@ -36,13 +37,18 @@ public class DbWriteReplayRequestContext {
 
     void markUnreplayableWrite() {
         RequestState state = current.get();
-        if (state != null) state.replayable = false;
+        if (state != null) {
+            state.dmlObserved = true;
+            state.replayable = false;
+        }
     }
 
-    void observeFallbackFailure(SQLException error, List<Map<String, Object>> statements, boolean replayable) {
+    void observeFallbackFailure(SQLException error, List<Map<String, Object>> statements,
+            boolean replayable, boolean dmlObserved) {
         RequestState state = current.get();
         if (state == null) return;
 
+        state.dmlObserved |= dmlObserved;
         if (state.proxySqlError != null && state.proxySqlError != error) {
             state.replayable = false;
         }
@@ -72,14 +78,20 @@ public class DbWriteReplayRequestContext {
     }
 
     boolean canEnqueue(SQLException error) {
+        return enqueueBlockReason(error) == null;
+    }
+
+    String enqueueBlockReason(SQLException error) {
         RequestState state = current.get();
-        return state != null
-                && state.proxySqlError == error
-                && state.rollbackConfirmed
-                && !state.committedTransactionSeen
-                && state.replayable
-                && !state.statements.isEmpty()
-                && state.accepted == null;
+        if (state == null) return "request_context_missing";
+        if (state.proxySqlError != error) return "fallback_error_not_observed";
+        if (state.accepted != null) return "already_accepted";
+        if (state.committedTransactionSeen) return "transaction_already_committed";
+        if (!state.rollbackConfirmed) return "rollback_not_confirmed";
+        if (!state.dmlObserved) return "no_dml_before_fallback";
+        if (!state.replayable) return "dml_not_replayable";
+        if (state.statements.isEmpty()) return "no_captured_sql";
+        return null;
     }
 
     ReplaySnapshot snapshot(SQLException error) {
@@ -116,6 +128,7 @@ public class DbWriteReplayRequestContext {
         @SuppressWarnings("unused")
         private final String writeId;
         private final List<Map<String, Object>> statements = new ArrayList<>();
+        private boolean dmlObserved;
         private SQLException proxySqlError;
         private boolean rollbackConfirmed;
         private boolean committedTransactionSeen;

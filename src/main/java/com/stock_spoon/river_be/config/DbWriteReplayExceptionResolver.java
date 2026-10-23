@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.http.MediaType;
 import org.springframework.web.servlet.HandlerExceptionResolver;
 import org.springframework.web.servlet.ModelAndView;
@@ -54,10 +55,22 @@ public class DbWriteReplayExceptionResolver implements HandlerExceptionResolver 
         DbWriteReplayRequestContext.AcceptedReplay accepted =
                 requestContext.acceptedReplay(fallbackError);
         if (accepted != null) return acceptedResponse(response, accepted);
-        if (!requestContext.canEnqueue(fallbackError)) return null;
+        String blockReason = requestContext.enqueueBlockReason(fallbackError);
+        if (blockReason != null) {
+            String requestId = MDC.get("requestId");
+            log.info("event=db_write_replay_skipped requestId={} reason={} sqlErrorCode={} sqlState={}",
+                    requestId == null ? "none" : requestId, blockReason,
+                    fallbackError.getErrorCode(), fallbackError.getSQLState());
+            return null;
+        }
 
         DbWriteReplayRequestContext.ReplaySnapshot snapshot = requestContext.snapshot(fallbackError);
-        if (snapshot == null) return null;
+        if (snapshot == null) {
+            String requestId = MDC.get("requestId");
+            log.info("event=db_write_replay_skipped requestId={} reason=snapshot_unavailable",
+                    requestId == null ? "none" : requestId);
+            return null;
+        }
 
         try {
             String messageBody = objectMapper.writeValueAsString(snapshot.envelope());

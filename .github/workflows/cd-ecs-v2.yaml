@@ -1,0 +1,225 @@
+name: Backend V2 ECS CD
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Existing ECR image tag (40-character commit SHA)
+        required: true
+        type: string
+      automatic:
+        description: Skip deployment if the image is no longer the dev branch head
+        default: false
+        type: boolean
+
+concurrency:
+  group: stockspoon-v2-prod-ecs-backend-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ap-northeast-2
+      ECS_CLUSTER: stockspoon-v2-prod-cluster
+      ECS_SERVICE: stockspoon-v2-prod-backend
+      TASK_FAMILY: stockspoon-v2-prod-backend
+      CONTAINER_NAME: backend
+      TASK_TEMPLATE: .aws/ecs/backend.json
+      IMAGE_REPOSITORY: public.ecr.aws/g8x9p1p0/stockspoon-v2-backend
+      IMAGE_TAG: ${{ inputs.image_tag }}
+    steps:
+      - name: Validate deployment source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTOMATIC: ${{ inputs.automatic }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid commit SHA' >&2; exit 1; }
+          if [[ "$AUTOMATIC" == 'true' ]]; then
+            current_dev_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/dev" --jq .sha)"
+            [[ "$current_dev_sha" =~ ^[0-9a-f]{40}$ ]]
+            if [[ "$IMAGE_TAG" != "$current_dev_sha" ]]; then
+              echo '::notice::Skipping stale automatic deployment'
+              echo 'deploy=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "IMAGE=${IMAGE_REPOSITORY}:${IMAGE_TAG}" >> "$GITHUB_ENV"
+          echo 'deploy=true' >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        if: steps.source.outputs.deploy == 'true'
+        with:
+          ref: ${{ inputs.image_tag }}
+          persist-credentials: false
+
+      - name: Verify task definition source
+        if: steps.source.outputs.deploy == 'true'
+        run: |
+          set -Eeuo pipefail
+          [[ "$(git rev-parse HEAD)" == "$IMAGE_TAG" ]]
+          jq -e --arg family "$TASK_FAMILY" --arg name "$CONTAINER_NAME" \
+            '.family == $family and ([.containerDefinitions[] | select(.name == $name)] | length) == 1' \
+            "$TASK_TEMPLATE" > /dev/null
+
+      - name: Configure AWS credentials with OIDC
+        if: steps.source.outputs.deploy == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_V2_ECS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Register task definition revision
+        if: steps.source.outputs.deploy == 'true'
+        id: register
+        run: |
+          set -Eeuo pipefail
+          started=$SECONDS
+          report_timing() {
+            local status=$?
+            echo "TIMING phase=register_task_definition seconds=$((SECONDS - started)) status=$status" | tee -a "$GITHUB_STEP_SUMMARY"
+          }
+          trap report_timing EXIT
+          jq --arg name "$CONTAINER_NAME" --arg image "$IMAGE" \
+            '.containerDefinitions |= map(if .name == $name then .image = $image else . end)' \
+            "$TASK_TEMPLATE" > next.json
+          arn="$(aws ecs register-task-definition --cli-input-json file://next.json \
+            --query taskDefinition.taskDefinitionArn --output text)"
+          [[ -n "$arn" && "$arn" != 'None' ]]
+          echo "task_definition_arn=$arn" >> "$GITHUB_OUTPUT"
+
+      - name: Update ECS service
+        if: steps.source.outputs.deploy == 'true'
+        id: update
+        env:
+          TASK_DEFINITION_ARN: ${{ steps.register.outputs.task_definition_arn }}
+        run: |
+          set -Eeuo pipefail
+          started=$SECONDS
+          report_timing() {
+            local status=$?
+            echo "TIMING phase=update_service seconds=$((SECONDS - started)) status=$status" | tee -a "$GITHUB_STEP_SUMMARY"
+          }
+          trap report_timing EXIT
+          response="$(aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" \
+            --task-definition "$TASK_DEFINITION_ARN")"
+          deployment_id="$(jq -r --arg arn "$TASK_DEFINITION_ARN" \
+            '[.service.deployments[] | select(.status == "PRIMARY" and .taskDefinition == $arn)] | .[0].id // empty' \
+            <<<"$response")"
+          [[ -n "$deployment_id" ]] || { echo 'New deployment not found' >&2; exit 1; }
+          echo "deployment_id=$deployment_id" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for deployment completion
+        if: steps.source.outputs.deploy == 'true'
+        env:
+          DEPLOYMENT_ID: ${{ steps.update.outputs.deployment_id }}
+          TASK_DEFINITION_ARN: ${{ steps.register.outputs.task_definition_arn }}
+        run: |
+          set -Eeuo pipefail
+          started=$SECONDS
+          fully_running=false
+          seen_events=' '
+          report_timing() {
+            local status=$?
+            echo "TIMING phase=ecs_rollout_wait seconds=$((SECONDS - started)) status=$status" | tee -a "$GITHUB_STEP_SUMMARY"
+          }
+          trap report_timing EXIT
+          deadline=$((SECONDS + 35 * 60))
+          print_events() {
+            aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].events[:10].[createdAt,message]' --output text || true
+          }
+          while (( SECONDS < deadline )); do
+            response="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE")"
+            deployment="$(jq --arg id "$DEPLOYMENT_ID" \
+            '[.services[0].deployments[]? | select(.id == $id)] | .[0] // null' <<<"$response")"
+            if ! jq -e --arg arn "$TASK_DEFINITION_ARN" \
+            '. != null and .status == "PRIMARY" and .taskDefinition == $arn' <<<"$deployment" > /dev/null; then
+              echo '::error::Deployment was rolled back, replaced or not returned'
+              print_events
+              exit 1
+            fi
+            state="$(jq -r .rolloutState <<<"$deployment")"
+            running="$(jq -r .runningCount <<<"$deployment")"
+            desired="$(jq -r .desiredCount <<<"$deployment")"
+            echo "TIMING phase=ecs_progress seconds=$((SECONDS - started)) state=$state running=$running/$desired pending=$(jq -r .pendingCount <<<"$deployment") failed=$(jq -r .failedTasks <<<"$deployment")"
+            if [[ "$fully_running" == 'false' ]] && (( desired > 0 && running >= desired )); then
+              fully_running=true
+              echo "TIMING phase=first_observed_new_tasks_running seconds=$((SECONDS - started))" | tee -a "$GITHUB_STEP_SUMMARY"
+            fi
+            # Service events distinguish target registration, draining and steady state.
+            while IFS=$'\t' read -r event_id created_at message; do
+              [[ -n "$event_id" ]] || continue
+              if [[ "$seen_events" != *" $event_id "* ]]; then
+                echo "ECS_EVENT at=$created_at message=$message"
+                seen_events+="$event_id "
+              fi
+            done < <(jq -r --arg since "$(jq -r .createdAt <<<"$deployment")" \
+              '.services[0].events // [] | sort_by(.createdAt)[] | select(.createdAt >= $since) | [.id, .createdAt, .message] | @tsv' <<<"$response")
+            case "$state" in
+              COMPLETED) exit 0 ;;
+              IN_PROGRESS) ;;
+              *)
+                echo "::error::Deployment failed: $(jq -r '.rolloutStateReason // .rolloutState' <<<"$deployment")"
+                print_events
+                exit 1
+                ;;
+            esac
+            sleep 15
+          done
+          echo '::error::Timed out waiting for deployment'
+          print_events
+          exit 1
+
+      - name: Collect optional ECS task timestamps
+        if: always() && steps.update.outputs.deployment_id != ''
+        timeout-minutes: 1
+        continue-on-error: true
+        env:
+          DEPLOYMENT_ID: ${{ steps.update.outputs.deployment_id }}
+        run: |
+          set -Eeuo pipefail
+          # Detailed timing is optional: the deployment role may only allow service reads.
+          if ! tasks="$(aws ecs list-tasks --cluster "$ECS_CLUSTER" --started-by "$DEPLOYMENT_ID" --output json)"; then
+            echo '::notice::Task timestamps unavailable; ecs:ListTasks permission is required. Service timing remains available.'
+            exit 0
+          fi
+          mapfile -t task_arns < <(jq -r '.taskArns[:100][]' <<<"$tasks")
+          if (( ${#task_arns[@]} == 0 )); then
+            echo '::notice::No running tasks found for this deployment.'
+            exit 0
+          fi
+          if ! details="$(aws ecs describe-tasks --cluster "$ECS_CLUSTER" --tasks "${task_arns[@]}" --output json)"; then
+            echo '::notice::Task timestamps unavailable; ecs:DescribeTasks permission is required.'
+            exit 0
+          fi
+          jq '.tasks[] | {taskArn, lastStatus, createdAt, pullStartedAt, pullStoppedAt, startedAt, stoppingAt, stoppedAt}' <<<"$details"
+
+      - name: Add deployment summary
+        if: always()
+        env:
+          RESULT: ${{ job.status }}
+          DEPLOY: ${{ steps.source.outputs.deploy }}
+          TASK_DEFINITION_ARN: ${{ steps.register.outputs.task_definition_arn }}
+          DEPLOYMENT_ID: ${{ steps.update.outputs.deployment_id }}
+        run: |
+          {
+            echo '### V2 ECS deployment'
+            echo "- commit: $IMAGE_TAG"
+            echo "- image: ${IMAGE:-unresolved}"
+            echo "- service: $ECS_CLUSTER/$ECS_SERVICE"
+            echo "- task definition: $TASK_DEFINITION_ARN"
+            echo "- deployment: $DEPLOYMENT_ID"
+            if [[ "$DEPLOY" == 'false' ]]; then
+              echo '- result: skipped (stale automatic deployment)'
+            else
+              echo "- result: $RESULT"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -49,6 +49,15 @@ jobs:
       - name: Build
         run: ./gradlew build --build-cache
 
+      - name: Upload tested application JAR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-jar-${{ github.sha }}
+          path: build/libs/application.jar
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
 
       # SpotBugs 검사 실패 시 결과를 확인할 수 있도록 Report를 남긴다
       - name: Upload SpotBugs report
@@ -63,6 +72,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
     runs-on: ubuntu-26.04
     permissions:
+      actions: write
       contents: read
       id-token: write
     env:
@@ -73,6 +83,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Download tested application JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-jar-${{ github.sha }}
+          path: build/libs
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
 
       - name: Configure AWS credentials with OIDC
         uses: aws-actions/configure-aws-credentials@v4
@@ -86,19 +105,23 @@ jobs:
           registry-type: public
 
       - name: Build and push V2 backend image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=backend-v2
+          cache-to: type=gha,scope=backend-v2,mode=max
+
+      # 별도 CD 실행을 요청하고 배포 완료를 기다리지 않는다.
+      - name: Dispatch independent development and ECS deployments
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -Eeuo pipefail
-          IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
-          docker build -t "$IMAGE_URI" .
-          docker push "$IMAGE_URI"
-
-  deploy-dev:
-    needs: push-image
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/cd-dev.yaml
-    with:
-      image_tag: ${{ github.sha }}
-    secrets: inherit
+          dispatch_status=0
+          gh workflow run cd-dev.yaml --ref dev -f "image_tag=$IMAGE_TAG" -f automatic=true || dispatch_status=1
+          gh workflow run cd-ecs-v2.yaml --ref dev -f "image_tag=$IMAGE_TAG" -f automatic=true || dispatch_status=1
+          exit "$dispatch_status"

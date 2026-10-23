@@ -184,10 +184,7 @@ public class OrderService {
     }
 
     private void assertAccountSource(Account account, Order.Source source) {
-        if (source == null || account.isAiManaged() != (source == Order.Source.AI)) {
-            throw new OrderException(HttpStatus.FORBIDDEN, "FORBIDDEN_ACCOUNT",
-                    "주문 주체와 계좌 운용 유형이 일치하지 않습니다.");
-        }
+        OrderAccountSourceValidator.assertAllowed(account, source);
     }
 
     private long availableCash(Account account) {

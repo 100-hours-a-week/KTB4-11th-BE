@@ -130,6 +130,7 @@ limit_price=null, order_status=executed, reserved_cash=0과 executions를 반환
 | 403 INVALID_CSRF_TOKEN | 활성화된 CSRF 검사 실패 |
 | 403 INVALID_ORDER_ACTOR | actor 누락 또는 AI/USER 이외 값 |
 | 403 FORBIDDEN_ACCOUNT | 계좌 소유권·활성 또는 운용 유형 검사 실패 |
+| 403 LEGACY_ACCOUNT_USER_ORDER_NOT_ALLOWED | USER 요청이 AI 운용 계좌와 불일치하며 계좌 생성 시각이 2026-10-20 22:00 KST 미만. 새 계좌 생성 안내 |
 | 409 COMPETITION_NOT_IN_PROGRESS | 대결 거래 제한 |
 | 409 ORDER_WINDOW_CLOSED | 시장가 장외·주말 또는 잠금/처리 중 마감 도달 |
 | 503 MARKET_STREAM_UNAVAILABLE | 구독·출처·호가 도착 대기 실패 |

@@ -147,10 +147,7 @@ public class OrderExecutionService {
                     "FORBIDDEN_ACCOUNT", "이 계좌에 주문할 권한이 없습니다.");
         }
         if (!account.isActive()) throw new OrderException("활성 계좌가 아닙니다.");
-        if (account.isAiManaged() != (source == Order.Source.AI)) {
-            throw new OrderException(HttpStatus.FORBIDDEN, "FORBIDDEN_ACCOUNT",
-                    "주문 주체와 계좌 운용 유형이 일치하지 않습니다.");
-        }
+        com.stock_spoon.river_be.order.service.OrderAccountSourceValidator.assertAllowed(account, source);
         if (accounts.hasNonTradingCompetition(accountId, clock.instant().atZone(SEOUL))) {
             throw new OrderException(HttpStatus.CONFLICT, "COMPETITION_NOT_IN_PROGRESS", "진행 중인 대결만 주문할 수 있습니다.");
         }

@@ -433,6 +433,26 @@ class OrderControllerTests {
         org.mockito.Mockito.verifyNoInteractions(stream);
     }
 
+    @Test
+    void legacyAiAccountUserOrdersReturnSpecificErrorBeforeQuoteOrReservation() throws Exception {
+        org.springframework.test.util.ReflectionTestUtils.setField(account, "createdAt",
+                Instant.parse("2026-10-20T12:59:59Z"));
+        var cookie = new Cookie("access_token", tokens.issue(user.getId()).accessToken());
+        for (String type : java.util.List.of("limit", "market")) {
+            String body = """
+                    {"stock_code":"005930","order_side":"buy","order_type":"%s","quantity":1,"limit_price":%s}
+                    """.formatted(type, type.equals("limit") ? "70000" : "null");
+            mvc.perform(post("/api/v1/accounts/{accountId}/orders", account.getId())
+                            .cookie(cookie).with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.code").value("LEGACY_ACCOUNT_USER_ORDER_NOT_ALLOWED"))
+                    .andExpect(jsonPath("$.message").value("이전 버전에서 생성된 계좌는 사용자 직접 주문을 지원하지 않습니다. 새 계좌를 생성해 주세요."));
+        }
+        assertThat(orders.count()).isZero();
+        assertThat(executions.count()).isZero();
+        org.mockito.Mockito.verifyNoInteractions(stream);
+    }
+
     private com.stock_spoon.river_be.market.QuoteEvent validMarketQuote() {
         var now = MarketHours.now.get();
         var levels = java.util.List.of(new QuoteLevel(java.math.BigDecimal.valueOf(70000), 100));

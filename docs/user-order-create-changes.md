@@ -67,8 +67,41 @@ JWT 서명·발급자·유효기간·토큰 종류 검증은 기존 Security 설
 | AI | `is_ai_managed=true` | 수동 운용 계좌 |
 | USER | `is_ai_managed=false` | AI 운용 계좌 |
 
-주체와 계좌 유형이 다르거나 source가 null이면 `403 FORBIDDEN_ACCOUNT`로 거부한다.
+주체와 계좌 유형이 다르거나 source가 null이면 기본적으로 `403 FORBIDDEN_ACCOUNT`로 거부한다. 아래 v1 계좌 사용자 요청만 전용 오류를 반환한다.
 source를 받지 않는 기존 메서드는 AI를 기본값으로 유지한다.
+
+### 2026-10-23: v1 계좌 사용자 주문 안내
+
+`account.entity.Account.getCreatedAt()`을 추가하고 `order.service.OrderAccountSourceValidator.assertAllowed(account, source)`가 계좌 유형 검증을 공통으로 수행하도록 수정했다. `OrderService.assertAccountSource()`와 `execution.service.OrderExecutionService`의 시장가 잠금 후 검사가 이를 호출한다. 별도 예외 클래스 대신 기존 OrderException의 코드·메시지를 사용한다.
+
+```text
+POST /api/v1/accounts/{accountId}/orders
+ → order.controller.OrderController.create(jwt, accountId, request, eventId)
+ → JWT actor를 Order.Source로 변환
+ → OrderService.assertOrderableAccount(userId, accountId, source)
+   → 소유자·활성 계좌 조회
+   → assertAccountSource(account, source)
+     → OrderAccountSourceValidator.assertAllowed(account, source)
+       → 유형 일치: 통과
+       → USER + AI 계좌 + createdAt < 2026-10-20T13:00:00Z: 전용 403
+       → 그 외 불일치: 기존 FORBIDDEN_ACCOUNT
+ → 정상 계좌만 기존 주문 처리 진행
+```
+
+Controller는 인증된 JWT subject의 사용자 ID, URL 계좌 ID, actor에서 결정한 source를 OrderService에 전달한다. Service는 계좌 소유권·활성을 먼저 확인한 뒤 공통 검증에 계좌와 source를 전달한다. 기준은 **2026-10-20 22:00 KST 이전**이며 Instant 비교값은 같은 시각인 `2026-10-20T13:00:00Z`다. 정확히 기준 시각에 생성된 계좌는 v1 안내 대상에서 제외한다.
+
+유형 불일치 중 USER 요청·AI 계좌·기준 이전 생성 조건을 모두 만족하면 다음을 반환한다. AI 요청의 불일치, 기준 이후 AI 계좌, 생성 시각을 확인할 수 없는 계좌는 기존 오류를 유지한다. 이전에 만들어진 수동 계좌라도 유형이 일치하면 기존대로 통과한다. DB 데이터 변경·자동 계좌 전환·주문 허용 확대는 하지 않는다.
+
+```json
+{
+  "code": "LEGACY_ACCOUNT_USER_ORDER_NOT_ALLOWED",
+  "message": "이전 버전에서 생성된 계좌는 사용자 직접 주문을 지원하지 않습니다. 새 계좌를 생성해 주세요."
+}
+```
+
+잠금 후 지정가·시장가 검사와 `order.messaging.OrderRequestTransactions.admit()/process()`가 호출하는 assertOrderableAccount에도 동일 규칙이 적용된다. FE는 이 오류 코드를 기준으로 안내할 수 있다. 기존 DB created_at이 실제 생성 시점을 올바르게 기록했다는 전제이며 운영 DB 시간대·저장값을 이번 코드 변경으로 보정하지 않는다.
+
+검증: OrderAccountSourceValidatorTests는 기준 직전·정각·직후, AI 불일치, 정상 유형, 생성 시각 누락·source null을 검사한다. OrderControllerTests는 v1 AI 계좌의 USER 지정가·시장가 요청이 주문·체결·시세 구독 없이 전용 403을 반환하는지 확인한다.
 
 ### reserveLimit()
 

@@ -75,7 +75,8 @@ public class DbWriteReplayQueryListener implements QueryExecutionListener {
         }
 
         if (fallbackError != null) {
-            requestContext.observeFallbackFailure(fallbackError, failedWrites, sawWrite && replayable);
+            requestContext.observeFallbackFailure(
+                    fallbackError, failedWrites, sawWrite && replayable, sawWrite);
         }
     }
 

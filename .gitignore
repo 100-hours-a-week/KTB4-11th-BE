@@ -38,3 +38,7 @@ out/
 
 # Local database credentials
 .env.local
+
+# Local k6 access-token fixtures; do not commit credentials.
+loadtest/k6/k6-users*.json
+loadtest/k6/private/

@@ -65,3 +65,7 @@ tasks.named('test') {
 	useJUnitPlatform()
 	systemProperty 'test.runtime.classpath', sourceSets.test.runtimeClasspath.asPath
 }
+
+tasks.named('bootJar') {
+    archiveFileName = 'application.jar'
+}

@@ -99,6 +99,15 @@ jobs:
           script: |
             set -Eeuo pipefail
             umask 077
+            deploy_started=$SECONDS
+            timed() {
+              local phase="$1" started=$SECONDS status
+              shift
+              echo "TIMING phase=$phase event=start"
+              if "$@"; then status=0; else status=$?; fi
+              echo "TIMING phase=$phase seconds=$((SECONDS - started)) status=$status"
+              return "$status"
+            }
 
             : "${IMAGE_TAG:?IMAGE_TAG is required}"
             [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]] || { echo "Invalid image tag: $IMAGE_TAG" >&2; exit 1; }
@@ -111,7 +120,7 @@ jobs:
             [[ -f "$COMPOSE_FILE" ]] || { echo "Missing $COMPOSE_FILE" >&2; exit 1; }
 
             exec 9>"$APP_DIR/.deploy.lock"
-            flock -x 9
+            timed lock_wait flock -x 9
 
             read_tag() {
               awk -F= -v key="$TAG_KEY" '$1 == key { value = substr($0, length(key) + 2) } END { print value }' "$ENV_FILE"
@@ -141,32 +150,41 @@ jobs:
             rollback() {
               local status=$?
               trap - EXIT
+              echo "TIMING phase=deployment_before_rollback seconds=$((SECONDS - deploy_started)) status=$status"
               if [[ "$OLD_TAG" =~ ^[0-9a-f]{40}$ ]]; then
                 echo "Deployment failed; restoring backend tag $OLD_TAG" >&2
                 set +e
                 write_tag "$OLD_TAG"
-                "${COMPOSE[@]}" pull "$SERVICE"
-                "${COMPOSE[@]}" up -d "$SERVICE"
-                "${COMPOSE[@]}" up -d --force-recreate nginx
+                timed rollback_pull "${COMPOSE[@]}" pull "$SERVICE"
+                timed rollback_recreate "${COMPOSE[@]}" up -d "$SERVICE"
+                timed rollback_nginx "${COMPOSE[@]}" up -d --force-recreate nginx
               else
                 echo "Deployment failed and there was no previous valid backend tag to restore." >&2
               fi
+              echo "TIMING phase=deployment_total seconds=$((SECONDS - deploy_started)) status=$status"
               exit "$status"
             }
             trap rollback EXIT
 
             write_tag "$IMAGE_TAG"
-            "${COMPOSE[@]}" pull "$SERVICE"
-            "${COMPOSE[@]}" up -d "$SERVICE"
+            timed image_pull "${COMPOSE[@]}" pull "$SERVICE"
+            timed container_recreate "${COMPOSE[@]}" up -d "$SERVICE"
 
             CONTAINER_NAME="stockspoon-v2-dev-${SERVICE}"
             HEALTH_STATUS=""
+            health_started=$SECONDS
+            previous_health=""
             for attempt in $(seq 1 60); do
               HEALTH_STATUS="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+              if [[ "$HEALTH_STATUS" != "$previous_health" ]]; then
+                echo "TIMING phase=health_transition seconds=$((SECONDS - health_started)) state=${HEALTH_STATUS:-missing}"
+                previous_health="$HEALTH_STATUS"
+              fi
               [[ "$HEALTH_STATUS" == "healthy" ]] && break
               [[ "$HEALTH_STATUS" == "unhealthy" || "$HEALTH_STATUS" == "exited" || "$HEALTH_STATUS" == "dead" ]] && break
               sleep 5
             done
+            echo "TIMING phase=health_wait seconds=$((SECONDS - health_started)) state=${HEALTH_STATUS:-missing}"
             if [[ "$HEALTH_STATUS" != "healthy" ]]; then
               "${COMPOSE[@]}" logs --tail=100 "$SERVICE" || true
               echo "Backend did not become healthy (state: ${HEALTH_STATUS:-missing})." >&2
@@ -175,20 +193,25 @@ jobs:
 
             OTHER_STATUS="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' stockspoon-v2-dev-frontend 2>/dev/null || true)"
             if [[ "$OTHER_STATUS" == "healthy" ]]; then
-              "${COMPOSE[@]}" up -d --force-recreate nginx
+              timed nginx_recreate "${COMPOSE[@]}" up -d --force-recreate nginx
             else
               echo "Frontend is not healthy yet; Nginx will start after its first successful deployment."
             fi
 
             trap - EXIT
+            echo "TIMING phase=deployment_total seconds=$((SECONDS - deploy_started)) status=0"
             echo "Deployed backend image ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
 
       - name: Add deployment summary
         if: always()
+        env:
+          DEPLOY_HOST: ${{ secrets.EC2_HOST }}
+          RESULT: ${{ job.status }}
         run: |
           {
             echo "### Backend V2 development deployment"
-            echo "- image: `${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}`"
-            echo "- host: `${{ secrets.EC2_HOST }}`"
-            echo "- result: `${{ job.status }}`"
+            echo "- image: ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}"
+            echo "- host: $DEPLOY_HOST"
+            echo "- result: $RESULT"
+            echo '- phase durations: search for TIMING in the SSH deployment step log'
           } >> "$GITHUB_STEP_SUMMARY"

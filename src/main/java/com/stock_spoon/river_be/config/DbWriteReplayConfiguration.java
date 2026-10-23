@@ -18,9 +18,12 @@ import software.amazon.awssdk.services.sqs.SqsClient;
 @ConditionalOnProperty(prefix = "db-write-replay", name = "enabled", havingValue = "true")
 @EnableConfigurationProperties(DbWriteReplayProperties.class)
 public class DbWriteReplayConfiguration {
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(DbWriteReplayConfiguration.class);
     @Bean(destroyMethod = "close")
     SqsClient dbWriteReplaySqsClient(DbWriteReplayProperties properties) {
         if (properties.getQueueUrl().isBlank() || !properties.getQueueUrl().endsWith(".fifo")) {
+            log.error("event=db_write_replay_configuration_failed stage=sqs_client code=FIFO_QUEUE_URL_REQUIRED");
             throw new IllegalStateException(
                     "DB_WRITE_REPLAY_QUEUE_URL must point to an SQS FIFO queue when replay is enabled");
         }

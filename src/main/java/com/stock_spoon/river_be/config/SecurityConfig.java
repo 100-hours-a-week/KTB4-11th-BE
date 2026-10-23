@@ -132,7 +132,7 @@ public class SecurityConfig {
 
     private void writeError(HttpServletResponse response, int status, String code, String message)
             throws java.io.IOException {
-        log.warn("event=security_rejected status={} code={}", status, code);
+        log.warn("event=security_rejected status={} code={} stage=security_filter_chain", status, code);
         response.setStatus(status);
         response.setContentType("application/json;charset=UTF-8");
         response.getWriter().write("{\"code\":\"" + code + "\",\"message\":\"" + message + "\"}");

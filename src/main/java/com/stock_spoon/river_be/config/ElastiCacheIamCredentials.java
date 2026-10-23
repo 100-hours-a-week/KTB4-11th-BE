@@ -58,7 +58,9 @@ final class ElastiCacheIamCredentials implements RedisCredentialsProvider {
 
     private Mono<RedisCredentials> refresh() {
         return resolveCredentials().onErrorResume(error -> {
-            log.warn("event=redis_iam_refresh_failed causeType={}", error.getClass().getSimpleName());
+            log.warn("event=redis_iam_refresh_failed causeType={} stage=credentials_refresh nestedCauseType={}",
+                    error.getClass().getSimpleName(),
+                    error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
             return Mono.empty();
         });
     }

@@ -41,7 +41,9 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
             chain.doFilter(request, response);
         } catch (ServletException | IOException | RuntimeException error) {
             failed = true;
-            log.error("event=http_request_failed causeType={}", error.getClass().getSimpleName());
+            log.error("event=http_request_failed stage=request_processing method={} route={} causeType={} nestedCauseType={}",
+                    request.getMethod(), routePattern(request), error.getClass().getSimpleName(),
+                    error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
             logSqlExceptionIfPresent(request, error);
             throw error;
         } finally {

@@ -21,6 +21,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 /** Captures ordered transactional DML and JDBC bind operations for replay. */
 public class DbWriteReplayQueryListener implements QueryExecutionListener {
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(DbWriteReplayQueryListener.class);
     private static final Pattern WRITE_SQL =
             Pattern.compile("(?i)^(INSERT|UPDATE|DELETE|REPLACE)\\b");
     private static final Pattern INSERT_OR_REPLACE_SQL =
@@ -58,6 +60,8 @@ public class DbWriteReplayQueryListener implements QueryExecutionListener {
                         requestContext.recordSuccessfulWrite(
                                 toReplayStatement(queryInfo), mayDependOnGeneratedKey(queryInfo.getQuery()));
                     } catch (RuntimeException unsupportedBindValue) {
+                        log.warn("event=db_write_replay_capture_failed stage=successful_write_capture code=UNREPLAYABLE_WRITE causeType={}",
+                                unsupportedBindValue.getClass().getSimpleName());
                         requestContext.markUnreplayableWrite();
                     }
                     continue;
@@ -69,6 +73,9 @@ public class DbWriteReplayQueryListener implements QueryExecutionListener {
                 try {
                     failedWrites.add(toReplayStatement(queryInfo));
                 } catch (RuntimeException unsupportedBindValue) {
+                    log.warn("event=db_write_replay_capture_failed stage=failed_write_capture code=UNREPLAYABLE_WRITE causeType={} sqlErrorCode={} sqlState={}",
+                            unsupportedBindValue.getClass().getSimpleName(),
+                            fallbackError.getErrorCode(), fallbackError.getSQLState());
                     replayable = false;
                 }
             }

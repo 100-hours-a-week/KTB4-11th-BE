@@ -97,9 +97,10 @@ public class DbWriteReplayExceptionResolver implements HandlerExceptionResolver 
                     fallbackError.getErrorCode(), fallbackError.getSQLState());
             return acceptedResponse(response, accepted);
         } catch (Exception enqueueFailure) {
-            log.error("event=db_write_replay_enqueue_failed requestId={} sqlErrorCode={} sqlState={} failureType={}",
+            log.error("event=db_write_replay_enqueue_failed requestId={} sqlErrorCode={} sqlState={} failureType={} stage=replay_enqueue replayRequestId={} transactionId={} nestedCauseType={}",
                     snapshot.httpRequestId(), fallbackError.getErrorCode(), fallbackError.getSQLState(),
-                    enqueueFailure.getClass().getSimpleName());
+                    enqueueFailure.getClass().getSimpleName(), snapshot.replayRequestId(), snapshot.transactionId(),
+                    enqueueFailure.getCause() == null ? "none" : enqueueFailure.getCause().getClass().getSimpleName());
             return null;
         }
     }
@@ -118,8 +119,9 @@ public class DbWriteReplayExceptionResolver implements HandlerExceptionResolver 
         try {
             objectMapper.writeValue(response.getOutputStream(), body);
         } catch (IOException writeFailure) {
-            log.warn("event=db_write_replay_response_write_failed requestId={} failureType={}",
-                    accepted.httpRequestId(), writeFailure.getClass().getSimpleName());
+            log.warn("event=db_write_replay_response_write_failed requestId={} failureType={} stage=accepted_response_write replayRequestId={} transactionId={}",
+                    accepted.httpRequestId(), writeFailure.getClass().getSimpleName(),
+                    accepted.replayRequestId(), accepted.transactionId());
         }
         return new ModelAndView();
     }

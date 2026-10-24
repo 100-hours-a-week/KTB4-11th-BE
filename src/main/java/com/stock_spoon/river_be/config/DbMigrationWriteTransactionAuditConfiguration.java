@@ -11,8 +11,7 @@ import org.springframework.transaction.TransactionExecution;
 import org.springframework.transaction.TransactionExecutionListener;
 
 /**
- * Adds log-only commit/rollback observations to Spring-managed transactions.
- * No SQL, schema, transaction boundary, or business behavior is changed.
+ * Tracks Spring transaction completion for replay and logs commit/rollback outcomes.
  */
 @Configuration(proxyBeanMethods = false)
 public class DbMigrationWriteTransactionAuditConfiguration {
@@ -20,18 +19,9 @@ public class DbMigrationWriteTransactionAuditConfiguration {
             LoggerFactory.getLogger(DbMigrationWriteTransactionAuditConfiguration.class);
 
     @Bean
-    static BeanPostProcessor dbMigrationWriteTransactionAuditConfigurer() {
-        TransactionExecutionListener listener = new TransactionExecutionListener() {
-            @Override
-            public void afterCommit(TransactionExecution transaction, Throwable failure) {
-                logOutcome(transaction, failure == null ? "commit_confirmed" : "commit_unconfirmed", failure);
-            }
-
-            @Override
-            public void afterRollback(TransactionExecution transaction, Throwable failure) {
-                logOutcome(transaction, failure == null ? "rollback_confirmed" : "rollback_unconfirmed", failure);
-            }
-        };
+    static BeanPostProcessor dbMigrationWriteTransactionAuditConfigurer(
+            DbWriteReplayRequestContext writeReplayContext) {
+        TransactionExecutionListener listener = replayTransactionListener(writeReplayContext);
 
         return new BeanPostProcessor() {
             @Override
@@ -40,6 +30,28 @@ public class DbMigrationWriteTransactionAuditConfiguration {
                     manager.addListener(listener);
                 }
                 return bean;
+            }
+        };
+    }
+
+    static TransactionExecutionListener replayTransactionListener(
+            DbWriteReplayRequestContext writeReplayContext) {
+        return new TransactionExecutionListener() {
+            @Override
+            public void afterBegin(TransactionExecution transaction, Throwable failure) {
+                if (failure == null) writeReplayContext.beginTransaction(transaction);
+            }
+
+            @Override
+            public void afterCommit(TransactionExecution transaction, Throwable failure) {
+                writeReplayContext.markTransactionCommitted(transaction, failure == null);
+                logOutcome(transaction, failure == null ? "commit_confirmed" : "commit_unconfirmed", failure);
+            }
+
+            @Override
+            public void afterRollback(TransactionExecution transaction, Throwable failure) {
+                writeReplayContext.markTransactionRolledBack(transaction, failure);
+                logOutcome(transaction, failure == null ? "rollback_confirmed" : "rollback_unconfirmed", failure);
             }
         };
     }

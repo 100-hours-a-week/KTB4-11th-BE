@@ -31,11 +31,14 @@ import tools.jackson.databind.json.JsonMapper;
 @ConditionalOnProperty(name="order.queue.enabled",havingValue="true")
 @Import(SqsBootstrapConfiguration.class)
 public class OrderQueueConfiguration {
+    private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(OrderQueueConfiguration.class);
     @Bean(destroyMethod="close")
     SqsAsyncClient orderSqsClient(@Value("${order.queue.region:ap-northeast-2}") String region,
             @Value("${order.queue.url}") String url) {
-        if(!url.startsWith("https://sqs."+region+".amazonaws.com/") || !url.endsWith(".fifo"))
+        if(!url.startsWith("https://sqs."+region+".amazonaws.com/") || !url.endsWith(".fifo")) {
+            log.error("event=order_queue_configuration_failed stage=sqs_client code=REGIONAL_FIFO_QUEUE_URL_REQUIRED");
             throw new IllegalStateException("ORDER_QUEUE_URL must be a regional SQS FIFO queue URL");
+        }
         return SqsAsyncClient.builder().region(Region.of(region))
                 .credentialsProvider(DefaultCredentialsProvider.builder().build())
                 .overrideConfiguration(c->c.apiCallTimeout(Duration.ofSeconds(45)).apiCallAttemptTimeout(Duration.ofSeconds(35))).build();

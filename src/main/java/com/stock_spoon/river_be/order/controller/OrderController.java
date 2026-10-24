@@ -176,6 +176,8 @@ public class OrderController {
                     try {
                         stream.assertSource(request.stockCode(), quote.source());
                     } catch (RuntimeException error) {
+                        log.warn("event=market_order_source_check_failed stage=quote_source_validation accountId={} stockCode={} causeType={}",
+                                accountId, request.stockCode(), error.getClass().getSimpleName());
                         throw new OrderException(HttpStatus.SERVICE_UNAVAILABLE, "MARKET_STREAM_UNAVAILABLE",
                                 "사용 가능한 최신 호가를 확인할 수 없습니다.");
                     }

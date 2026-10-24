@@ -51,6 +51,8 @@ public class OrderSubscriptionService {
             try {
                 synchronized (this) { updateSubscriptions(); }
             } catch (RuntimeException error) {
+                log.warn("event=order_quote_acquisition_failed stage=subscription_update stockCode={} causeType={}",
+                        stockCode, error.getClass().getSimpleName());
                 throw unavailableMarketStream();
             }
             return execute.apply(awaitMarketQuote(stockCode));
@@ -75,13 +77,19 @@ public class OrderSubscriptionService {
                     return quote;
                 }
             } catch (RuntimeException error) {
+                log.warn("event=order_quote_acquisition_failed stage=quote_lookup_and_source_check stockCode={} causeType={}",
+                        stockCode, error.getClass().getSimpleName());
                 throw unavailableMarketStream();
             }
             long remaining = quoteTimeoutNanos - (System.nanoTime() - started);
-            if (remaining <= 0) throw unavailableMarketStream();
+            if (remaining <= 0) {
+                log.warn("event=order_quote_acquisition_failed stage=quote_wait stockCode={} code=QUOTE_WAIT_TIMEOUT", stockCode);
+                throw unavailableMarketStream();
+            }
             try {
                 java.util.concurrent.TimeUnit.NANOSECONDS.sleep(Math.min(remaining, Duration.ofMillis(50).toNanos()));
             } catch (InterruptedException error) {
+                log.warn("event=order_quote_acquisition_failed stage=quote_wait stockCode={} code=QUOTE_WAIT_INTERRUPTED", stockCode);
                 Thread.currentThread().interrupt();
                 throw unavailableMarketStream();
             }
@@ -119,7 +127,9 @@ public class OrderSubscriptionService {
             updateSubscriptions();
         } catch (RuntimeException error) {
             // 주문은 DB에 유지된다. 다음 주기에 구독을 재시도한다.
-            log.warn("event=order_subscription_refresh_failed causeType={}", error.getClass().getSimpleName());
+            log.warn("event=order_subscription_refresh_failed causeType={} stage=subscription_refresh nestedCauseType={}",
+                    error.getClass().getSimpleName(),
+                    error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
         }
     }
 }

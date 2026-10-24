@@ -11,7 +11,7 @@ public class OrderExceptionHandler {
     @ExceptionHandler(OrderException.class)
     ResponseEntity<Map<String, String>> handle(OrderException error) {
         var level = error.status().is5xxServerError() ? log.atError() : log.atWarn();
-        level.log("event=api_rejected status={} code={}", error.status().value(), error.code());
+        level.log("event=api_rejected status={} code={} stage=order_exception_handler", error.status().value(), error.code());
         return ResponseEntity.status(error.status())
                 .body(Map.of("code", error.code(), "message", error.getMessage()));
     }

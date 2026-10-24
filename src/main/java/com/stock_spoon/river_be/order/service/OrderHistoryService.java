@@ -70,7 +70,7 @@ public class OrderHistoryService {
         log.debug("주문내역 조회 시작 accountId={} limit={} requestedStatus={}", accountId, count, selectedStatus);
         Snapshot snapshot = read.execute(status -> {
             var account = accounts.findByIdAndUserIdAndActiveTrue(accountId, userId).orElseThrow(() -> {
-                log.warn("주문내역 계좌 접근 실패 accountId={} code=ACCOUNT_NOT_FOUND", accountId);
+                log.warn("event=order_history_rejected stage=account_lookup 주문내역 계좌 접근 실패 accountId={} code=ACCOUNT_NOT_FOUND", accountId);
                 return new OrderException(HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND", "계좌를 찾을 수 없습니다.");
             });
             competitionAccess.check(userId, accountId, false);
@@ -89,7 +89,7 @@ public class OrderHistoryService {
             var rows = candidates.stream().map(o -> {
                 var fills = byOrder.getOrDefault(o.getId(), List.of());
                 if (o.getStatus() == Order.Status.EXECUTED && fills.isEmpty()) {
-                    log.error("주문내역 체결 데이터 오류 accountId={} orderId={} count={}", accountId, o.getId(), fills.size());
+                    log.error("event=order_history_failed stage=execution_data_validation code=INVALID_ORDER_DATA 주문내역 체결 데이터 오류 accountId={} orderId={} count={}", accountId, o.getId(), fills.size());
                     throw new OrderException(HttpStatus.INTERNAL_SERVER_ERROR, "INVALID_ORDER_DATA", "주문 체결 데이터를 확인해주세요.");
                 }
                 return snapshot(o, fills);
@@ -103,7 +103,7 @@ public class OrderHistoryService {
             try {
                 return market.stockDetails(code).stockName();
             } catch (IllegalStateException error) {
-                log.error("주문내역 종목 조회 실패 accountId={} stockCode={} causeType={}",
+                log.error("event=order_history_failed stage=stock_details_lookup code=ORDER_DATA_UNAVAILABLE 주문내역 종목 조회 실패 accountId={} stockCode={} causeType={}",
                         accountId, code, error.getClass().getSimpleName());
                 throw new OrderException(HttpStatus.SERVICE_UNAVAILABLE, "ORDER_DATA_UNAVAILABLE", "주문 종목 정보를 조회할 수 없습니다.");
             }
@@ -181,7 +181,7 @@ public class OrderHistoryService {
     }
 
     private OrderException invalidQuery() {
-        log.warn("주문내역 조회 조건 오류 code=INVALID_ORDER_QUERY");
+        log.warn("event=order_history_rejected stage=query_validation 주문내역 조회 조건 오류 code=INVALID_ORDER_QUERY");
         return new OrderException(HttpStatus.BAD_REQUEST, "INVALID_ORDER_QUERY", "page, limit, order_side, order_status, stock_code 값을 확인해주세요.");
     }
 

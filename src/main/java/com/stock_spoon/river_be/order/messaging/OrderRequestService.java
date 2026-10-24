@@ -52,6 +52,8 @@ public class OrderRequestService {
         String messageId;
         try { messageId=publisher.publish(r.message()); }
         catch(RuntimeException e) {
+            log.warn("event=order_request_publication_uncertain stage=queue_publication eventId={} correlationId={} accountId={} causeType={}",
+                    r.message().eventId(),r.message().correlationId(),r.message().accountId(),e.getClass().getSimpleName());
             // Keep the reservation and original payload: network errors may follow a successful send.
             throw new OrderException(HttpStatus.SERVICE_UNAVAILABLE,"ORDER_PUBLICATION_UNCERTAIN",
                     "주문 전송을 확인 중입니다. 같은 요청 ID로 결과를 확인하세요.");
@@ -59,7 +61,10 @@ public class OrderRequestService {
         log.info("event=order_request_published messageId={} correlationId={} eventId={}",messageId,r.message().correlationId(),r.message().eventId());
         // If this fails, recovery can republish using the same ID; the message has already been accepted.
         try { store.published(r,clock.instant()); }
-        catch(RuntimeException e) { log.warn("event=order_publish_marker_failed eventId={}",r.message().eventId()); }
+        catch(RuntimeException e) {
+            log.warn("event=order_publish_marker_failed eventId={} stage=publication_marker correlationId={} accountId={} messageId={} causeType={}",
+                    r.message().eventId(),r.message().correlationId(),r.message().accountId(),messageId,e.getClass().getSimpleName());
+        }
     }
     public OrderRequestRecord consume(OrderRequestMessage m) {
         var done=transactions.find(m);
@@ -74,9 +79,15 @@ public class OrderRequestService {
                             ()->stream.assertSource(m.request().stockCode(),q.source())));
                 } else done=transactions.process(m,null,Map.of(),()->{});
             } catch(OrderException e) {
+                var level=e.status().is5xxServerError()?log.atError():log.atWarn();
+                level.log("event=order_request_processing_rejected stage=queue_consumption eventId={} correlationId={} accountId={} status={} code={}",
+                        m.eventId(),m.correlationId(),m.accountId(),e.status().value(),e.code());
                 if(!e.status().is4xxClientError() || "ORDER_REQUEST_CONFLICT".equals(e.code())) throw e;
                 done=transactions.reject(m,e.code());
             } catch(org.springframework.dao.DataIntegrityViolationException e) {
+                log.warn("event=order_request_integrity_failure stage=result_recheck eventId={} correlationId={} accountId={} causeType={} nestedCauseType={}",
+                        m.eventId(),m.correlationId(),m.accountId(),e.getClass().getSimpleName(),
+                        e.getCause()==null?"none":e.getCause().getClass().getSimpleName());
                 done=transactions.find(m); if(done==null) throw e;
             }
         }
@@ -96,7 +107,10 @@ public class OrderRequestService {
                     if(transactions.find(r.message())!=null || r.message().expired(clock.instant())) consume(r.message());
                     // Confirmed sends belong to SQS/DLQ redrive; never bypass DLQ by republishing them.
                     else if(r.publishedAt()==null) publish(r);
-                } catch(RuntimeException e) { log.warn("event=order_request_reconciliation_failed eventId={} causeType={}",r.message().eventId(),e.getClass().getSimpleName()); }
+                } catch(RuntimeException e) {
+                    log.warn("event=order_request_reconciliation_failed eventId={} causeType={} stage=reservation_reconciliation correlationId={} accountId={}",
+                            r.message().eventId(),e.getClass().getSimpleName(),r.message().correlationId(),r.message().accountId());
+                }
             }
         }
     }

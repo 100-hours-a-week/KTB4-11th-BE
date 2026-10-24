@@ -13,7 +13,10 @@ public class OrderRequestListener {
     @SqsListener(value="${order.queue.url}",factory="orderSqsListenerContainerFactory", acknowledgementMode="ON_SUCCESS")
     public void onMessage(Message message) {
         var sent=message.attributesAsStrings().get("SentTimestamp");
-        if(sent==null) throw new IllegalArgumentException("Missing SQS SentTimestamp");
+        if(sent==null) {
+            LoggerFactory.getLogger(getClass()).warn("event=order_queue_message_rejected stage=message_attributes code=SENT_TIMESTAMP_MISSING messageId={}",message.messageId());
+            throw new IllegalArgumentException("Missing SQS SentTimestamp");
+        }
         var request=codec.decode(message.body(),Instant.ofEpochMilli(Long.parseLong(sent)));
         LoggerFactory.getLogger(getClass()).info("event=order_request_received messageId={} correlationId={} eventId={}",
                 message.messageId(),request.correlationId(),request.eventId());

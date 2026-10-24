@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** 내부 주문 예약·취소 규칙. HTTP 인증과 주문 생성 조건 검증은 컨트롤러에서 선행한다. */
 @Service
 public class OrderService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OrderService.class);
     private final AccountRepository accounts;
     private final OrderRepository orders;
     private final HoldingRepository holdings;
@@ -131,6 +132,7 @@ public class OrderService {
     public Order cancel(long userId, long accountId, long orderId) {
         Account account = lockedAccount(accountId);
         if (!account.belongsTo(userId)) {
+            log.warn("event=order_cancel_rejected stage=account_ownership_check accountId={} orderId={} code=FORBIDDEN_ACCOUNT", accountId, orderId);
             throw new OrderException(HttpStatus.FORBIDDEN, "FORBIDDEN_ACCOUNT",
                     "이 계좌의 주문을 취소할 권한이 없습니다.");
         }
@@ -139,9 +141,14 @@ public class OrderService {
 
     private Order cancelPending(long accountId, long orderId) {
         Order order = orders.findByIdAndAccountId(orderId, accountId)
-                .orElseThrow(() -> new OrderException(HttpStatus.NOT_FOUND,
-                        "ORDER_NOT_FOUND", "주문을 찾을 수 없습니다."));
+                .orElseThrow(() -> {
+                    log.warn("event=order_cancel_rejected stage=order_lookup accountId={} orderId={} code=ORDER_NOT_FOUND", accountId, orderId);
+                    return new OrderException(HttpStatus.NOT_FOUND,
+                            "ORDER_NOT_FOUND", "주문을 찾을 수 없습니다.");
+                });
         if (order.getStatus() != Order.Status.PENDING) {
+            log.warn("event=order_cancel_rejected stage=order_status_check accountId={} orderId={} code=ORDER_NOT_PENDING status={}",
+                    accountId, orderId, order.getStatus());
             throw new OrderException(HttpStatus.CONFLICT, "ORDER_NOT_PENDING",
                     "대기 중인 주문만 취소할 수 있습니다.");
         }

@@ -155,6 +155,10 @@ public class DbWriteReplayRequestContext {
     }
 
     String enqueueBlockReason(SQLException error) {
+        return enqueueBlockReason(error, false);
+    }
+
+    String enqueueBlockReason(SQLException error, boolean allowBusinessCommand) {
         RequestState request = current.get();
         if (request == null) return "request_context_missing";
 
@@ -174,7 +178,16 @@ public class DbWriteReplayRequestContext {
                 || !transaction.rollbackConfirmed) {
             return "rollback_not_confirmed";
         }
-        if (!transaction.dmlObserved) return "no_dml_before_fallback";
+        if (!transaction.dmlObserved) {
+            if (!allowBusinessCommand) return "no_dml_before_fallback";
+            for (TransactionState prior : request.transactions) {
+                if (prior == transaction) break;
+                if (prior.dmlObserved && prior.completionOutcome != CompletionOutcome.ROLLED_BACK) {
+                    return "prior_transaction_outcome_not_confirmed_rolled_back";
+                }
+            }
+            return null;
+        }
         if (!transaction.replayable) return "dml_not_replayable";
         if (transaction.statements.isEmpty()) return "no_captured_sql";
         return null;
@@ -198,6 +211,30 @@ public class DbWriteReplayRequestContext {
             envelope.put("writeId", request.writeId);
         }
         envelope.put("statements", List.copyOf(transaction.statements));
+        return new ReplaySnapshot(
+                replayRequestId, transaction.transactionId, request.requestId, envelope);
+    }
+
+    ReplaySnapshot snapshotBusinessCommand(SQLException error, Map<String, Object> businessCommand) {
+        RequestState request = current.get();
+        if (request == null) return null;
+
+        TransactionState transaction = findTransaction(request, error);
+        if (transaction == null || transaction.proxySqlError != error) return null;
+
+        String replayRequestId = UUID.randomUUID().toString();
+        Map<String, Object> envelope = new LinkedHashMap<>();
+        envelope.put("schemaVersion", 2);
+        envelope.put("operation", "BUSINESS_COMMAND");
+        envelope.put("requestId", replayRequestId);
+        envelope.put("transactionId", transaction.transactionId);
+        envelope.put("httpRequestId", request.requestId);
+        envelope.put("idempotencyKey", request.writeId == null || request.writeId.isBlank()
+                ? request.requestId : request.writeId);
+        if (request.writeId != null && !request.writeId.isBlank()) {
+            envelope.put("writeId", request.writeId);
+        }
+        envelope.put("businessCommand", businessCommand);
         return new ReplaySnapshot(
                 replayRequestId, transaction.transactionId, request.requestId, envelope);
     }

@@ -1,5 +1,6 @@
 package com.stock_spoon.river_be.account.controller;
 
+import com.stock_spoon.river_be.config.DbReadRetryable;
 import java.util.List;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -54,11 +55,13 @@ public class AccountController {
         return result;
     }
 
+    @DbReadRetryable
     @GetMapping
     public List<AccountListResponse> list(@AuthenticationPrincipal Jwt jwt) {
         return service.list(Long.parseLong(jwt.getSubject()));
     }
 
+    @DbReadRetryable
     @GetMapping("/{accountId}")
     public AccountDetailResponse get(@AuthenticationPrincipal Jwt jwt,
             @PathVariable long accountId) {
@@ -66,6 +69,7 @@ public class AccountController {
     }
 
     // 홈은 limit=3, 전체 페이지는 limit 없이 호출한다. 정렬·계산·접근 검증은 서비스에서 처리한다.
+    @DbReadRetryable
     @GetMapping("/{accountId}/holdings")
     public AccountHoldingsResponse holdings(@AuthenticationPrincipal Jwt jwt,
             @PathVariable long accountId,

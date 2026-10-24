@@ -1,5 +1,6 @@
 package com.stock_spoon.river_be.user.controller;
 
+import com.stock_spoon.river_be.config.DbReadRetryable;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -17,6 +18,7 @@ public class UserController {
         this.service = service;
     }
 
+    @DbReadRetryable
     @GetMapping("/me")
     public UserMeResponse getMe(@AuthenticationPrincipal Jwt jwt) {
         return service.getMe(Long.parseLong(jwt.getSubject()));

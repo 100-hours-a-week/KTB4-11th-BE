@@ -1,5 +1,6 @@
 package com.stock_spoon.river_be.order.controller;
 
+import com.stock_spoon.river_be.config.DbReadRetryable;
 import com.stock_spoon.river_be.order.dto.OrderCancelRequest;
 import com.stock_spoon.river_be.order.dto.OrderCreateRequest;
 import com.stock_spoon.river_be.order.dto.OrderCreateResponse;
@@ -56,6 +57,7 @@ public class OrderController {
         this.stream = stream;
     }
 
+    @DbReadRetryable
     @org.springframework.web.bind.annotation.GetMapping
     public OrderHistoryResponse list(@AuthenticationPrincipal Jwt jwt, @PathVariable long accountId,
             @org.springframework.web.bind.annotation.RequestParam(required = false) String limit,

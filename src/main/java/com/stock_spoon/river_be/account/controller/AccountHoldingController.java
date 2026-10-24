@@ -1,5 +1,6 @@
 package com.stock_spoon.river_be.account.controller;
 
+import com.stock_spoon.river_be.config.DbReadRetryable;
 import com.stock_spoon.river_be.account.dto.AccountHoldingDetailResponse;
 import com.stock_spoon.river_be.account.service.AccountHoldingsService;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -15,6 +16,7 @@ public class AccountHoldingController {
         this.holdings = holdings;
     }
 
+    @DbReadRetryable
     @GetMapping("/{accountId}/holdings/{stockCode}")
     public AccountHoldingDetailResponse get(@AuthenticationPrincipal Jwt jwt,
             @PathVariable long accountId, @PathVariable String stockCode) {

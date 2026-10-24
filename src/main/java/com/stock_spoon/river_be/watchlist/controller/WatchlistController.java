@@ -1,5 +1,6 @@
 package com.stock_spoon.river_be.watchlist.controller;
 
+import com.stock_spoon.river_be.config.DbReadRetryable;
 import com.stock_spoon.river_be.watchlist.dto.WatchlistAddRequest;
 import com.stock_spoon.river_be.watchlist.dto.WatchlistAddResponse;
 import com.stock_spoon.river_be.watchlist.dto.WatchlistResponse;
@@ -21,6 +22,7 @@ public class WatchlistController {
         this.service = service;
     }
 
+    @DbReadRetryable
     @GetMapping
     public WatchlistResponse list(@AuthenticationPrincipal Jwt jwt) {
         return service.list(Long.parseLong(jwt.getSubject()));

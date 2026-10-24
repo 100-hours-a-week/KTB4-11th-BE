@@ -20,9 +20,13 @@ import software.amazon.awssdk.services.sqs.SqsClient;
 public class DbWriteReplayConfiguration {
     @Bean(destroyMethod = "close")
     SqsClient dbWriteReplaySqsClient(DbWriteReplayProperties properties) {
-        if (properties.getQueueUrl().isBlank() || !properties.getQueueUrl().endsWith(".fifo")) {
+        String queueUrl = properties.getQueueUrl();
+        String queueName = queueUrl.substring(queueUrl.lastIndexOf('/') + 1);
+        boolean isDbWriteReplayQueue = queueName.equals("db-write-replay.fifo")
+                || queueName.endsWith("-db-write-replay.fifo");
+        if (queueUrl.isBlank() || !isDbWriteReplayQueue) {
             throw new IllegalStateException(
-                    "DB_WRITE_REPLAY_QUEUE_URL must point to an SQS FIFO queue when replay is enabled");
+                    "DB_WRITE_REPLAY_QUEUE_URL must point to the DB migration db-write-replay FIFO queue");
         }
         return SqsClient.builder().build();
     }

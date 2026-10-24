@@ -47,8 +47,7 @@ public class DbWriteReplayExceptionResolver implements HandlerExceptionResolver 
             Exception exception) {
         SQLException fallbackError =
                 DbMigrationWriteFallbackClassifier.findWriteFallbackFailure(exception);
-        if (fallbackError == null || !isEnabledFallbackSignal(fallbackError)
-                || !DbMigrationWriteFallbackClassifier.isWriteHttpMethod(request.getMethod())) {
+        if (fallbackError == null || !isEnabledFallbackSignal(fallbackError)) {
             return null;
         }
 

@@ -50,10 +50,12 @@ public class AccountHoldingsService {
     public AccountHoldingDetailResponse get(
             long userId, long accountId, String stockCode) {
         if (stockCode == null || !stockCode.matches("[0-9A-Z]{6}")) {
+            log.warn("event=account_holding_rejected stage=detail_stock_code_validation accountId={} code=INVALID_STOCK_CODE", accountId);
             throw new AccountException(HttpStatus.BAD_REQUEST, "INVALID_STOCK_CODE", "종목코드를 확인해주세요.");
         }
         return read.execute(status -> {
             if (accounts.findByIdAndUserIdAndActiveTrue(accountId, userId).isEmpty()) {
+                log.warn("event=account_holding_rejected stage=detail_account_lookup accountId={} code=ACCOUNT_NOT_FOUND", accountId);
                 throw new AccountException(HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND", "계좌를 찾을 수 없습니다.");
             }
             var owned = holdings.findByAccountIdAndStockCode(accountId, stockCode).orElse(null);
@@ -62,6 +64,7 @@ public class AccountHoldingsService {
                         accountId, stockCode, false, 0, BigDecimal.ZERO, BigDecimal.ZERO);
             }
             if (owned.getQuantity() <= 0 || owned.getTotalCost() == null || owned.getTotalCost().signum() <= 0) {
+                log.error("event=account_holding_failed stage=detail_holding_validation accountId={} stockCode={} code=INVALID_HOLDINGS_DATA", accountId, stockCode);
                 throw new AccountException(HttpStatus.INTERNAL_SERVER_ERROR, "INVALID_HOLDINGS_DATA", "보유 데이터를 확인해주세요.");
             }
             var average = owned.getTotalCost().divide(BigDecimal.valueOf(owned.getQuantity()), 2, RoundingMode.HALF_UP);
@@ -82,7 +85,7 @@ public class AccountHoldingsService {
         // 1. 본인 소유 활성 계좌인지 먼저 확인한다. 실패하면 외부 시세는 조회하지 않는다.
         List<Owned> owned = read.execute(status -> {
             if (accounts.findByIdAndUserIdAndActiveTrue(accountId, userId).isEmpty()) {
-                log.warn("보유조회 계좌 접근 실패 accountId={} code=ACCOUNT_NOT_FOUND", accountId);
+                log.warn("event=account_holding_rejected stage=list_account_lookup 보유조회 계좌 접근 실패 accountId={} code=ACCOUNT_NOT_FOUND", accountId);
                 throw new AccountException(HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND", "계좌를 찾을 수 없습니다.");
             }
             var rows = holdings.findAllByAccountIds(List.of(accountId));
@@ -113,7 +116,7 @@ public class AccountHoldingsService {
                 throw unavailable(accountId, row.code(), "current_price", error);
             }
             if (row.quantity() <= 0 || row.cost().signum() <= 0 || price <= 0) {
-                log.error("보유조회 유효하지 않은 평가 입력 accountId={} stockCode={}", accountId, row.code());
+                log.error("event=account_holding_failed stage=valuation_input_validation code=INVALID_HOLDINGS_DATA 보유조회 유효하지 않은 평가 입력 accountId={} stockCode={}", accountId, row.code());
                 throw new AccountException(HttpStatus.INTERNAL_SERVER_ERROR, "INVALID_HOLDINGS_DATA", "보유 데이터를 확인해주세요.");
             }
             // 평균단가를 반올림해 원가를 역산하지 않는다. 손익은 저장된 총 취득원가로 계산한다.
@@ -166,13 +169,15 @@ public class AccountHoldingsService {
     }
 
     private AccountException invalidQuery() {
+        log.warn("event=account_holding_rejected stage=list_query_validation code=INVALID_HOLDINGS_QUERY");
         return new AccountException(HttpStatus.BAD_REQUEST, "INVALID_HOLDINGS_QUERY", "sort, order, limit 값을 확인해주세요.");
     }
 
     private AccountException unavailable(long accountId, String code, String stage, IllegalStateException error) {
         // 공급자 원문은 인증정보를 포함할 수 있어 출력하지 않는다. 단계와 예외 종류로 위치를 추적한다.
-        log.error("보유조회 외부 데이터 실패 accountId={} stockCode={} stage={} causeType={}",
-                accountId, code, stage, error.getClass().getSimpleName());
+        log.error("event=account_holding_failed code=HOLDINGS_DATA_UNAVAILABLE 보유조회 외부 데이터 실패 accountId={} stockCode={} stage={} causeType={} nestedCauseType={}",
+                accountId, code, stage, error.getClass().getSimpleName(),
+                error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
         return new AccountException(HttpStatus.SERVICE_UNAVAILABLE, "HOLDINGS_DATA_UNAVAILABLE", "보유 종목 정보를 조회할 수 없습니다.");
     }
 

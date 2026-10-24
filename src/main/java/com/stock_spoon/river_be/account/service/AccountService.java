@@ -63,6 +63,7 @@ public class AccountService {
                         "USER_NOT_FOUND", "사용자를 찾을 수 없습니다."));
 
         if (user.isOnboardingCompleted() || accountRepository.existsByUserId(userId)) {
+            log.warn("event=account_operation_rejected stage=onboarding_check code=ONBOARDING_ALREADY_COMPLETED");
             throw new AccountException(HttpStatus.CONFLICT,
                     "ONBOARDING_ALREADY_COMPLETED", "이미 온보딩을 완료했습니다.");
         }
@@ -79,6 +80,7 @@ public class AccountService {
                 .orElseThrow(() -> new AccountException(HttpStatus.NOT_FOUND,
                         "USER_NOT_FOUND", "사용자를 찾을 수 없습니다."));
         if (!user.isOnboardingCompleted()) {
+            log.warn("event=account_operation_rejected stage=account_creation_check code=ONBOARDING_REQUIRED");
             throw new AccountException(HttpStatus.CONFLICT,
                     "ONBOARDING_REQUIRED", "먼저 온보딩을 완료해주세요.");
         }
@@ -88,6 +90,7 @@ public class AccountService {
                 : normalizeName(request.accountName());
 
         if (accountRepository.existsByUserIdAndNameIgnoreCase(userId, name)) {
+            log.warn("event=account_operation_rejected stage=account_creation_name_check code=DUPLICATE_ACCOUNT_NAME");
             throw new AccountException(HttpStatus.CONFLICT,
                     "DUPLICATE_ACCOUNT_NAME", "이미 사용 중인 계좌 이름입니다.");
         }
@@ -111,6 +114,7 @@ public class AccountService {
         }
         if (accountRepository.existsByUserIdAndNameIgnoreCaseAndIdNot(
                 userId, name, accountId)) {
+            log.warn("event=account_operation_rejected stage=account_rename_name_check accountId={} code=DUPLICATE_ACCOUNT_NAME", accountId);
             throw new AccountException(HttpStatus.CONFLICT,
                     "DUPLICATE_ACCOUNT_NAME", "이미 사용 중인 계좌 이름입니다.");
         }
@@ -151,8 +155,11 @@ public class AccountService {
     public AccountDetailResponse get(long userId, long accountId) {
         var snapshot = read.execute(status -> {
             var account = accountRepository.findByIdAndUserIdAndActiveTrue(accountId, userId)
-                    .orElseThrow(() -> new AccountException(HttpStatus.NOT_FOUND,
-                            "ACCOUNT_NOT_FOUND", "계좌를 찾을 수 없습니다."));
+                    .orElseThrow(() -> {
+                        log.warn("event=account_operation_rejected stage=account_detail_lookup accountId={} code=ACCOUNT_NOT_FOUND", accountId);
+                        return new AccountException(HttpStatus.NOT_FOUND,
+                                "ACCOUNT_NOT_FOUND", "계좌를 찾을 수 없습니다.");
+                    });
             return snapshot(List.of(account), true);
         });
         var values = evaluate(snapshot);
@@ -182,11 +189,15 @@ public class AccountService {
             try {
                 price = prices.computeIfAbsent(holding.code(), market::currentPrice);
             } catch (IllegalStateException error) {
-                log.warn("event=account_valuation_failed stockCode={} causeType={}", holding.code(), error.getClass().getSimpleName());
+                log.warn("event=account_valuation_failed stockCode={} causeType={} stage=current_price_lookup accountId={} code=HOLDINGS_DATA_UNAVAILABLE nestedCauseType={}",
+                        holding.code(), error.getClass().getSimpleName(), holding.accountId(),
+                        error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
                 throw new AccountException(HttpStatus.SERVICE_UNAVAILABLE, "HOLDINGS_DATA_UNAVAILABLE",
                         "보유 종목 정보를 조회할 수 없습니다.");
             }
             if (price <= 0 || holding.quantity() <= 0) {
+                log.error("event=account_valuation_failed stage=holding_input_validation accountId={} stockCode={} code=INVALID_HOLDINGS_DATA",
+                        holding.accountId(), holding.code());
                 throw new AccountException(HttpStatus.INTERNAL_SERVER_ERROR, "INVALID_HOLDINGS_DATA",
                         "보유 데이터를 확인해주세요.");
             }

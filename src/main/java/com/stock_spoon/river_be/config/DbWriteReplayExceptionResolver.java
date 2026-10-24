@@ -16,6 +16,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import tools.jackson.databind.json.JsonMapper;
 import software.amazon.awssdk.services.sqs.SqsClient;
 import software.amazon.awssdk.services.sqs.model.SendMessageRequest;
+import software.amazon.awssdk.services.sqs.model.SqsException;
 
 /** Enqueues a confirmed rolled-back SQL write before the normal MVC error handlers run. */
 public class DbWriteReplayExceptionResolver implements HandlerExceptionResolver {
@@ -47,7 +48,26 @@ public class DbWriteReplayExceptionResolver implements HandlerExceptionResolver 
             Exception exception) {
         SQLException fallbackError =
                 DbMigrationWriteFallbackClassifier.findWriteFallbackFailure(exception);
-        if (fallbackError == null || !isEnabledFallbackSignal(fallbackError)) {
+        if (fallbackError == null) {
+            // Rollback failures can replace the original JDBC exception in Spring's outer exception.
+            // Reuse the exact SQLException captured by the JDBC listener for this request.
+            fallbackError = requestContext.observedFallbackFailure();
+        }
+        if (fallbackError == null) {
+            SQLException connectionFailure =
+                    DbMigrationWriteFallbackClassifier.findReadRetryableConnectionFailure(exception);
+            if (connectionFailure != null) {
+                log.warn("event=db_write_replay_skipped requestId={} reason=fallback_signal_not_observed "
+                                + "sqlErrorCode={} sqlState={} exceptionType={}",
+                        requestId(), connectionFailure.getErrorCode(), connectionFailure.getSQLState(),
+                        exception.getClass().getSimpleName());
+            }
+            return null;
+        }
+        if (!isEnabledFallbackSignal(fallbackError)) {
+            log.info("event=db_write_replay_skipped requestId={} reason=fallback_signal_not_enabled "
+                            + "sqlErrorCode={} sqlState={}",
+                    requestId(), fallbackError.getErrorCode(), fallbackError.getSQLState());
             return null;
         }
 
@@ -56,18 +76,13 @@ public class DbWriteReplayExceptionResolver implements HandlerExceptionResolver 
         if (accepted != null) return acceptedResponse(response, accepted);
         String blockReason = requestContext.enqueueBlockReason(fallbackError);
         if (blockReason != null) {
-            String requestId = MDC.get("requestId");
-            log.info("event=db_write_replay_skipped requestId={} reason={} sqlErrorCode={} sqlState={}",
-                    requestId == null ? "none" : requestId, blockReason,
-                    fallbackError.getErrorCode(), fallbackError.getSQLState());
+            logSkip(blockReason, fallbackError);
             return null;
         }
 
         DbWriteReplayRequestContext.ReplaySnapshot snapshot = requestContext.snapshot(fallbackError);
         if (snapshot == null) {
-            String requestId = MDC.get("requestId");
-            log.info("event=db_write_replay_skipped requestId={} reason=snapshot_unavailable",
-                    requestId == null ? "none" : requestId);
+            logSkip("snapshot_unavailable", fallbackError);
             return null;
         }
 
@@ -75,8 +90,9 @@ public class DbWriteReplayExceptionResolver implements HandlerExceptionResolver 
             String messageBody = objectMapper.writeValueAsString(snapshot.envelope());
             int bodyBytes = messageBody.getBytes(StandardCharsets.UTF_8).length;
             if (bodyBytes > MAX_SQS_MESSAGE_BYTES) {
-                log.warn("event=db_write_replay_skipped requestId={} reason=message_too_large bodyBytes={}",
-                        snapshot.httpRequestId(), bodyBytes);
+                log.warn("event=db_write_replay_skipped requestId={} reason=message_too_large "
+                                + "transactionId={} bodyBytes={}",
+                        snapshot.httpRequestId(), snapshot.transactionId(), bodyBytes);
                 return null;
             }
 
@@ -91,16 +107,65 @@ public class DbWriteReplayExceptionResolver implements HandlerExceptionResolver 
                     snapshot.replayRequestId(), snapshot.transactionId(),
                     snapshot.httpRequestId(), result.messageId());
             requestContext.markEnqueued(fallbackError, accepted);
-            log.info("event=db_write_replay_queued requestId={} replayRequestId={} sqlErrorCode={} sqlState={}",
+            log.info("event=db_write_replay_queued requestId={} replayRequestId={} transactionId={} "
+                            + "messageId={} sqlErrorCode={} sqlState={}",
                     snapshot.httpRequestId(), snapshot.replayRequestId(),
+                    snapshot.transactionId(), result.messageId(),
                     fallbackError.getErrorCode(), fallbackError.getSQLState());
             return acceptedResponse(response, accepted);
         } catch (Exception enqueueFailure) {
-            log.error("event=db_write_replay_enqueue_failed requestId={} sqlErrorCode={} sqlState={} failureType={}",
-                    snapshot.httpRequestId(), fallbackError.getErrorCode(), fallbackError.getSQLState(),
-                    enqueueFailure.getClass().getSimpleName());
+            log.error("event=db_write_replay_enqueue_failed requestId={} transactionId={} "
+                            + "sqlErrorCode={} sqlState={} failureType={} serviceErrorCode={} "
+                            + "httpStatusCode={} awsRequestId={}",
+                    snapshot.httpRequestId(), snapshot.transactionId(),
+                    fallbackError.getErrorCode(), fallbackError.getSQLState(),
+                    enqueueFailure.getClass().getSimpleName(),
+                    serviceErrorCode(enqueueFailure), httpStatusCode(enqueueFailure),
+                    awsRequestId(enqueueFailure));
             return null;
         }
+    }
+
+    private void logSkip(String reason, SQLException fallbackError) {
+        DbWriteReplayRequestContext.ReplayDiagnostics diagnostics =
+                requestContext.diagnostics(fallbackError);
+        log.info("event=db_write_replay_skipped requestId={} reason={} transactionId={} "
+                        + "sqlErrorCode={} sqlState={} dmlObserved={} transactionOutcome={} "
+                        + "rollbackConfirmed={} replayable={} capturedStatementCount={}",
+                requestId(), reason, diagnostics.transactionId(), fallbackError.getErrorCode(),
+                fallbackError.getSQLState(), diagnostics.dmlObserved(), diagnostics.transactionOutcome(),
+                diagnostics.rollbackConfirmed(), diagnostics.replayable(), diagnostics.capturedStatementCount());
+    }
+
+    private static String requestId() {
+        String requestId = MDC.get("requestId");
+        return requestId == null ? "none" : requestId;
+    }
+
+    private static String serviceErrorCode(Exception failure) {
+        if (failure instanceof SqsException sqsFailure && sqsFailure.awsErrorDetails() != null) {
+            return safeLogValue(sqsFailure.awsErrorDetails().errorCode());
+        }
+        return "none";
+    }
+
+    private static String httpStatusCode(Exception failure) {
+        if (failure instanceof SqsException sqsFailure && sqsFailure.statusCode() > 0) {
+            return Integer.toString(sqsFailure.statusCode());
+        }
+        return "none";
+    }
+
+    private static String awsRequestId(Exception failure) {
+        if (failure instanceof SqsException sqsFailure && sqsFailure.requestId() != null) {
+            return safeLogValue(sqsFailure.requestId());
+        }
+        return "none";
+    }
+
+    private static String safeLogValue(String value) {
+        if (value == null || value.isBlank()) return "none";
+        return value.replace('\n', '_').replace('\r', '_').replace(' ', '_');
     }
 
     private ModelAndView acceptedResponse(

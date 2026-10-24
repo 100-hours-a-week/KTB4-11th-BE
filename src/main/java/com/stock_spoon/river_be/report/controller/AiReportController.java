@@ -1,5 +1,6 @@
 package com.stock_spoon.river_be.report.controller;
 
+import com.stock_spoon.river_be.config.DbReadRetryable;
 import com.stock_spoon.river_be.report.dto.AiReportResponse;
 import com.stock_spoon.river_be.order.exception.OrderException;
 import com.stock_spoon.river_be.report.service.AiReportService;
@@ -16,6 +17,7 @@ public class AiReportController {
 
     public AiReportController(AiReportService reports) { this.reports = reports; }
 
+    @DbReadRetryable
     @GetMapping
     public AiReportResponse get(@AuthenticationPrincipal Jwt jwt, @PathVariable long accountId,
             @PathVariable long orderId) {

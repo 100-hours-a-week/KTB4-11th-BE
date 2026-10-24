@@ -47,6 +47,40 @@ public final class DbMigrationWriteFallbackClassifier {
         return null;
     }
 
+    /**
+     * Finds transient connection failures eligible for a safe, read-only HTTP retry.
+     * Read-only server errors are intentionally excluded: only connection failures are retried.
+     */
+    public static SQLException findReadRetryableConnectionFailure(Throwable error) {
+        if (error == null) return null;
+
+        Deque<Throwable> pending = new ArrayDeque<>();
+        Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        pending.add(error);
+
+        while (!pending.isEmpty()) {
+            Throwable candidate = pending.removeFirst();
+            if (!visited.add(candidate)) continue;
+
+            if (candidate instanceof SQLException sqlError) {
+                if (isReadRetryableConnectionFailure(sqlError)) return sqlError;
+                if (sqlError.getNextException() != null) pending.addLast(sqlError.getNextException());
+            }
+            for (Throwable suppressed : candidate.getSuppressed()) {
+                if (suppressed != null) pending.addLast(suppressed);
+            }
+            if (candidate.getCause() != null) pending.addLast(candidate.getCause());
+        }
+        return null;
+    }
+
+    public static boolean isReadRetryableConnectionFailure(SQLException sqlError) {
+        if (sqlError == null) return false;
+        String sqlState = sqlError.getSQLState();
+        return sqlError.getErrorCode() == PROXYSQL_HOSTGROUP_CONNECT_TIMEOUT
+                || (sqlState != null && sqlState.startsWith("08"));
+    }
+
     public static boolean isWriteFallbackSignal(SQLException sqlError) {
         return sqlError != null
                 && (sqlError.getErrorCode() == PROXYSQL_HOSTGROUP_CONNECT_TIMEOUT

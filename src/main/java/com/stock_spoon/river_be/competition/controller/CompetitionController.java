@@ -1,5 +1,6 @@
 package com.stock_spoon.river_be.competition.controller;
 
+import com.stock_spoon.river_be.config.DbReadRetryable;
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateRequest;
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateResponse;
 import com.stock_spoon.river_be.competition.dto.CompetitionListResponse;
@@ -34,18 +35,21 @@ public class CompetitionController {
 
     private final CompetitionService competitionService;
 
+    @DbReadRetryable
     @GetMapping("/{competitionId}/result") // 완료된 대결의 최종 성적과 양측 비교 그래프를 조회한다.
     public CompetitionResultResponse getCompetitionResult(@AuthenticationPrincipal Jwt jwt,
             @PathVariable Long competitionId) {
         return competitionService.getCompetitionResult(Long.parseLong(jwt.getSubject()), competitionId);
     }
 
+    @DbReadRetryable
     @GetMapping("/{competitionId}") // 대결 ID는 URL에서, 조회할 사용자 ID는 인증된 JWT에서 받는다.
     public CompetitionDetailResponse getCompetitionDetail(@AuthenticationPrincipal Jwt jwt,
             @PathVariable Long competitionId) {
         return competitionService.getCompetitionDetail(Long.parseLong(jwt.getSubject()), competitionId);
     }
 
+    @DbReadRetryable
     @GetMapping // JWT의 사용자 ID로 본인의 대결만 조회한다.
     public CompetitionListResponse listCompetitions(@AuthenticationPrincipal Jwt jwt,
             @RequestParam(required = false) String cursor,

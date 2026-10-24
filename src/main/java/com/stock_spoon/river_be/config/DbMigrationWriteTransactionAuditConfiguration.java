@@ -1,5 +1,6 @@
 package com.stock_spoon.river_be.config;
 
+import java.sql.SQLException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -58,13 +59,21 @@ public class DbMigrationWriteTransactionAuditConfiguration {
 
     private static void logOutcome(TransactionExecution transaction, String outcome, Throwable failure) {
         String writeId = MDC.get(DbMigrationWriteAuditFilter.MDC_KEY);
-        if (writeId == null) return;
+        // Normal successful transactions are too frequent to log unless explicitly tagged.
+        // Always record uncertain completion so a failed rollback is visible without a write ID.
+        if (writeId == null && failure == null) return;
 
         String requestId = MDC.get("requestId");
         String failureType = failure == null ? "none" : failure.getClass().getSimpleName();
-        log.info("event=db_migration_write_transaction writeId={} requestId={} outcome={} "
-                        + "newTransaction={} readOnly={} failureType={}",
-                writeId, requestId == null ? "none" : requestId, outcome,
-                transaction.isNewTransaction(), transaction.isReadOnly(), failureType);
+        SQLException sqlFailure = DbMigrationWriteFallbackClassifier
+                .findReadRetryableConnectionFailure(failure);
+        int sqlErrorCode = sqlFailure == null ? 0 : sqlFailure.getErrorCode();
+        String sqlState = sqlFailure == null || sqlFailure.getSQLState() == null
+                ? "none" : sqlFailure.getSQLState();
+        var event = failure == null ? log.atInfo() : log.atWarn();
+        event.log("event=db_migration_write_transaction writeId={} requestId={} outcome={} "
+                        + "newTransaction={} readOnly={} failureType={} sqlErrorCode={} sqlState={}",
+                writeId == null ? "none" : writeId, requestId == null ? "none" : requestId, outcome,
+                transaction.isNewTransaction(), transaction.isReadOnly(), failureType, sqlErrorCode, sqlState);
     }
 }

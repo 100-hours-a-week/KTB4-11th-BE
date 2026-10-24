@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.stereotype.Component;
@@ -119,6 +120,34 @@ public class DbWriteReplayRequestContext {
             if (transaction.generatedKeyInsertSeen) transaction.replayable = false;
             transaction.statements.addAll(statements);
         }
+    }
+
+    SQLException observedFallbackFailure() {
+        RequestState request = current.get();
+        if (request == null) return null;
+
+        for (int index = request.transactions.size() - 1; index >= 0; index--) {
+            SQLException error = request.transactions.get(index).proxySqlError;
+            if (error != null) return error;
+        }
+        return request.untrackedFallbackError;
+    }
+
+    ReplayDiagnostics diagnostics(SQLException error) {
+        RequestState request = current.get();
+        if (request == null) {
+            return new ReplayDiagnostics("none", false, "unknown", false, false, 0);
+        }
+
+        TransactionState transaction = findTransaction(request, error);
+        if (transaction == null) {
+            String transactionId = request.untrackedFallbackError == error ? "untracked" : "none";
+            return new ReplayDiagnostics(transactionId, false, "unknown", false, false, 0);
+        }
+
+        return new ReplayDiagnostics(transaction.transactionId, transaction.dmlObserved,
+                transaction.completionOutcome.name().toLowerCase(Locale.ROOT),
+                transaction.rollbackConfirmed, transaction.replayable, transaction.statements.size());
     }
 
     boolean canEnqueue(SQLException error) {
@@ -254,5 +283,14 @@ public class DbWriteReplayRequestContext {
             String transactionId,
             String httpRequestId,
             String messageId) {
+    }
+
+    record ReplayDiagnostics(
+            String transactionId,
+            boolean dmlObserved,
+            String transactionOutcome,
+            boolean rollbackConfirmed,
+            boolean replayable,
+            int capturedStatementCount) {
     }
 }

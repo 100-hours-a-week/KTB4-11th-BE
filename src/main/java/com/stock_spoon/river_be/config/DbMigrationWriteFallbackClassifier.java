@@ -77,8 +77,13 @@ public final class DbMigrationWriteFallbackClassifier {
     public static boolean isReadRetryableConnectionFailure(SQLException sqlError) {
         if (sqlError == null) return false;
         String sqlState = sqlError.getSQLState();
+        String message = sqlError.getMessage();
         return sqlError.getErrorCode() == PROXYSQL_HOSTGROUP_CONNECT_TIMEOUT
-                || (sqlState != null && sqlState.startsWith("08"));
+                || (sqlState != null && sqlState.startsWith("08"))
+                || (sqlError.getErrorCode() == 0
+                        && sqlState == null
+                        && message != null
+                        && "Connection is closed".equalsIgnoreCase(message.trim()));
     }
 
     public static boolean isWriteFallbackSignal(SQLException sqlError) {

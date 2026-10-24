@@ -32,7 +32,11 @@ public class DbWriteReplayRequestFilter extends OncePerRequestFilter {
         if (!StringUtils.hasText(requestId)) requestId = UUID.randomUUID().toString();
         requestContext.beginRequest(requestId, MDC.get(DbMigrationWriteAuditFilter.MDC_KEY));
         try {
-            chain.doFilter(request, response);
+            HttpServletRequest replayRequest = request;
+            if (DbMigrationWriteFallbackClassifier.isWriteHttpMethod(request.getMethod())) {
+                replayRequest = new DbWriteReplayHttpRequestWrapper(request);
+            }
+            chain.doFilter(replayRequest, response);
         } finally {
             requestContext.endRequest();
         }

@@ -31,8 +31,9 @@ public class OrderBuyPriceService {
                 if (price <= 0) throw new IllegalStateException();
                 prices.put(code, BigDecimal.valueOf(price));
             } catch (IllegalStateException error) {
-                log.warn("event=order_buy_weight_price_failed accountId={} stockCode={} causeType={}",
-                        accountId, code, error.getClass().getSimpleName());
+                log.warn("event=order_buy_weight_price_failed accountId={} stockCode={} causeType={} stage=holding_valuation_price_lookup boughtStockCode={} nestedCauseType={}",
+                        accountId, code, error.getClass().getSimpleName(), boughtStock,
+                        error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
                 return Map.of();
             }
         }

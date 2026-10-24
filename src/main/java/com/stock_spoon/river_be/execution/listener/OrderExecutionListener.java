@@ -54,7 +54,9 @@ public class OrderExecutionListener {
             };
             attempt(order, quote.price().currentPrice().longValueExact(), validate);
         } catch (RuntimeException error) {
-            log.warn("event=order_initial_price_failed orderId={} causeType={}", order.getId(), error.getClass().getSimpleName());
+            log.warn("event=order_initial_price_failed orderId={} causeType={} stage=initial_quote_lookup accountId={} stockCode={} nestedCauseType={}",
+                    order.getId(), error.getClass().getSimpleName(), order.getAccountId(), order.getStockCode(),
+                    error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
         } finally {
             subscriptions.refresh();
         }
@@ -91,8 +93,9 @@ public class OrderExecutionListener {
                 }
             }
         } catch (RuntimeException error) {
-            log.warn("event=order_price_processing_failed stockCode={} causeType={}",
-                    price.stockCode(), error.getClass().getSimpleName());
+            log.warn("event=order_price_processing_failed stockCode={} causeType={} stage=price_event_processing nestedCauseType={}",
+                    price.stockCode(), error.getClass().getSimpleName(),
+                    error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
         } finally {
             if (executed) subscriptions.refresh();
         }
@@ -119,7 +122,10 @@ public class OrderExecutionListener {
             return executed;
         } catch (RuntimeException error) {
             // 한 주문의 롤백이 다른 주문 처리를 막지 않는다. 원문/인증정보는 로그에 남기지 않는다.
-            log.warn("event=order_execution_failed orderId={} causeType={}", order.getId(), error.getClass().getSimpleName());
+            log.warn("event=order_execution_failed orderId={} causeType={} stage=limit_execution accountId={} stockCode={} side={} code={} nestedCauseType={}",
+                    order.getId(), error.getClass().getSimpleName(), order.getAccountId(), order.getStockCode(), order.getSide(),
+                    error instanceof com.stock_spoon.river_be.order.exception.OrderException rejection ? rejection.code() : "INTERNAL_ERROR",
+                    error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
             return false;
         }
     }

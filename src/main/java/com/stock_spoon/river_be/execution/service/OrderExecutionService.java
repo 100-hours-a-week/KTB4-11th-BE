@@ -164,14 +164,19 @@ public class OrderExecutionService {
         if (side == Order.Side.BUY) {
             long available = Math.subtractExact(account.getCashBalance(),
                     orders.reservedCash(accountId, Order.Status.PENDING));
-            if (available < amount) throw new OrderException(HttpStatus.BAD_REQUEST, "INSUFFICIENT_CASH",
-                    "주문 가능 현금이 부족합니다.");
+            if (available < amount) {
+                log.warn("event=market_execution_rejected stage=cash_check accountId={} stockCode={} code=INSUFFICIENT_CASH", accountId, stockCode);
+                throw new OrderException(HttpStatus.BAD_REQUEST, "INSUFFICIENT_CASH",
+                        "주문 가능 현금이 부족합니다.");
+            }
         } else {
             long pending = orders.pendingSellQuantity(accountId, stockCode, Order.Side.SELL, Order.Status.PENDING);
             if (Math.subtractExact(originalQuantity, pending) < quantity) {
+                log.warn("event=market_execution_rejected stage=sellable_quantity_check accountId={} stockCode={} code=INSUFFICIENT_SELLABLE_QUANTITY", accountId, stockCode);
                 throw new OrderException(HttpStatus.BAD_REQUEST, "INSUFFICIENT_SELLABLE_QUANTITY", "매도 가능 수량이 부족합니다.");
             }
             if (originalCost == null || originalCost.signum() <= 0) {
+                log.error("event=market_execution_failed stage=holding_cost_validation accountId={} stockCode={} code=INVALID_HOLDING_COST", accountId, stockCode);
                 throw new IllegalStateException("취득원가는 양수여야 합니다.");
             }
         }
@@ -179,6 +184,7 @@ public class OrderExecutionService {
         try {
             Math.addExact(account.getCashBalance(), cashDelta);
         } catch (ArithmeticException error) {
+            log.warn("event=market_execution_rejected stage=cash_balance_calculation accountId={} stockCode={} code=CASH_BALANCE_OVERFLOW", accountId, stockCode);
             throw new OrderException("현금 잔액이 허용 범위를 초과합니다.");
         }
         // 계좌 잠금·DB 조회를 기다리는 동안 담당이나 연결 세션이 바뀌었으면 자산을 변경하지 않는다.
@@ -240,8 +246,8 @@ public class OrderExecutionService {
             } else {
                 price = prices.get(owned.getStockCode());
                 if (price == null || price.signum() <= 0) {
-                    log.warn("event=order_buy_weight_unavailable orderId={} stockCode={} reason=missing_price",
-                            order.getId(), owned.getStockCode());
+                    log.warn("event=order_buy_weight_unavailable orderId={} stockCode={} reason=missing_price stage=holding_weight_calculation accountId={}",
+                            order.getId(), owned.getStockCode(), account.getId());
                     return;
                 }
             }
@@ -308,9 +314,18 @@ public class OrderExecutionService {
             if (holding.isPresent()) holding.get().add(quantity, cost);
             else holdings.save(new Holding(account, order.getStockCode(), quantity, cost));
         } else {
-            var owned = holding.orElseThrow(() -> new IllegalStateException("매도 보유종목이 없습니다."));
-            if (owned.getQuantity() < quantity) throw new IllegalStateException("매도 보유수량이 부족합니다.");
-            if (owned.getTotalCost().signum() <= 0) throw new IllegalStateException("취득원가는 양수여야 합니다.");
+            var owned = holding.orElseThrow(() -> {
+                log.error("event=limit_execution_failed stage=holding_lookup accountId={} orderId={} code=SELL_HOLDING_MISSING", accountId, orderId);
+                return new IllegalStateException("매도 보유종목이 없습니다.");
+            });
+            if (owned.getQuantity() < quantity) {
+                log.error("event=limit_execution_failed stage=holding_quantity_check accountId={} orderId={} code=INSUFFICIENT_HOLDING_QUANTITY", accountId, orderId);
+                throw new IllegalStateException("매도 보유수량이 부족합니다.");
+            }
+            if (owned.getTotalCost().signum() <= 0) {
+                log.error("event=limit_execution_failed stage=holding_cost_validation accountId={} orderId={} code=INVALID_HOLDING_COST", accountId, orderId);
+                throw new IllegalStateException("취득원가는 양수여야 합니다.");
+            }
             // 나눗셈을 마지막에 수행해 평균단가의 조기 반올림 오차를 피한다.
             var soldCost = soldCost(owned.getTotalCost(), owned.getQuantity(), quantity);
             pnl = cost.subtract(soldCost);

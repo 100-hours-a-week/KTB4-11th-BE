@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class CompetitionCompletionService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CompetitionCompletionService.class);
     private final CompetitionRepository competitions;
     private final CompetitionParticipantRepository participants;
     private final AccountRepository accounts;
@@ -37,6 +38,7 @@ public class CompetitionCompletionService {
 
         var links = participants.findAllByCompetitionIdOrderByIdAsc(competitionId);
         if (links.size() != 2 || links.stream().filter(p -> p.getAccount().isAiManaged()).count() != 1) {
+            log.error("event=competition_settlement_failed stage=participant_validation competitionId={} code=INVALID_PARTICIPANTS", competitionId);
             throw new IllegalStateException("사용자와 AI 참가자를 확인할 수 없습니다.");
         }
         // 주문 체결과 같은 계좌 잠금을 잡아 평가 중 자산이 바뀌지 않게 한다. 잠금 순서는 ID 순이다.
@@ -52,7 +54,11 @@ public class CompetitionCompletionService {
         for (var holding : holdings.findAllByAccountIds(accountIds)) {
             long price = prices.computeIfAbsent(holding.getStockCode(),
                     code -> market.closingPrice(code, competition.tradingEndDate()));
-            if (price <= 0 || holding.getQuantity() <= 0) throw new IllegalStateException("종가와 보유 수량을 확인하세요.");
+            if (price <= 0 || holding.getQuantity() <= 0) {
+                log.error("event=competition_settlement_failed stage=holding_valuation_validation competitionId={} accountId={} stockCode={} code=INVALID_PRICE_OR_QUANTITY",
+                        competitionId, holding.getAccountId(), holding.getStockCode());
+                throw new IllegalStateException("종가와 보유 수량을 확인하세요.");
+            }
             values.merge(holding.getAccountId(), Math.multiplyExact(price, holding.getQuantity()), Math::addExact);
         }
         var user = links.stream().filter(p -> !p.getAccount().isAiManaged()).findFirst().orElseThrow();

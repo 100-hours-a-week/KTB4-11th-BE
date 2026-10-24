@@ -24,7 +24,9 @@ public class CompetitionCompletionScheduler {
                 dailyPerformances.recordMissingDays(id);
             } catch (RuntimeException error) {
                 // 일별 기록이 실패해도 다른 대결과 종료 정산은 계속 처리한다.
-                log.warn("event=competition_daily_performance_failed competitionId={} causeType={}", id, error.getClass().getSimpleName());
+                log.warn("event=competition_daily_performance_failed competitionId={} causeType={} stage=scheduled_daily_performance nestedCauseType={}",
+                        id, error.getClass().getSimpleName(),
+                        error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
             }
         }
         // 금요일에 일요일 종료 대결도 찾는다. 서버 재시작 후에는 과거 미처리 대결도 다시 찾는다.
@@ -34,7 +36,9 @@ public class CompetitionCompletionScheduler {
                 completion.completeCompetition(id);
             } catch (RuntimeException error) {
                 // 종가 미제공·일시 장애는 완료로 만들지 않고 다음 주기에 재시도한다.
-                log.warn("event=competition_completion_failed competitionId={} causeType={}", id, error.getClass().getSimpleName());
+                log.warn("event=competition_completion_failed competitionId={} causeType={} stage=scheduled_completion nestedCauseType={}",
+                        id, error.getClass().getSimpleName(),
+                        error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
             }
         }
     }

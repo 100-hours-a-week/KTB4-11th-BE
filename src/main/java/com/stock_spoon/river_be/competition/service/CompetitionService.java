@@ -31,6 +31,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class CompetitionService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CompetitionService.class);
     private final UserRepository users;
     private final AccountRepository accounts;
     private final CompetitionRepository competitions;
@@ -46,17 +47,20 @@ public class CompetitionService {
                 .orElseThrow(() -> new CompetitionException(HttpStatus.NOT_FOUND,
                         "COMPETITION_NOT_FOUND", "대결을 찾을 수 없습니다."));
         if (competition.getState() != Competition.State.COMPLETED) {
+            log.warn("event=competition_result_rejected stage=completion_check competitionId={} code=COMPETITION_NOT_COMPLETED", competitionId);
             throw new CompetitionException(HttpStatus.CONFLICT, "COMPETITION_NOT_COMPLETED", "아직 완료되지 않은 대결입니다.");
         }
 
         // 2. 참가자 저장 순서와 관계없이 계좌의 AI 운용 여부로 사용자·AI를 구분한다.
         var links = participants.findAllByCompetitionIdOrderByIdAsc(competitionId);
         if (links.size() != 2 || links.stream().filter(p -> p.getAccount().isAiManaged()).count() != 1) {
+            log.error("event=competition_result_failed stage=participant_validation competitionId={} code=COMPETITION_RESULT_UNAVAILABLE", competitionId);
             throw resultUnavailable();
         }
         var user = links.stream().filter(p -> !p.getAccount().isAiManaged()).findFirst().orElseThrow();
         var ai = links.stream().filter(p -> p.getAccount().isAiManaged()).findFirst().orElseThrow();
         if (competition.getWinner() == null || user.getFinalReturnPercent() == null || ai.getFinalReturnPercent() == null) {
+            log.error("event=competition_result_failed stage=final_result_validation competitionId={} code=COMPETITION_RESULT_UNAVAILABLE", competitionId);
             throw resultUnavailable();
         }
 

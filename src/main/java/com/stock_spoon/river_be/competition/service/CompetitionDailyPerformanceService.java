@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class CompetitionDailyPerformanceService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CompetitionDailyPerformanceService.class);
     private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
     private final CompetitionRepository competitions;
     private final CompetitionParticipantRepository participants;
@@ -46,6 +47,7 @@ public class CompetitionDailyPerformanceService {
 
         var links = participants.findAllByCompetitionIdOrderByIdAsc(competitionId);
         if (links.size() != 2 || links.stream().filter(p -> p.getAccount().isAiManaged()).count() != 1) {
+            log.error("event=competition_performance_failed stage=participant_validation competitionId={} code=INVALID_PARTICIPANTS", competitionId);
             throw new IllegalStateException("사용자와 AI 참가자를 확인할 수 없습니다.");
         }
         // {참가자 ID: 이미 저장된 날짜들}. 양쪽 모두 기록된 날짜는 다시 조회·평가하지 않는다.
@@ -84,7 +86,10 @@ public class CompetitionDailyPerformanceService {
                 long assets;
                 if (competition.getState() == Competition.State.COMPLETED && day.equals(competition.tradingEndDate())) {
                     // 기능 도입 전 완료된 대결도 저장된 최종 성적과 같은 값으로 복구한다.
-                    if (link.getFinalAssetValue() == null) throw new IllegalStateException("최종 성적이 없습니다.");
+                    if (link.getFinalAssetValue() == null) {
+                        log.error("event=competition_performance_failed stage=historical_final_assets competitionId={} participantId={} recordDate={} code=FINAL_ASSETS_MISSING", competitionId, link.getId(), day);
+                        throw new IllegalStateException("최종 성적이 없습니다.");
+                    }
                     assets = link.getFinalAssetValue();
                 } else {
                     Long accountId = link.getAccount().getId();
@@ -92,7 +97,10 @@ public class CompetitionDailyPerformanceService {
                     for (var held : quantities.get(accountId).entrySet()) {
                         if (held.getValue() == 0) continue;
                         long price = prices.computeIfAbsent(held.getKey(), code -> market.closingPrice(code, day));
-                        if (price <= 0) throw new IllegalStateException("해당일 종가를 확인할 수 없습니다.");
+                        if (price <= 0) {
+                            log.error("event=competition_performance_failed stage=closing_price_validation competitionId={} accountId={} stockCode={} recordDate={} code=INVALID_CLOSING_PRICE", competitionId, accountId, held.getKey(), day);
+                            throw new IllegalStateException("해당일 종가를 확인할 수 없습니다.");
+                        }
                         assets = Math.addExact(assets, Math.multiplyExact(price, held.getValue()));
                     }
                 }
@@ -105,12 +113,21 @@ public class CompetitionDailyPerformanceService {
     @Transactional
     public void recordFinalPerformances(Long competitionId) {
         var competition = competitions.findLockedById(competitionId).orElseThrow();
-        if (competition.getState() != Competition.State.COMPLETED) throw new IllegalStateException("완료 대결만 기록할 수 있습니다.");
+        if (competition.getState() != Competition.State.COMPLETED) {
+            log.warn("event=competition_performance_failed stage=final_state_validation competitionId={} code=COMPETITION_NOT_COMPLETED", competitionId);
+            throw new IllegalStateException("완료 대결만 기록할 수 있습니다.");
+        }
         for (var link : participants.findAllByCompetitionIdOrderByIdAsc(competitionId)) {
-            if (link.getFinalAssetValue() == null) throw new IllegalStateException("최종 성적이 없습니다.");
+            if (link.getFinalAssetValue() == null) {
+                log.error("event=competition_performance_failed stage=final_assets_validation competitionId={} participantId={} code=FINAL_ASSETS_MISSING", competitionId, link.getId());
+                throw new IllegalStateException("최종 성적이 없습니다.");
+            }
             var existing = performances.findByParticipantIdAndRecordDate(link.getId(), competition.tradingEndDate());
             if (existing.isPresent()) {
-                if (existing.get().getAssetValue() != link.getFinalAssetValue()) throw new IllegalStateException("최종 기록이 일치하지 않습니다.");
+                if (existing.get().getAssetValue() != link.getFinalAssetValue()) {
+                    log.error("event=competition_performance_failed stage=final_record_comparison competitionId={} participantId={} code=FINAL_RECORD_MISMATCH", competitionId, link.getId());
+                    throw new IllegalStateException("최종 기록이 일치하지 않습니다.");
+                }
                 continue;
             }
             performances.save(new CompetitionDailyPerformance(link, competition.tradingEndDate(), link.getFinalAssetValue()));
@@ -125,7 +142,10 @@ public class CompetitionDailyPerformanceService {
                 : Math.addExact(cash.get(trade.getAccountId()), amount);
         long quantity = quantities.get(trade.getAccountId()).merge(trade.getStockCode(),
                 buy ? trade.getQuantity() : -trade.getQuantity(), Math::addExact);
-        if (balance < 0 || quantity < 0) throw new IllegalStateException("과거 체결 내역과 자산이 일치하지 않습니다.");
+        if (balance < 0 || quantity < 0) {
+            log.error("event=competition_performance_failed stage=historical_trade_application accountId={} stockCode={} code=TRADE_ASSET_MISMATCH", trade.getAccountId(), trade.getStockCode());
+            throw new IllegalStateException("과거 체결 내역과 자산이 일치하지 않습니다.");
+        }
         cash.put(trade.getAccountId(), balance);
     }
 

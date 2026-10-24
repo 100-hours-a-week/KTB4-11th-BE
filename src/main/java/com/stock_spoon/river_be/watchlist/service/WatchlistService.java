@@ -17,6 +17,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class WatchlistService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(WatchlistService.class);
     private final WatchlistRepository watchlists;
     private final StockRepository stocks;
     private final EntityManager entityManager;
@@ -59,9 +60,11 @@ public class WatchlistService {
         requireUser(userId, true);
         var matches = stocks.findAllByStockCode(code);
         if (matches.isEmpty()) {
+            log.warn("event=watchlist_add_rejected stage=resolved_stock_lookup userId={} stockCode={} code=STOCK_NOT_FOUND", userId, code);
             throw new WatchlistException(HttpStatus.NOT_FOUND, "STOCK_NOT_FOUND", "종목을 찾을 수 없습니다.");
         }
         if (matches.size() != 1) {
+            log.warn("event=watchlist_add_rejected stage=resolved_stock_lookup userId={} stockCode={} code=AMBIGUOUS_STOCK_CODE", userId, code);
             throw new WatchlistException(HttpStatus.CONFLICT, "AMBIGUOUS_STOCK_CODE", "종목코드가 여러 시장에 존재합니다.");
         }
         var stock = matches.getFirst();
@@ -83,6 +86,7 @@ public class WatchlistService {
         var user = lock ? entityManager.find(User.class, userId, LockModeType.PESSIMISTIC_WRITE)
                 : entityManager.find(User.class, userId);
         if (user == null) {
+            log.warn("event=watchlist_request_rejected stage=user_lookup userId={} code=USER_NOT_FOUND", userId);
             throw new WatchlistException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "로그인이 필요합니다.");
         }
     }
@@ -90,6 +94,7 @@ public class WatchlistService {
     /** 내부 호출에서도 숫자·영문 대문자 6자리 종목코드만 허용한다. */
     private void validate(String code) {
         if (code == null || !code.matches("[0-9A-Z]{6}")) {
+            log.warn("event=watchlist_request_rejected stage=stock_code_validation code=INVALID_STOCK_CODE");
             throw new WatchlistException(HttpStatus.BAD_REQUEST, "INVALID_STOCK_CODE", "종목코드를 확인해주세요.");
         }
     }

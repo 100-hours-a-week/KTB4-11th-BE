@@ -31,14 +31,25 @@ public class AiReportService {
 
     @Transactional(readOnly = true)
     public AiReportResponse get(long userId, long accountId, long orderId) {
-        accounts.findByIdAndUserIdAndActiveTrue(accountId, userId).orElseThrow(() ->
-                new OrderException(HttpStatus.FORBIDDEN, "FORBIDDEN_ACCOUNT", "이 계좌를 조회할 권한이 없습니다."));
+        accounts.findByIdAndUserIdAndActiveTrue(accountId, userId).orElseThrow(() -> {
+            log.warn("event=ai_report_rejected stage=account_access_check accountId={} orderId={} code=FORBIDDEN_ACCOUNT", accountId, orderId);
+            return new OrderException(HttpStatus.FORBIDDEN, "FORBIDDEN_ACCOUNT", "이 계좌를 조회할 권한이 없습니다.");
+        });
         competitionAccess.check(userId, accountId, false);
-        var order = orders.findByIdAndAccountId(orderId, accountId).orElseThrow(AiReportService::notFound);
+        var order = orders.findByIdAndAccountId(orderId, accountId).orElseThrow(() -> {
+            log.warn("event=ai_report_rejected stage=order_lookup accountId={} orderId={} code=ORDER_NOT_FOUND", accountId, orderId);
+            return notFound();
+        });
         if (order.getSource() != Order.Source.AI || order.getReport() == null
-                || order.getStatus() != Order.Status.EXECUTED) throw notFound();
+                || order.getStatus() != Order.Status.EXECUTED) {
+            log.warn("event=ai_report_rejected stage=report_eligibility_check accountId={} orderId={} code=REPORT_INELIGIBLE_OR_MISSING", accountId, orderId);
+            throw notFound();
+        }
         var fills = executions.findForOrder(orderId);
-        if (fills.isEmpty()) throw notFound();
+        if (fills.isEmpty()) {
+            log.warn("event=ai_report_rejected stage=execution_lookup accountId={} orderId={} code=EXECUTIONS_MISSING", accountId, orderId);
+            throw notFound();
+        }
         Integer holdingDays = null;
         if (order.getSide() == Order.Side.SELL && !fills.isEmpty()) {
             var last = fills.stream().max(java.util.Comparator.comparing(Execution::getCreatedAt)
@@ -62,7 +73,10 @@ public class AiReportService {
                     quantity = Math.addExact(quantity, trade.getQuantity());
                 } else {
                     quantity = Math.subtractExact(quantity, trade.getQuantity());
-                    if (quantity < 0) return null;
+                    if (quantity < 0) {
+                        log.warn("event=ai_report_holding_days_unavailable stage=holding_trade_application executionId={} code=NEGATIVE_HOLDING_QUANTITY", trade.getId());
+                        return null;
+                    }
                 }
             }
             if (started == null) return null;
@@ -70,6 +84,7 @@ public class AiReportService {
             return Math.toIntExact(java.time.temporal.ChronoUnit.DAYS.between(
                     started.atZone(seoul).toLocalDate(), soldAt.atZone(seoul).toLocalDate()));
         } catch (ArithmeticException error) {
+            log.warn("event=ai_report_holding_days_unavailable stage=holding_days_calculation code=ARITHMETIC_RANGE_EXCEEDED causeType={}", error.getClass().getSimpleName());
             return null;
         }
     }

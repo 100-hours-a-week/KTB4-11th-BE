@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/v1/accounts/{accountId}/orders/{orderId}/ai-report")
 public class AiReportController {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AiReportController.class);
     private final AiReportService reports;
 
     public AiReportController(AiReportService reports) { this.reports = reports; }
@@ -22,6 +23,7 @@ public class AiReportController {
         long userId;
         try { userId = Long.parseLong(jwt.getSubject()); }
         catch (NumberFormatException error) {
+            log.warn("event=ai_report_rejected stage=identity_resolution accountId={} orderId={} code=INVALID_TOKEN", accountId, orderId);
             throw new OrderException(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", "인증 정보를 확인하세요.");
         }
         return reports.get(userId, accountId, orderId);

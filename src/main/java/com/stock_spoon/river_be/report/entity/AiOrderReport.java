@@ -7,6 +7,7 @@ import jakarta.persistence.*;
 @Entity
 @Table(name = "ai_order_reports")
 public class AiOrderReport {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AiOrderReport.class);
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY)
     @Column(name = "report_id")
     private Long id;
@@ -44,16 +45,19 @@ public class AiOrderReport {
             Double holdingWeightLimitPercent, Boolean isLowerTriggered) {
         if (holdingWeightLimitPercent != null && (!Double.isFinite(holdingWeightLimitPercent)
                 || holdingWeightLimitPercent < 0 || holdingWeightLimitPercent > 100)) {
+            log.warn("event=ai_report_input_rejected stage=holding_weight_limit_validation code=INVALID_HOLDING_WEIGHT_LIMIT");
             throw new IllegalArgumentException("비중 상한은 0~100의 숫자여야 합니다.");
         }
         this.holdingWeightLimitPercent = holdingWeightLimitPercent;
         this.isLowerTriggered = isLowerTriggered;
         if (reason == null || reason.isBlank() || reason.length() > 100000) {
+            log.warn("event=ai_report_input_rejected stage=reason_validation code=INVALID_REASON");
             throw new IllegalArgumentException("AI 판단 근거는 공백이 아닌 100,000자 이하의 텍스트여야 합니다.");
         }
         this.order = java.util.Objects.requireNonNull(order);
         this.reason = reason;
         if (stockName != null && (stockName.isBlank() || stockName.length() > 255)) {
+            log.warn("event=ai_report_input_rejected stage=stock_name_validation code=INVALID_STOCK_NAME");
             throw new IllegalArgumentException("종목명을 확인하세요.");
         }
         this.stockName = stockName;

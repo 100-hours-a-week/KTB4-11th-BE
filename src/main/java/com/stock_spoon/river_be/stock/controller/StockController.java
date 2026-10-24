@@ -22,6 +22,7 @@ public class StockController {
     @GetMapping("/{stockCode}")
     public StockNameResponse get(@PathVariable String stockCode) {
         if (!stockCode.matches("[0-9A-Z]{6}")) {
+            log.warn("event=stock_code_rejected stage=stock_code_validation code=INVALID_STOCK_CODE");
             throw new IllegalArgumentException("종목코드를 확인해주세요.");
         }
         var details = market.stockDetails(stockCode);
@@ -40,7 +41,7 @@ public class StockController {
 
     private ResponseEntity<Map<String, String>> error(HttpStatus status, String code, String message) {
         var level = status.is5xxServerError() ? log.atError() : log.atWarn();
-        level.log("event=stock_name_lookup_rejected status={} code={}", status.value(), code);
+        level.log("event=stock_name_lookup_rejected status={} code={} stage=stock_exception_handler", status.value(), code);
         return ResponseEntity.status(status).body(Map.of("code", code, "message", message));
     }
 }

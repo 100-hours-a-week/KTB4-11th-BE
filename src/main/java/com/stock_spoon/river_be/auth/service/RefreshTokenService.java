@@ -16,6 +16,7 @@ import com.stock_spoon.river_be.user.entity.User;
 
 @Service
 public class RefreshTokenService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(RefreshTokenService.class);
     private final RefreshTokenRepository repository;
     private final JwtTokenProvider tokenProvider;
 
@@ -60,11 +61,13 @@ public class RefreshTokenService {
                     .digest(token.getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(digest);
         } catch (NoSuchAlgorithmException error) {
+            log.error("event=refresh_token_hash_failed stage=token_hashing code=HASH_ALGORITHM_UNAVAILABLE");
             throw new IllegalStateException("SHA-256을 사용할 수 없습니다.", error);
         }
     }
 
     private AuthException invalidRefreshToken() {
+        log.warn("event=auth_reissue_rejected stage=stored_refresh_token_lookup code=REFRESH_RECORD_MISSING_OR_USER_MISMATCH");
         return new AuthException(HttpStatus.UNAUTHORIZED,
                 "INVALID_REFRESH_TOKEN", "Refresh Token이 유효하지 않습니다.");
     }

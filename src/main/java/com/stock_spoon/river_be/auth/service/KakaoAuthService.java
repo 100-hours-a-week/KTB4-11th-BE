@@ -16,6 +16,7 @@ import com.stock_spoon.river_be.user.repository.UserRepository;
 // 인증 처리 순서를 관리
 @Service
 public class KakaoAuthService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(KakaoAuthService.class);
     private final KakaoClient client;
     private final KakaoProperties properties;
     private final UserRepository userRepository;
@@ -34,6 +35,7 @@ public class KakaoAuthService {
         requireConfiguration();
         var kakaoUser = client.verifyUser(code);
         if (kakaoUser.nickname() == null || kakaoUser.nickname().isBlank()) {
+            log.warn("event=kakao_profile_rejected stage=profile_validation code=KAKAO_NICKNAME_NOT_PROVIDED");
             throw new AuthException(HttpStatus.BAD_GATEWAY,
                     "KAKAO_NICKNAME_NOT_PROVIDED", "카카오에서 닉네임을 제공받지 못했습니다.");
         }
@@ -64,6 +66,7 @@ public class KakaoAuthService {
             valid = false;
         }
         if (!valid) {
+            log.error("event=kakao_configuration_failed stage=configuration_check code=OAUTH_NOT_CONFIGURED");
             throw new AuthException(HttpStatus.SERVICE_UNAVAILABLE,
                     "OAUTH_NOT_CONFIGURED", "카카오 앱 키와 Redirect URI 설정이 필요합니다.");
         }

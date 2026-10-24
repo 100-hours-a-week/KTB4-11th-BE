@@ -45,6 +45,7 @@ public class KakaoClient {
                 .body(form).retrieve().body(JSON), true);
         if (token == null || !(token.get("access_token") instanceof String accessToken)
                 || accessToken.isBlank()) {
+            log.warn("event=kakao_response_invalid stage=token_response_validation code=ACCESS_TOKEN_MISSING_OR_INVALID");
             throw providerError();
         }
         // 그 토큰으로 사용자 정보 조회 GET https://kapi.kakao.com/v2/user/me
@@ -54,6 +55,7 @@ public class KakaoClient {
                 .retrieve().body(JSON), false);
         if (user == null || !(user.get("id") instanceof Number id)
                 || id.longValue() <= 0 || id.doubleValue() != id.longValue()) {
+            log.warn("event=kakao_response_invalid stage=user_info_validation code=PROVIDER_USER_ID_MISSING_OR_INVALID");
             throw providerError();
         }
         String nickname = null;
@@ -83,22 +85,26 @@ public class KakaoClient {
             if (tokenExchange) {
                 String oauthError = oauthError(error);
                 if ("invalid_grant".equals(oauthError)) {
+                    log.warn("event=kakao_auth_rejected stage=token_exchange code=INVALID_AUTHORIZATION_CODE");
                     throw new AuthException(HttpStatus.BAD_REQUEST,
                             "INVALID_AUTHORIZATION_CODE", "인가코드가 만료되었거나 유효하지 않습니다.");
                 }
                 if ("invalid_client".equals(oauthError) || "unauthorized_client".equals(oauthError)) {
+                    log.error("event=kakao_auth_rejected stage=token_exchange code=OAUTH_CONFIGURATION_ERROR");
                     throw new AuthException(HttpStatus.INTERNAL_SERVER_ERROR,
                             "OAUTH_CONFIGURATION_ERROR", "카카오 인증 설정을 확인해야 합니다.");
                 }
             }
             throw providerError();
         } catch (ResourceAccessException error) {
-            log.warn("event=kakao_call_failed stage={} causeType={} elapsedMs={}",
-                    stage, error.getClass().getSimpleName(), (System.nanoTime() - started) / 1_000_000);
+            log.warn("event=kakao_call_failed stage={} causeType={} elapsedMs={} nestedCauseType={}",
+                    stage, error.getClass().getSimpleName(), (System.nanoTime() - started) / 1_000_000,
+                    error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
             Throwable cause = error;
             while (cause != null) {
                 if (cause instanceof java.net.SocketTimeoutException
                         || cause instanceof java.net.http.HttpTimeoutException) {
+                    log.warn("event=kakao_auth_rejected stage={} code=OAUTH_PROVIDER_TIMEOUT", stage);
                     throw new AuthException(HttpStatus.GATEWAY_TIMEOUT,
                             "OAUTH_PROVIDER_TIMEOUT", "카카오 인증 서버 응답 시간이 초과되었습니다.");
                 }
@@ -106,8 +112,9 @@ public class KakaoClient {
             }
             throw providerError();
         } catch (RestClientException error) {
-            log.warn("event=kakao_call_failed stage={} causeType={} elapsedMs={}",
-                    stage, error.getClass().getSimpleName(), (System.nanoTime() - started) / 1_000_000);
+            log.warn("event=kakao_call_failed stage={} causeType={} elapsedMs={} nestedCauseType={}",
+                    stage, error.getClass().getSimpleName(), (System.nanoTime() - started) / 1_000_000,
+                    error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
             throw providerError();
         }
     }
@@ -117,6 +124,7 @@ public class KakaoClient {
             Map<?, ?> body = error.getResponseBodyAs(Map.class);
             return body == null ? "" : String.valueOf(body.get("error"));
         } catch (RuntimeException ignored) {
+            log.warn("event=kakao_response_invalid stage=oauth_error_deserialization causeType={}", ignored.getClass().getSimpleName());
             return "";
         }
     }

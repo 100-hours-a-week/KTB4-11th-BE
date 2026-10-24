@@ -25,6 +25,7 @@ public class AuthService {
 
     public LoginTokens reissue(String refreshToken) {
         if (refreshToken == null || refreshToken.isBlank()) {
+            log.warn("event=auth_reissue_rejected stage=refresh_input_validation code=REFRESH_TOKEN_MISSING");
             throw invalidRefreshToken();
         }
         var tokens = refreshTokenService.rotate(refreshToken);

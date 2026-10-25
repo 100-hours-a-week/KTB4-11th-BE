@@ -1,7 +1,8 @@
 package com.stock_spoon.river_be.watchlist.controller;
 
 import com.stock_spoon.river_be.config.DbReadRetryable;
-import com.stock_spoon.river_be.config.DbWritePreDmlRetryable;
+import com.stock_spoon.river_be.config.DbWriteReplayBusinessCommand;
+import static com.stock_spoon.river_be.config.DbWriteReplayBusinessCommand.Type.*;
 import com.stock_spoon.river_be.watchlist.dto.WatchlistAddRequest;
 import com.stock_spoon.river_be.watchlist.dto.WatchlistAddResponse;
 import com.stock_spoon.river_be.watchlist.dto.WatchlistResponse;
@@ -30,7 +31,7 @@ public class WatchlistController {
     }
 
     @PostMapping
-    @DbWritePreDmlRetryable
+    @DbWriteReplayBusinessCommand(WATCHLIST_ADD)
     public ResponseEntity<WatchlistAddResponse> add(@AuthenticationPrincipal Jwt jwt,
             @Valid @RequestBody WatchlistAddRequest request) {
         boolean created = service.add(Long.parseLong(jwt.getSubject()), request.stockCode());
@@ -39,7 +40,7 @@ public class WatchlistController {
     }
 
     @DeleteMapping("/{stockCode}")
-    @DbWritePreDmlRetryable
+    @DbWriteReplayBusinessCommand(WATCHLIST_REMOVE)
     public Map<String, String> remove(@AuthenticationPrincipal Jwt jwt, @PathVariable String stockCode) {
         service.remove(Long.parseLong(jwt.getSubject()), stockCode);
         return Map.of("message", "delete_success");

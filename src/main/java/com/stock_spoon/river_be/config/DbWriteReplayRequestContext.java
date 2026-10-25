@@ -20,7 +20,34 @@ public class DbWriteReplayRequestContext {
     private final ThreadLocal<RequestState> current = new ThreadLocal<>();
 
     public void beginRequest(String requestId, String writeId) {
-        current.set(new RequestState(requestId, writeId));
+        beginRequest(requestId, writeId, null);
+    }
+
+    public void beginRequest(String requestId, String writeId, String clientIdempotencyKey) {
+        current.set(new RequestState(requestId, writeId, clientIdempotencyKey));
+    }
+
+    String clientIdempotencyKey() {
+        RequestState request = current.get();
+        return request == null ? null : request.clientIdempotencyKey;
+    }
+
+    String requestReplayId() {
+        RequestState request = current.get();
+        if (request == null) throw new IllegalStateException("Replay request context is missing");
+        return request.replayRequestId;
+    }
+
+    void captureBusinessCommand(CapturedBusinessCommand command) {
+        RequestState request = current.get();
+        if (request == null) throw new IllegalStateException("Replay request context is missing");
+        if (request.businessCommand != null) throw new IllegalStateException("Replay command already captured");
+        request.businessCommand = command;
+    }
+
+    boolean hasBusinessCommand() {
+        RequestState request = current.get();
+        return request != null && request.businessCommand != null;
     }
 
     public void endRequest() {
@@ -205,34 +232,79 @@ public class DbWriteReplayRequestContext {
         return null;
     }
 
-    /** Whole-handler retry is allowed only if this HTTP attempt never tried a mutation. */
-    String preDmlRetryBlockReason() {
+    /** Preserve the entire command, even when SQL has not been generated or its outcome is uncertain. */
+    ReplaySnapshot snapshotBusinessCommand(SQLException error) {
         RequestState request = current.get();
-        if (request == null) return "request_context_missing";
-        if (request.untrackedWriteObserved) return "untracked_write_attempt";
-        if (!request.activeTransactions.isEmpty()) return "transaction_still_active";
+        if (request == null || request.businessCommand == null) return null;
+        if (request.businessSnapshot != null) return request.businessSnapshot;
 
-        boolean failureBoundaryObserved = request.transactionBeginFailureObserved;
-        for (TransactionState transaction : request.transactions) {
-            if (transaction.dmlObserved) return "dml_already_attempted";
-            if (transaction.accepted != null) return "already_accepted";
-            if (!transaction.completionObserved) return "transaction_still_active";
-            if (transaction.completionOutcome == CompletionOutcome.UNKNOWN && !transaction.rollbackAttempted) {
-                return "commit_not_confirmed";
-            }
-            failureBoundaryObserved |= transaction.rollbackAttempted;
-        }
-        return failureBoundaryObserved ? null : "failed_transaction_not_observed";
+        CapturedBusinessCommand command = request.businessCommand;
+        ReplayDiagnostics diagnostics = diagnostics(error);
+        String safety = commandReplaySafety(request);
+        String policy = safety.equals("UNCONFIRMED_OR_PARTIAL")
+                ? "RECONCILIATION_REQUIRED" : "REEXECUTE_COMMAND";
+        Map<String, Object> envelope = new LinkedHashMap<>();
+        envelope.put("schemaVersion", 3);
+        envelope.put("operation", "BUSINESS_COMMAND");
+        envelope.put("consumerContract", "DB_WRITE_BUSINESS_COMMAND_V1");
+        envelope.put("requestId", request.replayRequestId);
+        envelope.put("transactionId", diagnostics.transactionId());
+        envelope.put("httpRequestId", request.requestId);
+        if (request.writeId != null && !request.writeId.isBlank()) envelope.put("writeId", request.writeId);
+        envelope.put("idempotencyKey", command.idempotencyKey());
+        envelope.put("idempotencyKeySource", command.keySource());
+        envelope.put("payloadHash", command.payloadHash());
+        envelope.put("replaySafety", safety);
+        envelope.put("replayPolicy", policy);
+        envelope.put("requiresBusinessValidation", true);
+        envelope.put("businessCommand", command.command());
+        // These SQL statements are evidence, not an alternative execution plan. Never execute
+        // both captured SQL and the command: the failed workflow may have generated only a prefix.
+        envelope.put("capturedStatementsArePartial", true);
+        envelope.put("capturedStatements", request.transactions.stream()
+                .flatMap(transaction -> transaction.statements.stream()).toList());
+        envelope.put("sourceTransactions", request.transactions.stream().map(transaction -> Map.of(
+                "transactionId", transaction.transactionId,
+                "dmlObserved", transaction.dmlObserved,
+                "completionObserved", transaction.completionObserved,
+                "outcome", transaction.completionOutcome.name(),
+                "rollbackConfirmed", transaction.rollbackConfirmed)).toList());
+        envelope.put("sqlErrorCode", error.getErrorCode());
+        if (error.getSQLState() != null) envelope.put("sqlState", error.getSQLState());
+        request.businessSnapshot = new ReplaySnapshot(request.replayRequestId,
+                diagnostics.transactionId(), request.requestId, envelope);
+        return request.businessSnapshot;
     }
 
-    boolean resetForPreDmlRetry() {
-        if (preDmlRetryBlockReason() != null) return false;
+    private static String commandReplaySafety(RequestState request) {
+        if (request.untrackedWriteObserved || !request.activeTransactions.isEmpty()) {
+            return "UNCONFIRMED_OR_PARTIAL";
+        }
+        boolean failureObserved = request.transactionBeginFailureObserved;
+        boolean mutationObserved = false;
+        for (TransactionState transaction : request.transactions) {
+            failureObserved |= transaction.proxySqlError != null;
+            if (!transaction.completionObserved
+                    || (transaction.completionOutcome == CompletionOutcome.UNKNOWN && !transaction.rollbackAttempted)) {
+                return "UNCONFIRMED_OR_PARTIAL";
+            }
+            if (transaction.dmlObserved) {
+                mutationObserved = true;
+                if (transaction.completionOutcome != CompletionOutcome.ROLLED_BACK || !transaction.rollbackConfirmed) {
+                    return "UNCONFIRMED_OR_PARTIAL";
+                }
+            }
+        }
+        if (!failureObserved) return "UNCONFIRMED_OR_PARTIAL";
+        return mutationObserved ? "CONFIRMED_ROLLBACK" : "NO_DML_OBSERVED";
+    }
+
+    Map<String, Object> acceptedCommandMetadata() {
         RequestState request = current.get();
-        if (request == null) return false;
-        // Keep HTTP correlation, but discard failed SELECTs/transactions so a later DML
-        // failure is associated only with its own attempt and fresh service transactions.
-        current.set(new RequestState(request.requestId, request.writeId));
-        return true;
+        if (request == null || request.businessSnapshot == null) return Map.of();
+        return Map.of("operation", "BUSINESS_COMMAND",
+                "replaySafety", request.businessSnapshot.envelope().get("replaySafety"),
+                "replayPolicy", request.businessSnapshot.envelope().get("replayPolicy"));
     }
 
     ReplaySnapshot snapshot(SQLException error) {
@@ -261,6 +333,7 @@ public class DbWriteReplayRequestContext {
     AcceptedReplay acceptedReplay(SQLException error) {
         RequestState request = current.get();
         if (request == null) return null;
+        if (request.businessAccepted != null) return request.businessAccepted;
 
         TransactionState transaction = findTransaction(request, error);
         if (transaction == null || transaction.proxySqlError != error) return null;
@@ -270,6 +343,10 @@ public class DbWriteReplayRequestContext {
     void markEnqueued(SQLException error, AcceptedReplay accepted) {
         RequestState request = current.get();
         if (request == null) return;
+        if (request.businessSnapshot != null) {
+            request.businessAccepted = accepted;
+            return;
+        }
 
         TransactionState transaction = findTransaction(request, error);
         if (transaction != null && transaction.proxySqlError == error) {
@@ -306,9 +383,16 @@ public class DbWriteReplayRequestContext {
         private SQLException untrackedFallbackError;
         private boolean untrackedWriteObserved;
         private boolean transactionBeginFailureObserved;
-        private RequestState(String requestId, String writeId) {
+        private final String replayRequestId = UUID.randomUUID().toString();
+        private final String clientIdempotencyKey;
+        private CapturedBusinessCommand businessCommand;
+        private ReplaySnapshot businessSnapshot;
+        private AcceptedReplay businessAccepted;
+
+        private RequestState(String requestId, String writeId, String clientIdempotencyKey) {
             this.requestId = requestId;
             this.writeId = writeId;
+            this.clientIdempotencyKey = clientIdempotencyKey;
         }
     }
 
@@ -331,6 +415,9 @@ public class DbWriteReplayRequestContext {
         private TransactionState(String transactionId) {
             this.transactionId = transactionId;
         }
+    }
+
+    record CapturedBusinessCommand(Object command, String idempotencyKey, String keySource, String payloadHash) {
     }
 
     record ReplaySnapshot(

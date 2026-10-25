@@ -1,6 +1,8 @@
 package com.stock_spoon.river_be.competition.controller;
 
 import com.stock_spoon.river_be.config.DbReadRetryable;
+import com.stock_spoon.river_be.config.DbWriteReplayBusinessCommand;
+import static com.stock_spoon.river_be.config.DbWriteReplayBusinessCommand.Type.COMPETITION_CREATE;
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateRequest;
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateResponse;
 import com.stock_spoon.river_be.competition.dto.CompetitionListResponse;
@@ -61,6 +63,7 @@ public class CompetitionController {
 
     @PostMapping // 공통 경로로 들어오는 POST 요청을 처리한다.
     @ResponseStatus(HttpStatus.CREATED) // 정상 반환 시 HTTP 상태 코드를 201 Created로 지정한다.
+    @DbWriteReplayBusinessCommand(COMPETITION_CREATE)
     public CompetitionCreateResponse createCompetition(
             @AuthenticationPrincipal Jwt jwt, // 인증된 사용자의 JWT를 주입한다. subject에서 사용자 ID를 읽을 수 있다.
             @Valid @RequestBody CompetitionCreateRequest request) { // JSON 요청 본문을 DTO로 변환한다.

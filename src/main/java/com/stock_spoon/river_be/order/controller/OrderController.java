@@ -1,7 +1,8 @@
 package com.stock_spoon.river_be.order.controller;
 
 import com.stock_spoon.river_be.config.DbReadRetryable;
-import com.stock_spoon.river_be.config.DbWritePreDmlRetryable;
+import com.stock_spoon.river_be.config.DbWriteReplayBusinessCommand;
+import static com.stock_spoon.river_be.config.DbWriteReplayBusinessCommand.Type.*;
 import com.stock_spoon.river_be.order.dto.OrderCancelRequest;
 import com.stock_spoon.river_be.order.dto.OrderCreateRequest;
 import com.stock_spoon.river_be.order.dto.OrderCreateResponse;
@@ -77,7 +78,7 @@ public class OrderController {
 
 
     @org.springframework.web.bind.annotation.PatchMapping("/{orderId}")
-    @DbWritePreDmlRetryable
+    @DbWriteReplayBusinessCommand(ORDER_CANCEL)
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void cancel(@AuthenticationPrincipal Jwt jwt, @PathVariable long accountId,
             @PathVariable long orderId, @Valid @RequestBody OrderCancelRequest request) {
@@ -96,7 +97,7 @@ public class OrderController {
     // @RequestBody는 JSON을 DTO로 변환하고 @Valid는 DTO의 제약을 검사한다.
     // 반환 DTO는 Spring이 JSON으로 변환하며 @ResponseStatus에 따라 HTTP 201을 보낸다.
     @PostMapping
-    @DbWritePreDmlRetryable
+    @DbWriteReplayBusinessCommand(ORDER_CREATE)
     @ResponseStatus(HttpStatus.CREATED)
     public Object create(@AuthenticationPrincipal Jwt jwt,
             @PathVariable long accountId, @Valid @RequestBody OrderCreateRequest request,

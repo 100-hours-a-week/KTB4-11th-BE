@@ -1,7 +1,8 @@
 package com.stock_spoon.river_be.account.controller;
 
 import com.stock_spoon.river_be.config.DbReadRetryable;
-import com.stock_spoon.river_be.config.DbWritePreDmlRetryable;
+import com.stock_spoon.river_be.config.DbWriteReplayBusinessCommand;
+import static com.stock_spoon.river_be.config.DbWriteReplayBusinessCommand.Type.*;
 import java.util.List;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -39,7 +40,7 @@ public class AccountController {
     }
 
     @PostMapping
-    @DbWritePreDmlRetryable
+    @DbWriteReplayBusinessCommand(ACCOUNT_CREATE)
     @ResponseStatus(HttpStatus.CREATED)
     public AccountCreateResponse create(@AuthenticationPrincipal Jwt jwt,
             @Valid @RequestBody AccountCreateRequest request) {
@@ -49,7 +50,7 @@ public class AccountController {
     }
 
     @PatchMapping("/{accountId}")
-    @DbWritePreDmlRetryable
+    @DbWriteReplayBusinessCommand(ACCOUNT_RENAME)
     public AccountResponse rename(@AuthenticationPrincipal Jwt jwt,
             @PathVariable long accountId,
             @RequestBody AccountNameUpdateRequest request) {

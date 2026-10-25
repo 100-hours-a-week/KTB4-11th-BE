@@ -37,17 +37,28 @@ public class DbWriteReplayRequestContext {
         request.activeTransactions.add(transaction);
     }
 
+    void observeTransactionBeginFailure(Throwable failure) {
+        RequestState request = current.get();
+        if (request == null) return;
+        request.transactionBeginFailureObserved = true;
+        request.untrackedFallbackError =
+                DbMigrationWriteFallbackClassifier.findWriteFallbackFailure(failure);
+    }
+
     void markTransactionCommitted(TransactionExecution execution, boolean confirmed) {
         completeTransaction(execution, confirmed ? CompletionOutcome.COMMITTED : CompletionOutcome.UNKNOWN, false);
     }
 
     void markTransactionRolledBack(TransactionExecution execution, Throwable rollbackFailure) {
         RequestState request = current.get();
-        if (request != null && execution != null && rollbackFailure != null) {
+        if (request != null && execution != null) {
             TransactionState transaction = request.transactionsByExecution.get(execution);
-            if (transaction != null && transaction.proxySqlError == null) {
-                transaction.proxySqlError =
-                        DbMigrationWriteFallbackClassifier.findWriteFallbackFailure(rollbackFailure);
+            if (transaction != null) {
+                transaction.rollbackAttempted = true;
+                if (rollbackFailure != null && transaction.proxySqlError == null) {
+                    transaction.proxySqlError =
+                            DbMigrationWriteFallbackClassifier.findWriteFallbackFailure(rollbackFailure);
+                }
             }
         }
 
@@ -70,12 +81,23 @@ public class DbWriteReplayRequestContext {
         request.activeTransactions.remove(transaction);
     }
 
+    /** Record before JDBC execution: a lost response must never look like a pre-DML failure. */
+    void observeWriteAttempt() {
+        RequestState request = current.get();
+        if (request == null) return;
+
+        TransactionState transaction = currentTransactionState(request);
+        if (transaction == null) request.untrackedWriteObserved = true;
+        else transaction.dmlObserved = true;
+    }
+
     void recordSuccessfulWrite(Map<String, Object> statement, boolean mayDependOnGeneratedKey) {
         RequestState request = current.get();
         if (request == null) return;
 
         TransactionState transaction = currentTransactionState(request);
         if (transaction == null) {
+            request.untrackedWriteObserved = true;
             return;
         }
 
@@ -93,6 +115,7 @@ public class DbWriteReplayRequestContext {
 
         TransactionState transaction = currentTransactionState(request);
         if (transaction == null) {
+            request.untrackedWriteObserved = true;
             return;
         }
         transaction.dmlObserved = true;
@@ -136,18 +159,20 @@ public class DbWriteReplayRequestContext {
     ReplayDiagnostics diagnostics(SQLException error) {
         RequestState request = current.get();
         if (request == null) {
-            return new ReplayDiagnostics("none", false, "unknown", false, false, 0);
+            return new ReplayDiagnostics("none", false, "unknown", false, false, 0, false, false);
         }
 
         TransactionState transaction = findTransaction(request, error);
         if (transaction == null) {
             String transactionId = request.untrackedFallbackError == error ? "untracked" : "none";
-            return new ReplayDiagnostics(transactionId, false, "unknown", false, false, 0);
+            return new ReplayDiagnostics(transactionId, false, "unknown", false, false, 0,
+                    false, request.untrackedWriteObserved);
         }
 
         return new ReplayDiagnostics(transaction.transactionId, transaction.dmlObserved,
                 transaction.completionOutcome.name().toLowerCase(Locale.ROOT),
-                transaction.rollbackConfirmed, transaction.replayable, transaction.statements.size());
+                transaction.rollbackConfirmed, transaction.replayable, transaction.statements.size(),
+                transaction.rollbackAttempted, request.untrackedWriteObserved);
     }
 
     boolean canEnqueue(SQLException error) {
@@ -155,10 +180,6 @@ public class DbWriteReplayRequestContext {
     }
 
     String enqueueBlockReason(SQLException error) {
-        return enqueueBlockReason(error, false);
-    }
-
-    String enqueueBlockReason(SQLException error, boolean allowBusinessCommand) {
         RequestState request = current.get();
         if (request == null) return "request_context_missing";
 
@@ -173,24 +194,45 @@ public class DbWriteReplayRequestContext {
         if (transaction.completionOutcome == CompletionOutcome.COMMITTED) {
             return "transaction_already_committed";
         }
-        if (!transaction.completionObserved
+        if (!transaction.dmlObserved) return "no_dml_before_fallback";
+        if (!transaction.completionObserved || !transaction.rollbackAttempted
                 || transaction.completionOutcome != CompletionOutcome.ROLLED_BACK
                 || !transaction.rollbackConfirmed) {
             return "rollback_not_confirmed";
         }
-        if (!transaction.dmlObserved) {
-            if (!allowBusinessCommand) return "no_dml_before_fallback";
-            for (TransactionState prior : request.transactions) {
-                if (prior == transaction) break;
-                if (prior.dmlObserved && prior.completionOutcome != CompletionOutcome.ROLLED_BACK) {
-                    return "prior_transaction_outcome_not_confirmed_rolled_back";
-                }
-            }
-            return null;
-        }
         if (!transaction.replayable) return "dml_not_replayable";
         if (transaction.statements.isEmpty()) return "no_captured_sql";
         return null;
+    }
+
+    /** Whole-handler retry is allowed only if this HTTP attempt never tried a mutation. */
+    String preDmlRetryBlockReason() {
+        RequestState request = current.get();
+        if (request == null) return "request_context_missing";
+        if (request.untrackedWriteObserved) return "untracked_write_attempt";
+        if (!request.activeTransactions.isEmpty()) return "transaction_still_active";
+
+        boolean failureBoundaryObserved = request.transactionBeginFailureObserved;
+        for (TransactionState transaction : request.transactions) {
+            if (transaction.dmlObserved) return "dml_already_attempted";
+            if (transaction.accepted != null) return "already_accepted";
+            if (!transaction.completionObserved) return "transaction_still_active";
+            if (transaction.completionOutcome == CompletionOutcome.UNKNOWN && !transaction.rollbackAttempted) {
+                return "commit_not_confirmed";
+            }
+            failureBoundaryObserved |= transaction.rollbackAttempted;
+        }
+        return failureBoundaryObserved ? null : "failed_transaction_not_observed";
+    }
+
+    boolean resetForPreDmlRetry() {
+        if (preDmlRetryBlockReason() != null) return false;
+        RequestState request = current.get();
+        if (request == null) return false;
+        // Keep HTTP correlation, but discard failed SELECTs/transactions so a later DML
+        // failure is associated only with its own attempt and fresh service transactions.
+        current.set(new RequestState(request.requestId, request.writeId));
+        return true;
     }
 
     ReplaySnapshot snapshot(SQLException error) {
@@ -198,9 +240,10 @@ public class DbWriteReplayRequestContext {
         if (request == null) return null;
 
         TransactionState transaction = findTransaction(request, error);
-        if (transaction == null || transaction.proxySqlError != error) return null;
+        if (transaction == null || transaction.proxySqlError != error
+                || enqueueBlockReason(error) != null) return null;
 
-        String replayRequestId = UUID.randomUUID().toString();
+        String replayRequestId = transaction.replayRequestId;
         Map<String, Object> envelope = new LinkedHashMap<>();
         envelope.put("schemaVersion", 2);
         envelope.put("operation", "SQL_TRANSACTION");
@@ -211,30 +254,6 @@ public class DbWriteReplayRequestContext {
             envelope.put("writeId", request.writeId);
         }
         envelope.put("statements", List.copyOf(transaction.statements));
-        return new ReplaySnapshot(
-                replayRequestId, transaction.transactionId, request.requestId, envelope);
-    }
-
-    ReplaySnapshot snapshotBusinessCommand(SQLException error, Map<String, Object> businessCommand) {
-        RequestState request = current.get();
-        if (request == null) return null;
-
-        TransactionState transaction = findTransaction(request, error);
-        if (transaction == null || transaction.proxySqlError != error) return null;
-
-        String replayRequestId = UUID.randomUUID().toString();
-        Map<String, Object> envelope = new LinkedHashMap<>();
-        envelope.put("schemaVersion", 2);
-        envelope.put("operation", "BUSINESS_COMMAND");
-        envelope.put("requestId", replayRequestId);
-        envelope.put("transactionId", transaction.transactionId);
-        envelope.put("httpRequestId", request.requestId);
-        envelope.put("idempotencyKey", request.writeId == null || request.writeId.isBlank()
-                ? request.requestId : request.writeId);
-        if (request.writeId != null && !request.writeId.isBlank()) {
-            envelope.put("writeId", request.writeId);
-        }
-        envelope.put("businessCommand", businessCommand);
         return new ReplaySnapshot(
                 replayRequestId, transaction.transactionId, request.requestId, envelope);
     }
@@ -285,6 +304,8 @@ public class DbWriteReplayRequestContext {
         private final IdentityHashMap<TransactionExecution, TransactionState> transactionsByExecution =
                 new IdentityHashMap<>();
         private SQLException untrackedFallbackError;
+        private boolean untrackedWriteObserved;
+        private boolean transactionBeginFailureObserved;
         private RequestState(String requestId, String writeId) {
             this.requestId = requestId;
             this.writeId = writeId;
@@ -293,6 +314,9 @@ public class DbWriteReplayRequestContext {
 
     private static final class TransactionState {
         private final String transactionId;
+        // Preserve the transport identity even when SendMessage's response is lost and the
+        // resolver runs again. A newly generated ID would defeat FIFO/receipt deduplication.
+        private final String replayRequestId = UUID.randomUUID().toString();
         private final List<Map<String, Object>> statements = new ArrayList<>();
         private boolean dmlObserved;
         private SQLException proxySqlError;
@@ -300,6 +324,7 @@ public class DbWriteReplayRequestContext {
         private boolean generatedKeyInsertSeen;
         private boolean completionObserved;
         private boolean rollbackConfirmed;
+        private boolean rollbackAttempted;
         private CompletionOutcome completionOutcome = CompletionOutcome.UNKNOWN;
         private AcceptedReplay accepted;
 
@@ -328,6 +353,8 @@ public class DbWriteReplayRequestContext {
             String transactionOutcome,
             boolean rollbackConfirmed,
             boolean replayable,
-            int capturedStatementCount) {
+            int capturedStatementCount,
+            boolean rollbackAttempted,
+            boolean untrackedWriteObserved) {
     }
 }

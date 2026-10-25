@@ -3,7 +3,7 @@
 ## API 계약
 
 `GET /api/v1/accounts/{account_id}/orders` — 기존 로그인 쿠키 인증.
-본인 소유 활성 계좌를 조회한다. AI 운용 계좌는 AI 주문, 수동 계좌는 USER 주문을 반환한다. 없는 계좌, 타인 계좌, 비활성 계좌는 404 `ACCOUNT_NOT_FOUND`.
+본인 소유 활성 계좌를 조회한다. 계좌의 is_ai_managed와 주문의 source로 필터링하지 않으며, 해당 계좌의 AI·USER 주문을 모두 반환한다. 없는 계좌, 타인 계좌, 비활성 계좌는 404 `ACCOUNT_NOT_FOUND`.
 대결 계좌는 CompetitionHistoryAccess.check의 공개 조건도 적용하며, 완료 전 AI 내역은 403 COMPETITION_AI_HISTORY_HIDDEN이다.
 
 | 쿼리 | 생략 시 | 허용 값 |
@@ -61,7 +61,7 @@ GET /api/v1/accounts/2/orders?order_status=cancelled&page=0&limit=10
 }
 ```
 
-위는 범위 밖 페이지 예시다. 전체 개수는 선택 계좌·주문 주체·상태·매수/매도 필터에 맞는 **주문 수**다.
+위는 범위 밖 페이지 예시다. 전체 개수는 선택 계좌·상태·매수/매도·종목코드 필터에 맞는 **주문 수**다.
 order_status=executed이면 마지막 체결시각 내림차순, 그 외에는 주문 생성시각 내림차순이다. 동률은 주문 ID 내림차순이다. 하나의 주문이 여러 번 체결되어도 카드/페이지 항목은 한 건이다.
 빈 결과는 orders=[], total_elements=0, total_pages=0, has_next=false다. 범위 밖 page는 전체 개수를 유지하면서 빈 배열을 반환한다.
 JPA offset은 int 범위만 지원하므로 실제 데이터 범위 안이면서 offset이 int를 넘는 요청은 400이다.
@@ -91,10 +91,10 @@ JPA offset은 int 범위만 지원하므로 실제 데이터 범위 안이면서
 
 ## 구현 흐름과 오류 처리
 
-1. OrderController.list가 limit/page/order_side/order_status를 받아 JWT subject에서 변환한 userId 및 accountId와 함께 OrderHistoryService.list에 전달한다.
+1. OrderController.list가 limit/page/order_side/order_status/stock_code를 받아 JWT subject에서 변환한 userId 및 accountId와 함께 OrderHistoryService.list에 전달한다.
 2. 서비스에서 입력을 검증한 후 읽기 전용 트랜잭션 안에서 계좌 소유권·활성 상태를 확인한다.
 3. 페이지 요청은 같은 필터 조건으로 전체 주문 수를 조회한다. offset이 전체 범위 밖이면 빈 배열로 끝낸다.
-4. OrderRepository.findHistory가 상태·매수/매도 조건을 적용하고 DB에서 페이지를 제한한다. LEFT JOIN / GROUP BY로 복수 체결의 주문 중복을 방지한다. executed 필터에서는 마지막 체결시각, 나머지는 생성시각으로 정렬한다. countHistory도 동일 필터로 주문만 센다.
+4. OrderRepository.findHistory가 계좌·상태·매수/매도·종목코드 조건을 적용하고 DB에서 페이지를 제한한다. LEFT JOIN / GROUP BY로 복수 체결의 주문 중복을 방지한다. executed 필터에서는 마지막 체결시각, 나머지는 생성시각으로 정렬한다. countHistory도 동일 필터로 주문만 센다.
 5. 선택된 주문 ID의 체결을 ExecutionRepository.findForOrders로 일괄 조회하고 DTO로 복사한다. 체결이 없는 EXECUTED 주문은 500 INVALID_ORDER_DATA다. 페이지 요청은 해당 페이지의 주문만 검증하며, page 없는 요청은 기존처럼 모든 필터 후보를 검증한 뒤 limit을 적용한다.
 6. snapshot은 체결이 있는 주문만 summarize로 집계하고, 없는 대기·취소 주문의 요약은 null로 만든다. 트랜잭션 밖에서 반환할 종목명만 조회한다. 외부 실패는 503 ORDER_DATA_UNAVAILABLE이며 일부 성공 결과로 숨기지 않는다.
 7. page 요청에만 pagination을 붙여 반환한다.
@@ -103,12 +103,12 @@ JPA offset은 int 범위만 지원하므로 실제 데이터 범위 안이면서
 
 ```text
 GET /api/v1/accounts/{accountId}/orders?order_status=pending&page=0&limit=10
-  → order.controller.OrderController.list(jwt, accountId, limit, page, orderSide, orderStatus)
-  → order.service.OrderHistoryService.list(userId, accountId, limit, page, orderSide, orderStatus)
+  → order.controller.OrderController.list(jwt, accountId, limit, page, orderSide, orderStatus, stockCode)
+  → order.service.OrderHistoryService.list(userId, accountId, limit, page, orderSide, orderStatus, stockCode)
     → parseStatus(orderStatus): null / PENDING / EXECUTED / CANCELLED
     → 읽기 전용 트랜잭션 안: 계좌 소유권 확인 → CompetitionHistoryAccess.check(userId, accountId, false)
-    → OrderRepository.countHistory(accountId, selectedStatus, source, selectedSide): 페이지 요청일 때
-    → OrderRepository.findHistory(accountId, selectedStatus, source, selectedSide, pageable)
+    → OrderRepository.countHistory(accountId, selectedStatus, selectedSide, stockCode): 페이지 요청일 때
+    → OrderRepository.findHistory(accountId, selectedStatus, selectedSide, stockCode, pageable)
     → ExecutionRepository.findForOrders(선택된 주문 ID 목록)
     → snapshot(order, fills) → 체결이 있으면 summarize(order, fills)
     → DB 읽기 트랜잭션 종료
@@ -116,7 +116,7 @@ GET /api/v1/accounts/{accountId}/orders?order_status=pending&page=0&limit=10
   → OrderHistoryResponse(accountId, orders, pagination): 200 JSON
 ```
 
-요청의 order_status는 서비스의 parseStatus에서 enum으로 변환되며, 생략 시 null이 Repository에 전달되어 상태 제한이 해제된다. 목록 조회와 개수 조회에는 같은 상태·매수/매도·계좌·주문 주체 조건이 전달된다. 반환 주문에 체결이 없을 때는 대기·취소라면 정상 응답하고, EXECUTED이면 데이터 오류로 종료한다. 종목명 외부 조회는 DB 트랜잭션이 끝난 후 실행한다.
+요청의 order_status는 서비스의 parseStatus에서 enum으로 변환되며, 생략 시 null이 Repository에 전달되어 상태 제한이 해제된다. 목록 조회와 개수 조회에는 같은 상태·매수/매도·계좌·종목코드 조건이 전달된다. 반환 주문에 체결이 없을 때는 대기·취소라면 정상 응답하고, EXECUTED이면 데이터 오류로 종료한다. 종목명 외부 조회는 DB 트랜잭션이 끝난 후 실행한다.
 
 관련 코드: [OrderController](../src/main/java/com/stock_spoon/river_be/order/controller/OrderController.java), [OrderHistoryService](../src/main/java/com/stock_spoon/river_be/order/service/OrderHistoryService.java), [OrderRepository](../src/main/java/com/stock_spoon/river_be/order/repository/OrderRepository.java), [OrderHistoryResponse](../src/main/java/com/stock_spoon/river_be/order/dto/OrderHistoryResponse.java).
 
@@ -139,3 +139,19 @@ OrderHistoryTests는 기존 JSON 구조/홈 limit/정렬/인증/접근권한/외
 ```
 
 자동 검증은 H2와 모의 키움 응답을 사용한다. 실제 FE 브라우저, 운영 MySQL, 실제 키움 호출은 검증 범위에 포함하지 않는다.
+
+## 2026-10-25 변경: 주문 출처 필터 제거
+
+OrderHistoryService.list()에서 계좌의 is_ai_managed로 source를 결정하던 부분을 제거했다. OrderRepository.findHistory()/countHistory()에서도 `and o.source = :source`와 source 매개변수를 제거했다. 주문 생성 시 계좌 운용 유형 검증은 그대로 유지한다.
+
+조회 요청이 들어오면 order.controller.OrderController.list()는 인증된 JWT subject를 userId로 변환하고, URL의 accountId 및 검색 조건을 order.service.OrderHistoryService.list()에 전달한다. 조회에서는 JWT actor를 주문 출처 필터로 사용하지 않는다. 서비스는 사용자 소유의 활성 계좌인지 확인한 뒤 CompetitionHistoryAccess.check()로 대결 공개 조건을 검사한다. 완료 전 AI 대결 계좌는 기존대로 403 COMPETITION_AI_HISTORY_HIDDEN이며, 출처 필터 제거로 이 제한을 우회할 수 없다.
+
+Repository는 accountId에 속한 주문 중 요청한 상태·매수/매도·종목코드가 맞는 주문을 가져온다. 계좌 운용 유형과 주문 출처가 달라도 제외하지 않는다. 페이지 요청이면 동일 조건으로 전체 주문 수를 센 뒤 페이지 범위의 주문을 읽는다. 상태를 생략하면 모든 상태가 후보이고, pending을 지정하면 대기 주문만 후보이다. 모든 출처를 포함한다는 것은 다른 검색 조건이나 페이지 제한까지 해제한다는 뜻이 아니다.
+
+선택한 주문의 체결은 ExecutionRepository.findForOrders()로 일괄 조회한다. snapshot()은 DB에 저장된 주문 출처를 응답 order_source에 그대로 기록하며, 대기·취소 주문은 체결이 없어도 정상 반환한다. 체결 상태인데 체결 데이터가 없으면 기존대로 500 INVALID_ORDER_DATA다. DB 읽기 트랜잭션 종료 후 KiwoomMarketClient.stockDetails()로 종목명을 구성한다. 조회 실패는 503 ORDER_DATA_UNAVAILABLE이며, 빈 목록으로 숨기지 않는다. 마지막으로 주문 목록과 페이지 정보를 200 응답으로 반환한다.
+
+예: 계좌 772가 AI 운용이어도, 그 계좌에 source=USER인 대기 주문이 있다면 `order_status=pending` 조회에 포함한다. 실제 주문 4156의 DB 행·상태·계좌 연결과 배포 서버 반영 여부는 별도로 확인해야 한다.
+
+검증은 OrderHistoryTests에서 AI·수동 계좌 각각에 AI·USER 주문을 함께 저장한 뒤 목록·원래 출처·상태/매수매도/종목 필터·전체 개수·페이지 범위 밖 응답을 확인한다. 기존 반대 출처 제외 기대값도 새 정책에 맞춰 수정했다. 운영 DB를 변경하거나 주문 출처를 다시 저장하는 마이그레이션은 필요하지 않다.
+
+검증 결과(2026-10-25): OrderHistoryTests 23개, OrderControllerTests 38개, QueuedOrderControllerTests 2개, CompetitionTradeHistoryTests 12개로 총 75개 통과·실패 0개·건너뜀 0개. 변경 전 혼합 출처 재현 테스트 실패를 확인한 뒤 필터를 제거했다. 운영 DB의 주문 4156은 조회하지 않았고 실제 서버 배포·커밋·푸시는 수행하지 않았다.

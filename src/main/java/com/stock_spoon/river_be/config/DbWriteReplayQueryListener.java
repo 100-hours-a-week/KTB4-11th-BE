@@ -25,6 +25,8 @@ public class DbWriteReplayQueryListener implements QueryExecutionListener {
             Pattern.compile("(?i)^(INSERT|UPDATE|DELETE|REPLACE)\\b");
     private static final Pattern INSERT_OR_REPLACE_SQL =
             Pattern.compile("(?i)^(INSERT|REPLACE)\\b");
+    private static final Pattern SELECT_SQL = Pattern.compile("(?i)^SELECT\\b");
+    private static final Pattern SELECT_INTO = Pattern.compile("(?i)\\bINTO\\b");
 
     private final DbWriteReplayRequestContext requestContext;
 
@@ -34,7 +36,17 @@ public class DbWriteReplayQueryListener implements QueryExecutionListener {
 
     @Override
     public void beforeQuery(ExecutionInfo executionInfo, List<QueryInfo> queryInfoList) {
-        // Capture only after execution so the transaction's rollback result is known separately.
+        // Capture the attempt before sending SQL. afterQuery alone cannot establish that no
+        // mutation was attempted when execution loses its response or instrumentation fails.
+        if (queryInfoList == null || queryInfoList.isEmpty()) {
+            requestContext.markUnreplayableWrite();
+            return;
+        }
+        for (QueryInfo queryInfo : queryInfoList) {
+            String sql = queryInfo == null ? null : queryInfo.getQuery();
+            if (isWriteSql(sql)) requestContext.observeWriteAttempt();
+            else if (!isKnownRead(sql)) requestContext.markUnreplayableWrite();
+        }
     }
 
     @Override
@@ -88,6 +100,14 @@ public class DbWriteReplayQueryListener implements QueryExecutionListener {
         if (sql == null) return false;
         String candidate = stripLeadingComments(sql);
         return WRITE_SQL.matcher(candidate).find();
+    }
+
+    private static boolean isKnownRead(String sql) {
+        if (sql == null || sql.contains(";") || sql.contains("/*!")) return false;
+        String candidate = stripLeadingComments(sql);
+        // CALL, CTEs, DDL and other unclassified SQL cannot qualify as pre-DML. Opted-in
+        // endpoints must also avoid SELECT functions with side effects; see the replay contract.
+        return SELECT_SQL.matcher(candidate).find() && !SELECT_INTO.matcher(candidate).find();
     }
 
     private static String stripLeadingComments(String sql) {

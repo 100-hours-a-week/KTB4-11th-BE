@@ -41,6 +41,7 @@ public class DbMigrationWriteTransactionAuditConfiguration {
             @Override
             public void afterBegin(TransactionExecution transaction, Throwable failure) {
                 if (failure == null) writeReplayContext.beginTransaction(transaction);
+                else writeReplayContext.observeTransactionBeginFailure(failure);
             }
 
             @Override

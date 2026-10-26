@@ -173,8 +173,9 @@ jobs:
             CONTAINER_NAME="stockspoon-v2-dev-${SERVICE}"
             HEALTH_STATUS=""
             health_started=$SECONDS
+            health_deadline=$((SECONDS + 300))
             previous_health=""
-            for attempt in $(seq 1 60); do
+            while (( SECONDS < health_deadline )); do
               HEALTH_STATUS="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CONTAINER_NAME" 2>/dev/null || true)"
               if [[ "$HEALTH_STATUS" != "$previous_health" ]]; then
                 echo "TIMING phase=health_transition seconds=$((SECONDS - health_started)) state=${HEALTH_STATUS:-missing}"
@@ -182,7 +183,7 @@ jobs:
               fi
               [[ "$HEALTH_STATUS" == "healthy" ]] && break
               [[ "$HEALTH_STATUS" == "unhealthy" || "$HEALTH_STATUS" == "exited" || "$HEALTH_STATUS" == "dead" ]] && break
-              sleep 5
+              sleep 2
             done
             echo "TIMING phase=health_wait seconds=$((SECONDS - health_started)) state=${HEALTH_STATUS:-missing}"
             if [[ "$HEALTH_STATUS" != "healthy" ]]; then

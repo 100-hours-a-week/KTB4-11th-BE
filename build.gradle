@@ -54,6 +54,7 @@ dependencies {
     implementation 'net.ttddyy:datasource-proxy:1.11.0'
   	implementation 'org.springframework.boot:spring-boot-health:4.1.1'
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
 	runtimeOnly 'com.mysql:mysql-connector-j'
 	testRuntimeOnly 'com.h2database:h2'
 

@@ -60,6 +60,14 @@ management:
     web:
       exposure:
         include: health,metrics,prometheus
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: ${HTTP_REQUEST_HISTOGRAM_ENABLED:false}
+      minimum-expected-value:
+        http.server.requests: 1ms
+      maximum-expected-value:
+        http.server.requests: 30s
   endpoint:
     health:
       show-details: never

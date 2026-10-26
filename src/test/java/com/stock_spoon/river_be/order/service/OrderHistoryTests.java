@@ -531,6 +531,46 @@ class OrderHistoryTests {
         }
     }
 
+    @Test void returnsEverySourceAndStateForBothAccountTypes() throws Exception {
+        for (boolean managed : List.of(true, false)) {
+            account = accounts.save(new Account(user, "전체 조합 " + managed, 1000000, managed));
+            var expected = new java.util.ArrayList<Order>();
+            for (var source : Order.Source.values()) {
+                for (var state : Order.Status.values()) {
+                    var order = orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY, 2, 70000,
+                            source, null, Instant.parse("2026-09-01T00:00:00Z")));
+                    if (state == Order.Status.EXECUTED) {
+                        executions.save(new Execution(order, 69500, 2, null, null,
+                                Instant.parse("2026-09-01T01:00:00Z")));
+                        order.execute();
+                    } else if (state == Order.Status.CANCELLED) {
+                        order.cancel(Instant.parse("2026-09-01T02:00:00Z"));
+                    }
+                    expected.add(order);
+                }
+            }
+            em.flush();
+            for (String query : List.of("", "?page=0&limit=10")) {
+                var response = list(query).andExpect(status().isOk())
+                        .andExpect(jsonPath("$.orders.length()").value(6));
+                if (!query.isEmpty()) response.andExpect(jsonPath("$.pagination.total_elements").value(6));
+                var tree = JsonMapper.builder().build().readTree(response.andReturn().getResponse().getContentAsString());
+                var actual = new java.util.HashMap<Long, String>();
+                for (var row : tree.path("orders")) actual.put(row.path("order_id").asLong(),
+                        row.path("order_source").asText() + ":" + row.path("order_status").asText());
+                assertThat(actual).hasSize(6);
+                for (var order : expected) assertThat(actual).containsEntry(order.getId(),
+                        order.getSource().name() + ":" + order.getStatus().name().toLowerCase(java.util.Locale.ROOT));
+            }
+            for (var state : Order.Status.values()) {
+                list("?page=0&order_status=" + state.name().toLowerCase(java.util.Locale.ROOT))
+                        .andExpect(status().isOk())
+                        .andExpect(jsonPath("$.orders.length()").value(2))
+                        .andExpect(jsonPath("$.pagination.total_elements").value(2));
+            }
+        }
+    }
+
     @Test void mapsStockInfoFailureTo503() throws Exception {
         executed("2026-09-01T00:00:00Z", "2026-09-01T01:00:00Z", Order.Side.BUY);
         when(market.stockDetails("005930")).thenThrow(new IllegalStateException("provider failure"));

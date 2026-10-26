@@ -155,3 +155,5 @@ Repository는 accountId에 속한 주문 중 요청한 상태·매수/매도·�
 검증은 OrderHistoryTests에서 AI·수동 계좌 각각에 AI·USER 주문을 함께 저장한 뒤 목록·원래 출처·상태/매수매도/종목 필터·전체 개수·페이지 범위 밖 응답을 확인한다. 기존 반대 출처 제외 기대값도 새 정책에 맞춰 수정했다. 운영 DB를 변경하거나 주문 출처를 다시 저장하는 마이그레이션은 필요하지 않다.
 
 검증 결과(2026-10-25): OrderHistoryTests 23개, OrderControllerTests 38개, QueuedOrderControllerTests 2개, CompetitionTradeHistoryTests 12개로 총 75개 통과·실패 0개·건너뜀 0개. 변경 전 혼합 출처 재현 테스트 실패를 확인한 뒤 필터를 제거했다. 운영 DB의 주문 4156은 조회하지 않았고 실제 서버 배포·커밋·푸시는 수행하지 않았다.
+
+추가 검증(2026-10-25): returnsEverySourceAndStateForBothAccountTypes에서 AI·수동 계좌 각각 AI/USER × PENDING/EXECUTED/CANCELLED 6개 조합을 생성하고 전체·페이지 조회의 주문 ID/출처/상태와 상태별 2개씩 반환됨을 확인했다. 관련 회귀 테스트 재실행 결과는 총 76개 통과·실패 0개·건너뜀 0개다. H2 테스트 DB와 mock 종목정보를 사용했으며 운영 DB·배포 서버 검증은 아니다.

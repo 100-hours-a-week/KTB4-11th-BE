@@ -44,6 +44,8 @@ class SecurityJwtTests {
     @Autowired AuthService authService;
     @Autowired JwtEncoder jwtEncoder;
     @Autowired JwtProperties jwtProperties;
+    // [회원 탈퇴 테스트 수정] 일반 토큰에 DB 회원 존재 검사가 추가되어 실제 회원 fixture가 필요하다.
+    @Autowired com.stock_spoon.river_be.user.repository.UserRepository users;
     @MockitoBean KakaoClient kakao;
     private MockMvc mvc;
 
@@ -130,12 +132,14 @@ class SecurityJwtTests {
     @Test
     void onlyAiServerCookieCanReachTheUserSnapshotEndpoint() throws Exception {
         String path = "/api/v1/users/ai-server";
+        // 없는 회원의 401 검사 대신, 존재하는 일반 회원의 AI 전용 API 접근이 403인지 검사한다.
+        String userId = users.save(new com.stock_spoon.river_be.user.entity.User("일반 사용자")).getId().toString();
         mvc.perform(get(path)).andExpect(status().isUnauthorized());
         mvc.perform(get(path).header("Authorization", "Bearer " + aiToken("ai-server", "access", "AI")))
                 .andExpect(status().isUnauthorized());
-        mvc.perform(get(path).cookie(new Cookie("access_token", aiToken("1", "access", null))))
+        mvc.perform(get(path).cookie(new Cookie("access_token", aiToken(userId, "access", null))))
                 .andExpect(status().isForbidden());
-        mvc.perform(get(path).cookie(new Cookie("access_token", aiToken("1", "access", "AI"))))
+        mvc.perform(get(path).cookie(new Cookie("access_token", aiToken(userId, "access", "AI"))))
                 .andExpect(status().isForbidden());
         mvc.perform(get(path).cookie(new Cookie("access_token", aiToken("ai-server", "refresh", "AI"))))
                 .andExpect(status().isUnauthorized());

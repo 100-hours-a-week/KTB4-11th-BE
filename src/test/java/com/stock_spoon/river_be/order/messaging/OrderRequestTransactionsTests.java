@@ -235,6 +235,61 @@ class OrderRequestTransactionsTests {
         });
     }
 
+    // [회원 탈퇴 테스트 추가] 삭제된 계좌의 메시지를 반복 수신해도 주문 이력을 만들지 않고 예약을 정리하는지 확인한다.
+    @Test void deletedAccountMessageDoesNotRecreateOrderHistory() {
+        var request = message("buy", "limit", 70000L, 1);
+        processing.admit(request, null);
+        accounts.deleteById(account.getId());
+        var service = service(org.mockito.Mockito.mock(OrderRequestPublisher.class));
+        assertThat(service.consume(request)).isNull();
+        assertThat(service.consume(request)).isNull();
+        assertThat(store.list(account.getId())).isEmpty();
+        assertThat(records.findById(request.eventId())).isEmpty();
+    }
+
+    // [회원 탈퇴 테스트 추가] 기존 예약 정리 작업이 삭제된 계좌의 예약을 지우고 SQS에 재발행하지 않는지 확인한다.
+    @Test void reconcileRemovesDeletedAccountReservationsInsteadOfRepublishing() {
+        var request = message("buy", "limit", 70000L, 1);
+        processing.admit(request, null);
+        accounts.deleteById(account.getId());
+        var publisher = org.mockito.Mockito.mock(OrderRequestPublisher.class);
+        service(publisher).reconcile();
+        assertThat(store.list(account.getId())).isEmpty();
+        org.mockito.Mockito.verifyNoInteractions(publisher);
+    }
+
+    // [충돌 해결 테스트] 삭제 여부 확인 직후 탈퇴하더라도 비활성 검사에서 실패한 메시지는 안전하게 종결한다.
+    @Test void withdrawalBetweenDeletionCheckAndInactiveCheckDoesNotRecreateHistory() {
+        var request=message("buy","limit",70000L,1);
+        processing.admit(request,null);
+        processing=org.mockito.Mockito.spy(processing);
+        var first=new java.util.concurrent.atomic.AtomicBoolean(true);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            boolean deleted=(Boolean)invocation.callRealMethod();
+            if(first.getAndSet(false)) accounts.deleteById(account.getId());
+            return deleted;
+        }).when(processing).discardIfAccountDeleted(account.getId());
+        assertThat(service(org.mockito.Mockito.mock(OrderRequestPublisher.class)).consume(request)).isNull();
+        assertThat(store.list(account.getId())).isEmpty();
+        assertThat(records.findById(request.eventId())).isEmpty();
+    }
+
+    // [충돌 해결 테스트] 처리 중 503 오류와 비활성화가 겹쳐도 재시도 대신 비활성 거절 결과를 남긴다.
+    @Test void inactiveAccountIsRejectedEvenWhenProcessingFailsWithServiceUnavailable() {
+        var request=message("buy","limit",70000L,1);
+        processing.admit(request,null);
+        processing=org.mockito.Mockito.spy(processing);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            deactivateAccount();
+            throw new com.stock_spoon.river_be.order.exception.OrderException(
+                    org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,"QUOTE_UNAVAILABLE","시세 조회 실패");
+        }).when(processing).validate(request);
+        assertThat(service(org.mockito.Mockito.mock(OrderRequestPublisher.class)).consume(request).reasonCode())
+                .isEqualTo("ACCOUNT_INACTIVE");
+        assertThat(store.list(account.getId())).isEmpty();
+        assertThat(accounts.findById(account.getId()).orElseThrow().getCashBalance()).isEqualTo(100000);
+    }
+
     OrderRequestService service(OrderRequestPublisher publisher) {
         return new OrderRequestService(processing,store,publisher,
                 org.mockito.Mockito.mock(com.stock_spoon.river_be.order.service.OrderSubscriptionService.class),

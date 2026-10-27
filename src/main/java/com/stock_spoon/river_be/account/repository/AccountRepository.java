@@ -9,6 +9,10 @@ import jakarta.persistence.LockModeType;
 import com.stock_spoon.river_be.account.entity.Account;
 
 public interface AccountRepository extends JpaRepository<Account, Long> {
+    // [회원 탈퇴 추가] 비활성 계좌도 포함한 모든 소유 계좌를 ID 순으로 잠가 체결과 삭제를 직렬화한다.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select a from Account a where a.user.id = :userId order by a.id")
+    List<Account> findAllLockedByUserId(long userId);
     @Query("select p.competition from CompetitionParticipant p where p.account.id = :accountId")
     Optional<com.stock_spoon.river_be.competition.entity.Competition> findCompetitionByAccountId(Long accountId);
 

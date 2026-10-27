@@ -10,6 +10,10 @@ import java.util.List;
 
 // save(), findById() 등 기본 저장·조회 기능은 Spring Data JPA가 구현한다.
 public interface CompetitionRepository extends JpaRepository<Competition, Long> {
+    // [회원 탈퇴 추가] 소유 대결 전체를 ID 순으로 잠근 뒤 계좌를 잠가, 기존 대결 정산의 잠금 순서를 유지한다.
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("select c from Competition c where c.user.id = :userId order by c.id")
+    List<Competition> findAllLockedByUserId(long userId);
     // 소유자를 함께 조건으로 걸어 타인의 대결을 상세 조회하지 못하게 한다.
     java.util.Optional<Competition> findByIdAndUserId(Long id, Long userId);
 

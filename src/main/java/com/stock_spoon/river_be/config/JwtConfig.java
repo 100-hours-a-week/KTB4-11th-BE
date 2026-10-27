@@ -40,9 +40,22 @@ public class JwtConfig {
                 .build();
     }
 
+    // [회원 탈퇴 수정] JWT가 아직 만료되지 않았어도 DB에서 삭제된 일반 회원이면 인증하지 않는다.
     @Bean("accessJwtDecoder")
-    JwtDecoder accessJwtDecoder(SecretKey key, JwtProperties properties) {
-        return decoder(key, properties, "access");
+    JwtDecoder accessJwtDecoder(SecretKey key, JwtProperties properties,
+            com.stock_spoon.river_be.user.repository.UserRepository users) {
+        JwtDecoder delegate = decoder(key, properties, "access");
+        return token -> {
+            Jwt jwt = delegate.decode(token);
+            // AI 서버 토큰은 일반 회원 행이 없으므로 기존 전용 인증·권한 검사 경로를 유지한다.
+            if ("AI".equals(jwt.getClaimAsString("actor")) && "ai-server".equals(jwt.getSubject())) return jwt;
+            try {
+                // 서명·만료·issuer·type 검증을 통과한 subject로 실제 회원 존재까지 확인한다.
+                if (users.existsById(Long.parseLong(jwt.getSubject()))) return jwt;
+            } catch (NumberFormatException ignored) { }
+            // 숫자가 아닌 일반 회원 subject나 이미 삭제된 회원의 토큰은 모두 인증 실패로 처리한다.
+            throw new org.springframework.security.oauth2.jwt.BadJwtException("회원이 존재하지 않습니다.");
+        };
     }
 
     @Bean("refreshJwtDecoder")

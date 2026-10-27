@@ -150,6 +150,29 @@ class OrderRequestTransactionsTests {
         assertThat(store.list(account.getId())).hasSize(1);
         assertThat(records.findById(a.eventId()).orElseThrow().accountId()).isEqualTo(account.getId());
     }
+    // [회원 탈퇴 테스트 추가] 삭제된 계좌의 메시지를 반복 수신해도 주문 이력을 만들지 않고 예약을 정리하는지 확인한다.
+    @Test void deletedAccountMessageDoesNotRecreateOrderHistory() {
+        var request = message("buy", "limit", 70000L, 1);
+        processing.admit(request, null);
+        accounts.deleteById(account.getId());
+        var service = service(org.mockito.Mockito.mock(OrderRequestPublisher.class));
+        assertThat(service.consume(request)).isNull();
+        assertThat(service.consume(request)).isNull();
+        assertThat(store.list(account.getId())).isEmpty();
+        assertThat(records.findById(request.eventId())).isEmpty();
+    }
+
+    // [회원 탈퇴 테스트 추가] 기존 예약 정리 작업이 삭제된 계좌의 예약을 지우고 SQS에 재발행하지 않는지 확인한다.
+    @Test void reconcileRemovesDeletedAccountReservationsInsteadOfRepublishing() {
+        var request = message("buy", "limit", 70000L, 1);
+        processing.admit(request, null);
+        accounts.deleteById(account.getId());
+        var publisher = org.mockito.Mockito.mock(OrderRequestPublisher.class);
+        service(publisher).reconcile();
+        assertThat(store.list(account.getId())).isEmpty();
+        org.mockito.Mockito.verifyNoInteractions(publisher);
+    }
+
     OrderRequestService service(OrderRequestPublisher publisher) {
         return new OrderRequestService(processing,store,publisher,
                 org.mockito.Mockito.mock(com.stock_spoon.river_be.order.service.OrderSubscriptionService.class),

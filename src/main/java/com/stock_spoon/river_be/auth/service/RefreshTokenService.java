@@ -18,14 +18,21 @@ import com.stock_spoon.river_be.user.entity.User;
 public class RefreshTokenService {
     private final RefreshTokenRepository repository;
     private final JwtTokenProvider tokenProvider;
+    // [회원 탈퇴 추가] 발급·재발급 시 탈퇴 서비스와 동일한 회원 잠금을 사용하기 위한 저장소다.
+    private final com.stock_spoon.river_be.user.repository.UserRepository users;
 
-    public RefreshTokenService(RefreshTokenRepository repository, JwtTokenProvider tokenProvider) {
+    // [회원 탈퇴 수정] 토큰 저장 직전 회원의 생존 여부를 다시 확인하도록 UserRepository도 주입받는다.
+    public RefreshTokenService(RefreshTokenRepository repository, JwtTokenProvider tokenProvider,
+            com.stock_spoon.river_be.user.repository.UserRepository users) {
         this.repository = repository;
         this.tokenProvider = tokenProvider;
+        this.users = users;
     }
 
     @Transactional
     public LoginTokens create(User user) {
+        // [회원 탈퇴 수정] 로그인 중 받았던 User가 삭제되었을 수 있어 잠금 재조회한 회원으로만 토큰을 저장한다.
+        user = users.findLockedById(user.getId()).orElseThrow(this::invalidRefreshToken);
         LoginTokens tokens = tokenProvider.issue(user.getId());
         repository.save(new RefreshToken(
                 user, hash(tokens.refreshToken()), tokens.refreshExpiresAt()));
@@ -35,6 +42,8 @@ public class RefreshTokenService {
     @Transactional
     public LoginTokens rotate(String refreshToken) {
         long userId = tokenProvider.refreshUserId(refreshToken);
+        // [회원 탈퇴 수정] 탈퇴와 같은 회원 -> 토큰 잠금 순서로 재발급을 직렬화하고, 삭제된 회원은 401로 거절한다.
+        users.findLockedById(userId).orElseThrow(this::invalidRefreshToken);
         RefreshToken stored = repository.findByTokenHash(hash(refreshToken))
                 .filter(token -> token.getUser().getId().equals(userId))
                 .orElseThrow(this::invalidRefreshToken);

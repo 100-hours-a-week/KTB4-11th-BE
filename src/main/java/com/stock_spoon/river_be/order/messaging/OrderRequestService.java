@@ -62,6 +62,12 @@ public class OrderRequestService {
         catch(RuntimeException e) { log.warn("event=order_publish_marker_failed eventId={}",r.message().eventId()); }
     }
     public OrderRequestRecord consume(OrderRequestMessage m) {
+        // [계좌 비활성화 추가] 시세 장애·장외 여부와 무관하게 비활성 계좌의 메시지를 먼저 종결한다.
+        var inactive=transactions.rejectIfInactive(m);
+        if(inactive!=null) {
+            transactions.cleanup(m);
+            return inactive;
+        }
         var done=transactions.find(m);
         if(done==null) {
             try {
@@ -74,8 +80,13 @@ public class OrderRequestService {
                             ()->stream.assertSource(m.request().stockCode(),q.source())));
                 } else done=transactions.process(m,null,Map.of(),()->{});
             } catch(OrderException e) {
-                if(!e.status().is4xxClientError() || "ORDER_REQUEST_CONFLICT".equals(e.code())) throw e;
-                done=transactions.reject(m,e.code());
+                // 최초 검사와 실제 처리 사이에 비활성화된 경우도 ACCOUNT_INACTIVE로 종결한다.
+                var rejected=transactions.rejectIfInactive(m);
+                if(rejected!=null) done=rejected;
+                else {
+                    if(!e.status().is4xxClientError() || "ORDER_REQUEST_CONFLICT".equals(e.code())) throw e;
+                    done=transactions.reject(m,e.code());
+                }
             } catch(org.springframework.dao.DataIntegrityViolationException e) {
                 done=transactions.find(m); if(done==null) throw e;
             }
@@ -91,6 +102,12 @@ public class OrderRequestService {
     public Map<String,Object> result(long userId,long accountId,String eventId) { return transactions.result(userId,accountId,eventId); }
     public void reconcile() {
         for(long account:store.accounts()) {
+            // [계좌 비활성화 추가] 미발행 예약도 거절 결과를 기록한 뒤 정리하고, SQS 재발행은 생략한다.
+            try { if(transactions.cleanupInactiveAccount(account)) continue; }
+            catch(RuntimeException error) {
+                log.warn("event=inactive_order_cleanup_failed accountId={} causeType={}",account,error.getClass().getSimpleName());
+                continue;
+            }
             for(var r:store.list(account)) {
                 try {
                     if(transactions.find(r.message())!=null || r.message().expired(clock.instant())) consume(r.message());

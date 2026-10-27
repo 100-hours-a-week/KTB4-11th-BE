@@ -150,6 +150,91 @@ class OrderRequestTransactionsTests {
         assertThat(store.list(account.getId())).hasSize(1);
         assertThat(records.findById(a.eventId()).orElseThrow().accountId()).isEqualTo(account.getId());
     }
+    // [계좌 비활성화 테스트] 장중 시세가 없어도 비활성 계좌 메시지는 거절로 종결하고 재수신 시 같은 결과를 반환한다.
+    @Test void inactiveMarketRequestIsRejectedBeforeObtainingQuotes() {
+        var request = message("buy","market",null,1);
+        processing.admit(request,quote(70000));
+        deactivateAccount();
+        var service = service(org.mockito.Mockito.mock(OrderRequestPublisher.class));
+        assertThat(service.consume(request).reasonCode()).isEqualTo("ACCOUNT_INACTIVE");
+        assertThat(service.consume(request).status()).isEqualTo("REJECTED");
+        assertThat(store.list(account.getId())).isEmpty();
+        assertThat(accounts.findById(account.getId()).orElseThrow().getCashBalance()).isEqualTo(100000);
+    }
+
+    // 기존 복구 작업이 비활성 계좌의 미발행 예약을 SQS로 다시 보내지 않아야 한다.
+    @Test void reconciliationTerminatesInactiveReservationsWithoutPublishing() {
+        var request=message("buy","limit",70000L,1);
+        processing.admit(request,null);
+        deactivateAccount();
+        var publisher=org.mockito.Mockito.mock(OrderRequestPublisher.class);
+        service(publisher).reconcile();
+        assertThat(records.findById(request.eventId()).orElseThrow().reasonCode()).isEqualTo("ACCOUNT_INACTIVE");
+        assertThat(store.list(account.getId())).isEmpty();
+        org.mockito.Mockito.verifyNoInteractions(publisher);
+    }
+
+    @Test void automaticLimitExecutionDoesNotTradeAnInactiveAccount() {
+        var request=message("buy","limit",70000L,1);
+        processing.admit(request,null);
+        var result=processing.process(request,null,Map.of(),()->{});
+        deactivateAccount();
+        var execution=ExecutionTestFixture.withClock(accounts,orders,holdings,executions,Clock.fixed(now,ZoneOffset.UTC));
+        Boolean executed = new TransactionTemplate(manager).execute(s -> execution.executeLimit(account.getId(),result.orderId(),65000));
+        assertThat(executed).isFalse();
+        assertThat(orders.findById(result.orderId()).orElseThrow().getStatus()).isEqualTo(Order.Status.PENDING);
+    }
+
+    // DB 거절 결과 커밋 후 Redis 삭제만 실패하면 예약을 남겨 기존 정리 작업이 안전하게 재시도할 수 있다.
+    @Test void inactiveReservationCleanupRetriesAfterRedisFailure() {
+        var request=message("buy","limit",70000L,1);
+        processing.admit(request,null);
+        deactivateAccount();
+        store.failRemoval=true;
+        assertThatThrownBy(() -> processing.cleanupInactiveAccount(account.getId())).hasMessage("redis unavailable");
+        assertThat(records.findById(request.eventId()).orElseThrow().reasonCode()).isEqualTo("ACCOUNT_INACTIVE");
+        assertThat(store.list(account.getId())).hasSize(1);
+        store.failRemoval=false;
+        assertThat(processing.cleanupInactiveAccount(account.getId())).isTrue();
+        assertThat(store.list(account.getId())).isEmpty();
+    }
+
+    // 같은 계좌의 체결과 비활성화를 동시에 시작해 먼저 잠금을 얻은 작업의 결과가 일관되게 보존되는지 확인한다.
+    @Test void deactivationAndLimitExecutionShareTheAccountLock() throws Exception {
+        var request=message("buy","limit",70000L,1);
+        processing.admit(request,null);
+        var result=processing.process(request,null,Map.of(),()->{});
+        var factory=new org.springframework.beans.factory.support.StaticListableBeanFactory();
+        factory.addBean("processing",processing);
+        var deletion=new com.stock_spoon.river_be.account.service.AccountDeletionService(accounts,orders,
+                factory.getBeanProvider(OrderRequestTransactions.class),
+                org.mockito.Mockito.mock(com.stock_spoon.river_be.order.service.OrderSubscriptionService.class),manager);
+        var execution=ExecutionTestFixture.withClock(accounts,orders,holdings,executions,Clock.fixed(now,ZoneOffset.UTC));
+        var start=new CountDownLatch(1);
+        try(var pool=Executors.newFixedThreadPool(2)) {
+            var deleting=pool.submit(() -> { start.await();deletion.delete(account.getUser().getId(),account.getId());return true; });
+            var trading=pool.submit(() -> {
+                start.await();
+                return new TransactionTemplate(manager).execute(s -> execution.executeLimit(account.getId(),result.orderId(),65000));
+            });
+            start.countDown();
+            assertThat(deleting.get(10,TimeUnit.SECONDS)).isTrue();
+            boolean traded=trading.get(10,TimeUnit.SECONDS);
+            assertThat(orders.findById(result.orderId()).orElseThrow().getStatus())
+                    .isEqualTo(traded?Order.Status.EXECUTED:Order.Status.CANCELLED);
+            assertThat(accounts.findById(account.getId()).orElseThrow().getCashBalance()).isEqualTo(traded?35000:100000);
+            assertThat(accounts.findById(account.getId()).orElseThrow().isActive()).isFalse();
+        }
+    }
+
+    void deactivateAccount() {
+        new TransactionTemplate(manager).executeWithoutResult(s -> {
+            em.createNativeQuery("update accounts set is_active=false where account_id=:id")
+                    .setParameter("id",account.getId()).executeUpdate();
+            em.clear();
+        });
+    }
+
     OrderRequestService service(OrderRequestPublisher publisher) {
         return new OrderRequestService(processing,store,publisher,
                 org.mockito.Mockito.mock(com.stock_spoon.river_be.order.service.OrderSubscriptionService.class),
@@ -168,9 +253,14 @@ class OrderRequestTransactionsTests {
     }
     static class MemoryReservations implements OrderReservationStore {
         final Map<Long, Map<String, Reservation>> data = new ConcurrentHashMap<>();
+        boolean failRemoval;
         public List<Reservation> list(long id) { return List.copyOf(data.getOrDefault(id, Map.of()).values()); }
         public void add(Reservation r) { data.computeIfAbsent(r.message().accountId(), k -> new ConcurrentHashMap<>()).putIfAbsent(r.message().eventId(), r); }
         public void remove(long account, String id) { data.getOrDefault(account, new ConcurrentHashMap<>()).remove(id); }
+        public void removeAll(long account) {
+            if(failRemoval) throw new IllegalStateException("redis unavailable");
+            data.remove(account);
+        }
         public void published(Reservation r, Instant at) { }
         public List<Long> accounts() { return List.copyOf(data.keySet()); }
     }

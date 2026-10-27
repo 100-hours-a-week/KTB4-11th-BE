@@ -283,6 +283,8 @@ public class OrderExecutionService {
             java.util.Map<String, BigDecimal> prices, Runnable validate) {
         if (currentPrice <= 0) throw new IllegalArgumentException("현재가는 양수여야 합니다.");
         var account = accounts.findLockedById(accountId).orElseThrow();
+        // [계좌 비활성화 수정] 예약 당시 활성 계좌였더라도 지금 비활성이면 시세 이벤트로 체결하지 않는다.
+        if (!account.isActive()) return false;
         var order = orders.findByIdAndAccountId(orderId, accountId).orElseThrow();
         if (order.getStatus() != Order.Status.PENDING || order.getType() != Order.Type.LIMIT) return false;
         var now = clock.instant();

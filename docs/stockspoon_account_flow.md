@@ -20,11 +20,12 @@
 |---|---|---|
 | 최초 온보딩 | `POST /api/v1/users/me/onboarding` | 시작 자금으로 `기본 계좌`를 만들고 `users.onboarding_completed=true` |
 | 추가 계좌 생성 | `POST /api/v1/users/me/accounts` | 완료된 사용자에게 계좌 추가 |
+| 계좌 삭제(비활성화) | `DELETE /api/v1/users/me/accounts/{accountId}` | 본인 일반 계좌 비활성화·대기 주문 취소 |
 | 계좌 목록 | `GET /api/v1/users/me/accounts` | 내 활성 계좌 목록 |
 | 계좌 상세 | `GET /api/v1/users/me/accounts/{accountId}` | 내 활성 계좌 한 개 |
 | 계좌명 수정 | `PATCH /api/v1/users/me/accounts/{accountId}` | 내 활성 계좌의 이름 변경 |
 
-계좌 비활성화, 보유종목, 주문·체결, 시세, 총자산·손익·수익률 계산은 아직 구현되지 않았다. 모든 API는 스톡스푼 `access_token` 쿠키 인증을 사용한다. `POST`와 `PATCH`는 CSRF 쿠키와 `X-XSRF-TOKEN` 헤더도 필요하다. FE는 쿠키 전송을 위해 `credentials: 'include'`를 사용한다. 인증·CSRF 발급 방법은 [로그인·인증 흐름](stockspoon_login_auth_flow.md)을 참고한다.
+계좌 비활성화는 본인 일반 계좌의 대기 주문을 취소하고 자산·이력을 보존하는 방식으로 구현했다. 상세한 호출 순서와 예외는 [계좌 비활성화 흐름](stockspoon_account_deactivation.md)을 참고한다. 보유종목·주문·체결·시세의 최신 동작은 해당 절을 참고한다. 모든 API는 스톡스푼 `access_token` 쿠키 인증을 사용한다. `POST`·`PATCH`·`DELETE`는 CSRF 쿠키와 `X-XSRF-TOKEN` 헤더도 필요하다. FE는 쿠키 전송을 위해 `credentials: 'include'`를 사용한다. 인증·CSRF 발급 방법은 [로그인·인증 흐름](stockspoon_login_auth_flow.md)을 참고한다.
 
 ## 2. 온보딩: 첫 계좌 만들기
 
@@ -219,7 +220,7 @@ Cookie: access_token={StockSpoon Access JWT}; XSRF-TOKEN={csrf-token}
 ## 8. 남은 정책·구현 간 차이
 
 - 정책은 **비활성 계좌 이름 재사용**을 허용하지만, 현재 DB의 `(user_id, name)` 유일 제약은 비활성 계좌도 포함한다. 서비스의 중복 조회는 활성 계좌만 대상으로 한다. 비활성화 기능을 추가할 때 DB 제약도 함께 변경해야 한다.
-- `is_active`는 생성 시 `true`로 설정되지만 비활성화 API는 없다. 보유주식 0주, 미체결 주문 0건 조건을 검사하려면 보유종목·주문 기능이 필요하다.
+- `is_active`는 생성 시 true이며 계좌 삭제 API가 false로 변경한다. 현금·보유 주식이 있어도 허용하고 모든 대기 주문을 취소한다. 대결 연결 계좌는 개별 비활성화를 거절한다. [계좌 비활성화 흐름](stockspoon_account_deactivation.md)을 참고한다.
 - 계좌 생성·이름 수정의 사전 중복 검사는 동시 요청의 경합까지 보장하지 않는다. 특히 MySQL 이전 시 유일 제약, 예외 변환, 자동 이름 생성의 동시성을 설계해야 한다.
 - 총자산, 수익률, 주문 가능 현금, 보유수량, 주식분할·병합 처리는 보유종목·주문·체결·시세 개발 단계에서 구현해야 한다.
 - 마지막 활성 계좌 비활성화 허용 여부, 활성 계좌 0개일 때 온보딩 상태, 병합 단주, 회원 탈퇴 시 이력 보존 범위는 아직 정책이 확정되지 않았다.

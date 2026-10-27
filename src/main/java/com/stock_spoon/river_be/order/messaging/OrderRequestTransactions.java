@@ -105,8 +105,21 @@ public class OrderRequestTransactions {
         // Assigned IDs must INSERT, never JPA merge over an event concurrently committed by another account.
         em.persist(record); em.flush(); return record;
     }
+    // [회원 탈퇴 수정] 처리 후 정리 시 계좌가 이미 삭제됐다면 특정 요청 대신 해당 계좌의 잔여 예약 전체를 지운다.
     public void cleanup(OrderRequestMessage message) {
-        tx.executeWithoutResult(status -> { lock(message.accountId()); if (existing(message) != null) store.remove(message.accountId(), message.eventId()); });
+        tx.executeWithoutResult(status -> {
+            if (accounts.findLockedById(message.accountId()).isEmpty()) store.removeAll(message.accountId());
+            else if (existing(message) != null) store.remove(message.accountId(), message.eventId());
+        });
+    }
+    // [회원 탈퇴 추가] 계좌 잠금 조회로 실제 부재를 확인한 경우만 예약을 지우고 true를 반환한다.
+    public boolean discardIfAccountDeleted(long accountId) {
+        return tx.execute(status -> {
+            if (accounts.findLockedById(accountId).isPresent()) return false;
+            // DB 장애는 부재로 취급하지 않는다. 실제 부재일 때만 지연 메시지를 ACK할 수 있다.
+            store.removeAll(accountId);
+            return true;
+        });
     }
     public Map<String,Object> result(long userId, long accountId, String eventId) {
         return tx.execute(status -> {

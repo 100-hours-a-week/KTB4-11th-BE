@@ -31,7 +31,9 @@ public class CompetitionCompletionService {
     @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void completeCompetition(Long competitionId) {
         var now = tradingHours.now();
-        var competition = competitions.findLockedById(competitionId).orElseThrow();
+        // [회원 탈퇴 수정] 스케줄러의 후보 조회 후 삭제된 대결은 정산 오류 대신 정상 종료한다.
+        var competition = competitions.findLockedById(competitionId).orElse(null);
+        if (competition == null) return;
         if (competition.getState() != Competition.State.IN_PROGRESS
                 || now.toInstant().isBefore(competition.tradingEndsAt())) return;
 

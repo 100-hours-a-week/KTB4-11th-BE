@@ -62,6 +62,8 @@ public class OrderRequestService {
         catch(RuntimeException e) { log.warn("event=order_publish_marker_failed eventId={}",r.message().eventId()); }
     }
     public OrderRequestRecord consume(OrderRequestMessage m) {
+        // [회원 탈퇴 수정] null은 삭제된 계좌의 메시지를 이력 재생성 없이 정상 종료했다는 뜻이다.
+        if (transactions.discardIfAccountDeleted(m.accountId())) return null;
         var done=transactions.find(m);
         if(done==null) {
             try {
@@ -74,8 +76,15 @@ public class OrderRequestService {
                             ()->stream.assertSource(m.request().stockCode(),q.source())));
                 } else done=transactions.process(m,null,Map.of(),()->{});
             } catch(OrderException e) {
+                // [회원 탈퇴 수정] 최초 확인 후 처리 중 삭제됐을 수도 있어 계좌 부재를 다시 확인한다.
+                if (transactions.discardIfAccountDeleted(m.accountId())) return null;
                 if(!e.status().is4xxClientError() || "ORDER_REQUEST_CONFLICT".equals(e.code())) throw e;
-                done=transactions.reject(m,e.code());
+                try { done=transactions.reject(m,e.code()); }
+                catch (OrderException rejection) {
+                    // [회원 탈퇴 수정] 거절 이력 저장 직전에 삭제돼도 새 이력을 만들거나 무한 재시도하지 않는다.
+                    if (transactions.discardIfAccountDeleted(m.accountId())) return null;
+                    throw rejection;
+                }
             } catch(org.springframework.dao.DataIntegrityViolationException e) {
                 done=transactions.find(m); if(done==null) throw e;
             }
@@ -83,7 +92,8 @@ public class OrderRequestService {
         transactions.cleanup(m);
         if(done.orderId()!=null && !m.market()) {
             subscriptions.refresh();
-            execution.orderCreated(orders.findById(done.orderId()).orElseThrow());
+            // [회원 탈퇴 수정] 주문 커밋 직후 삭제됐다면 초기 체결 알림도 생략한다.
+            orders.findById(done.orderId()).ifPresent(execution::orderCreated);
         }
         log.info("event=order_request_processed correlationId={} eventId={} status={} orderId={}",m.correlationId(),m.eventId(),done.status(),done.orderId());
         return done;
@@ -91,6 +101,14 @@ public class OrderRequestService {
     public Map<String,Object> result(long userId,long accountId,String eventId) { return transactions.result(userId,accountId,eventId); }
     public void reconcile() {
         for(long account:store.accounts()) {
+            // [회원 탈퇴 수정] 커밋 후 예약 정리에 실패한 계좌를 기존 reconcile에서 정리하고 재발행을 생략한다.
+            try {
+                if (transactions.discardIfAccountDeleted(account)) continue;
+            } catch (RuntimeException error) {
+                // DB/Redis 장애를 계좌 부재로 오인하지 않고 로그를 남긴 뒤 다음 정리 주기에 다시 시도한다.
+                log.warn("event=order_request_reconciliation_failed accountId={} causeType={}", account, error.getClass().getSimpleName());
+                continue;
+            }
             for(var r:store.list(account)) {
                 try {
                     if(transactions.find(r.message())!=null || r.message().expired(clock.instant())) consume(r.message());

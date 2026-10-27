@@ -282,8 +282,11 @@ public class OrderExecutionService {
     public boolean executeLimit(long accountId, long orderId, long currentPrice,
             java.util.Map<String, BigDecimal> prices, Runnable validate) {
         if (currentPrice <= 0) throw new IllegalArgumentException("현재가는 양수여야 합니다.");
-        var account = accounts.findLockedById(accountId).orElseThrow();
-        var order = orders.findByIdAndAccountId(orderId, accountId).orElseThrow();
+        // [회원 탈퇴 수정] 시세 이벤트가 대기하던 사이 계좌나 주문이 삭제되었으면 체결하지 않고 false를 반환한다.
+        var account = accounts.findLockedById(accountId).orElse(null);
+        if (account == null) return false;
+        var order = orders.findByIdAndAccountId(orderId, accountId).orElse(null);
+        if (order == null) return false;
         if (order.getStatus() != Order.Status.PENDING || order.getType() != Order.Type.LIMIT) return false;
         var now = clock.instant();
         var local = now.atZone(SEOUL);

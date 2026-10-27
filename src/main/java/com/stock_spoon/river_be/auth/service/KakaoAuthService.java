@@ -41,7 +41,10 @@ public class KakaoAuthService {
         var oauth = userOAuthRepository.findByProviderAndProviderUserId(
                 OAuthProvider.KAKAO, kakaoUser.id());
         if (oauth.isPresent()) {
-            User user = oauth.get().getUser();
+            // [회원 탈퇴 수정] 이전에 읽은 연결 정보만 믿지 않고 회원을 잠금 재조회한다. 이미 삭제됐으면 로그인하지 않는다.
+            User user = userRepository.findLockedById(oauth.get().getUser().getId())
+                    .orElseThrow(() -> new AuthException(HttpStatus.UNAUTHORIZED,
+                            "UNAUTHORIZED", "다시 로그인해주세요."));
             user.synchronizeProfile(kakaoUser.nickname(), kakaoUser.profileImageUrl());
             return user;
         }

@@ -244,12 +244,13 @@ class CompetitionCreationTests {
         assertThat(links.get(1).getAccount().isAiManaged()).isTrue();
         assertThat(links.get(1).getAccount().getName()).isNotEqualTo("반도체 집중");
         assertThat(links).allSatisfy(p -> assertThat(p.getAccount().getCashBalance()).isEqualTo(10_000_000));
+        // [계좌 목록 수정 테스트] 대결 사용자·AI 계좌 모두 목록에 포함하되, AI 운용과 직접 주문 권한은 기존대로 검증한다.
         assertThat(accounts.findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(user.getId()))
-                .extracting(Account::getId).containsExactly(links.get(0).getAccount().getId());
+                .extracting(Account::getId).containsExactly(links.get(0).getAccount().getId(), links.get(1).getAccount().getId());
         assertThat(accounts.findActiveAiManaged()).extracting(Account::getId)
                 .doesNotContain(links.get(1).getAccount().getId());
-        assertThat(accountService.list(user.getId())).singleElement()
-                .satisfies(a -> assertThat(a.duelAccount()).isTrue());
+        assertThat(accountService.list(user.getId())).hasSize(2)
+                .allSatisfy(a -> assertThat(a.duelAccount()).isTrue());
         assertThatThrownBy(() -> accountService.create(user.getId(),
                 new com.stock_spoon.river_be.account.dto.AccountCreateRequest("반도체 집중", 10_000_000L)))
                 .isInstanceOf(com.stock_spoon.river_be.account.exception.AccountException.class);
@@ -366,7 +367,8 @@ class CompetitionCreationTests {
                     second.get(10, java.util.concurrent.TimeUnit.SECONDS)))
                     .containsExactlyInAnyOrder(true, false);
         }
-        assertThat(accounts.findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(user.getId())).hasSize(1);
+        // [계좌 목록 수정 테스트] 대결 하나의 동시 생성 성공 결과는 사용자·AI 계좌 두 개다.
+        assertThat(accounts.findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(user.getId())).hasSize(2);
     }
 
     @Test

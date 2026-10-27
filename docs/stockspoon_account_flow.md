@@ -1,8 +1,10 @@
 # 스톡스푼 v1 계좌 구현 흐름
 
-## 현재 임시 응답값 확인 (2026-10-08)
+## 과거 임시 응답값 확인 (2026-10-08)
 
-로컬 dev `2bf90b2`의 DTO를 정적으로 확인했다. 계좌 목록과 상세의 `is_duel_account`는 항상 false이고, 상세의 `executed_trade_count`는 항상 0이다. 실제 대결 상태·체결 횟수를 조회한 결과가 아니다. 반환 위치는 AccountListResponse.from과 AccountDetailResponse.from이다.
+이 절은 2026-10-08 당시 기록이다. 현재 계좌 목록·상세의 `is_duel_account`는 실제 대결 참가 관계에서 계산하고, 상세의 `executed_trade_count`도 체결 주문 수를 조회한다. 아래 임시값 설명을 현재 응답으로 해석하지 않는다.
+
+당시 로컬 dev `2bf90b2`의 DTO를 정적으로 확인했다. 계좌 목록과 상세의 `is_duel_account`는 항상 false이고, 상세의 `executed_trade_count`는 항상 0이다. 실제 대결 상태·체결 횟수를 조회한 결과가 아니다. 반환 위치는 AccountListResponse.from과 AccountDetailResponse.from이다.
 
 반면 available_cash, holdings_market_value, total_assets, return_percent는 DB와 실제 시세에 기반한 계산값이다. 보유종목의 업종 미분류는 누락 대체값이며, 주문 내역의 더미 reason.summary와 AI 리포트 상세의 실제 reason은 별개다. 운영 DB·배포 버전·외부 연동은 이번 확인 범위에 포함하지 않았다.
 
@@ -72,7 +74,32 @@ GET /api/v1/users/me/accounts
 Cookie: access_token={StockSpoon Access JWT}
 ```
 
-`AccountService.list()`는 JWT 사용자 ID로 활성 계좌만 조회한다. 정렬은 `created_at` 오름차순, 같은 시각이면 `account_id` 오름차순이다. 계좌가 없으면 `200 OK`와 `[]`를 반환한다. 다른 사용자의 계좌는 목록에 포함되지 않는다.
+`AccountService.list()`는 JWT 사용자 ID로 본인의 모든 활성 계좌를 조회한다. 일반 계좌, 일반 AI 계좌, 대결 사용자 계좌와 대결 AI 계좌를 모두 포함한다. 대결의 준비·진행·완료·취소 상태는 목록 제외 조건이 아니며, 타 회원 계좌와 `is_active=false`인 계좌만 제외한다. 정렬은 `created_at` 오름차순, 같은 시각이면 `account_id` 오름차순이다. 계좌가 없으면 `200 OK`와 `[]`를 반환한다. 다른 사용자의 계좌는 목록에 포함되지 않는다.
+
+```text
+GET /api/v1/users/me/accounts
+→ account.controller.AccountController.list(jwt)
+→ JWT subject를 long userId로 변환
+→ account.service.AccountService.list(userId)
+→ account.repository.AccountRepository.findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(userId)
+  → a.user.id = :userId AND a.active = true
+  → created_at, account_id 오름차순
+→ 기존 snapshot/자산 평가 및 AccountListResponse 변환
+→ 200 OK, 계좌 배열
+```
+
+계좌 목록 요청은 `AccountController.list()`로 들어오며, 검증된 JWT가 `jwt` 인자로 주입된다. 컨트롤러는 subject를 내부 회원 ID로 변환해 `AccountService.list(userId)`에 전달한다. 서비스가 호출하는 `AccountRepository.findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc()`에서 대결 AI 참가 계좌를 제외하던 `not exists` 조건을 제거했다. Controller와 Service의 코드는 그대로 두고 기존 보유 평가·주문 가능 현금 계산과 DTO 변환을 재사용한다.
+
+| 계좌 | 포함 여부 |
+|---|---|
+| 본인 활성 일반·일반 AI 계좌 | 포함 |
+| 본인 활성 대결 사용자·대결 AI 계좌 | 포함 |
+| 비활성 계좌 | 제외 |
+| 다른 회원 계좌 | 제외 |
+
+대결 양측 계좌는 `is_duel_account=true`로 표시되며 현재 목록 DTO에는 별도의 AI 운용 여부 필드가 없다. 목록에 AI 계좌가 보이는 것과 사용자 직접 주문 허용은 별개다. AI 운용 대상 조회인 `findActiveAiManagedOn()`과 사용자/AI 주문 권한 검증은 기존 정책을 유지한다.
+
+코드: [AccountController](../src/main/java/com/stock_spoon/river_be/account/controller/AccountController.java), [AccountService](../src/main/java/com/stock_spoon/river_be/account/service/AccountService.java), [AccountRepository](../src/main/java/com/stock_spoon/river_be/account/repository/AccountRepository.java).
 
 FE가 목록에서 계좌를 선택하면 해당 `account_id`를 보관하고 상세 조회에 사용한다. 현재 선택된 계좌 ID는 BE DB에 저장하지 않는다.
 
@@ -113,7 +140,7 @@ Cookie: access_token={StockSpoon Access JWT}
 }
 ```
 
-`available_cash`는 기존 주문 로직을 재사용해 현금에서 대기 매수 주문의 예약금을 뺀 실제 값이다. `holdings_market_value`는 전체 보유종목의 키움 현재가 × 보유수량 합계이며, `total_assets`는 현금 잔액 + 보유 평가액이다. `return_percent`는 (총자산 - 초기자본) / 초기자본 × 100을 소수점 4자리 HALF_UP으로 계산한다. `is_duel_account=false`와 `executed_trade_count=0`은 임시 표시값이다.
+`available_cash`는 기존 주문 로직을 재사용해 현금에서 대기 매수 주문의 예약금을 뺀 실제 값이다. `holdings_market_value`는 전체 보유종목의 키움 현재가 × 보유수량 합계이며, `total_assets`는 현금 잔액 + 보유 평가액이다. `return_percent`는 (총자산 - 초기자본) / 초기자본 × 100을 소수점 4자리 HALF_UP으로 계산한다. `is_duel_account`는 실제 대결 참가 관계를, `executed_trade_count`는 해당 계좌의 체결 주문 수를 반영한다.
 
 추가 계좌 생성은 API 문서에 맞춘 `AccountCreateResponse`를 반환한다. 위 온보딩 응답의 `ai_delegated` 대신 `is_ai_managed`를 제공하며, 사용자 운용 상태인 `false`를 반환한다.
 
@@ -133,7 +160,7 @@ Cookie: access_token={StockSpoon Access JWT}
 ]
 ```
 
-목록의 `total_assets`와 `return_percent`는 상세와 같은 기준으로 전체 보유종목 평가액을 반영한다. `is_duel_account=false`는 임시 표시값이다. `cash_balance`는 계좌 생성 시 초기자본으로 초기화되고 매매 체결 시 갱신된다.
+목록의 `total_assets`와 `return_percent`는 상세와 같은 기준으로 전체 보유종목 평가액을 반영한다. `is_duel_account`는 실제 대결 참가 계좌이면 true이며, 위 일반 계좌 예시에서는 false다. `cash_balance`는 계좌 생성 시 초기자본으로 초기화되고 매매 체결 시 갱신된다.
 
 홈 화면의 원화 금액은 목록의 `available_cash`를 사용한다. 현금 잔액에서 미체결 매수 주문의 예약금을 차감한 금액이며, `total_assets` 계산에는 기존 `cash_balance`를 사용한다.
 

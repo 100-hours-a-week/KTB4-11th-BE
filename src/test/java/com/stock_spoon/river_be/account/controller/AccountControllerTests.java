@@ -35,6 +35,7 @@ class AccountControllerTests {
     @Autowired AccountRepository accounts;
     @Autowired JwtTokenProvider tokens;
     @Autowired com.stock_spoon.river_be.order.service.OrderService orders;
+    @Autowired jakarta.persistence.EntityManager em;
     private MockMvc mvc;
 
     @BeforeEach
@@ -345,6 +346,57 @@ class AccountControllerTests {
                 .andExpect(jsonPath("$.code").value("ACCOUNT_NOT_FOUND"));
         mvc.perform(get("/api/v1/users/me/accounts/{id}/holdings", account.getId()))
                 .andExpect(status().isUnauthorized());
+    }
+
+    // [계좌 목록 수정 테스트] 본인 활성 계좌는 유형·대결 상태와 무관하게 포함하고, 타 회원·비활성 계좌는 제외한다.
+    @Test
+    void accountListIncludesAllOwnedActiveAccountsIncludingDuelAi() throws Exception {
+        var user = users.save(new User("전체 계좌 조회"));
+        var other = users.save(new User("다른 회원"));
+        var manual = accounts.save(new com.stock_spoon.river_be.account.entity.Account(user, "일반", 1000000, false));
+        var ai = accounts.save(new com.stock_spoon.river_be.account.entity.Account(user, "일반 AI", 1000000, true));
+        var duelUser = accounts.save(new com.stock_spoon.river_be.account.entity.Account(user, "대결 사용자", 1000000, false));
+        var duelAi = accounts.save(new com.stock_spoon.river_be.account.entity.Account(user, "대결 AI", 1000000, true));
+        var inactive = accounts.save(new com.stock_spoon.river_be.account.entity.Account(user, "비활성", 1000000, false));
+        var inactiveAi = accounts.save(new com.stock_spoon.river_be.account.entity.Account(user, "비활성 대결 AI", 1000000, true));
+        var otherAi = accounts.save(new com.stock_spoon.river_be.account.entity.Account(other, "타 회원 대결 AI", 1000000, true));
+        var competition = new com.stock_spoon.river_be.competition.entity.Competition(user, "내 대결",
+                com.stock_spoon.river_be.competition.entity.Competition.Type.USER_VS_AI,
+                java.time.LocalDate.now(), java.time.LocalDate.now().plusDays(1), 1000000, 1);
+        var otherCompetition = new com.stock_spoon.river_be.competition.entity.Competition(other, "타 회원 대결",
+                com.stock_spoon.river_be.competition.entity.Competition.Type.USER_VS_AI,
+                java.time.LocalDate.now(), java.time.LocalDate.now().plusDays(1), 1000000, 1);
+        em.persist(competition);
+        em.persist(otherCompetition);
+        for (var account : java.util.List.of(duelUser, duelAi, inactiveAi))
+            em.persist(new com.stock_spoon.river_be.competition.entity.CompetitionParticipant(competition, account));
+        em.persist(new com.stock_spoon.river_be.competition.entity.CompetitionParticipant(otherCompetition, otherAi));
+        em.flush();
+        em.createNativeQuery("update accounts set is_active=false where account_id in (:first, :second)")
+                .setParameter("first", inactive.getId()).setParameter("second", inactiveAi.getId()).executeUpdate();
+        // 생성 시각이 같을 때도 ID 순서가 유지되는지 확인한다.
+        em.createNativeQuery("update accounts set created_at=:created where user_id=:userId")
+                .setParameter("created", java.time.Instant.parse("2026-10-01T00:00:00Z"))
+                .setParameter("userId", user.getId()).executeUpdate();
+        for (String state : new String[]{"READY", "IN_PROGRESS", "COMPLETED", "CANCELLED"}) {
+            em.createNativeQuery("update competitions set state=:state where competition_id=:id")
+                    .setParameter("state", state).setParameter("id", competition.getId()).executeUpdate();
+            em.clear();
+            mvc.perform(get("/api/v1/users/me/accounts").cookie(authCookie(user)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.length()").value(4))
+                    .andExpect(jsonPath("$[0].account_id").value(manual.getId()))
+                    .andExpect(jsonPath("$[1].account_id").value(ai.getId()))
+                    .andExpect(jsonPath("$[2].account_id").value(duelUser.getId()))
+                    .andExpect(jsonPath("$[3].account_id").value(duelAi.getId()))
+                    .andExpect(jsonPath("$[3].is_duel_account").value(true))
+                    .andExpect(jsonPath("$[3].total_assets").value(1000000));
+        }
+        em.createNativeQuery("update accounts set is_active=false where user_id=:userId")
+                .setParameter("userId", user.getId()).executeUpdate();
+        em.clear();
+        mvc.perform(get("/api/v1/users/me/accounts").cookie(authCookie(user)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$").isEmpty());
     }
 
     private org.springframework.test.web.servlet.ResultActions onboard(User user, long initialCapital)

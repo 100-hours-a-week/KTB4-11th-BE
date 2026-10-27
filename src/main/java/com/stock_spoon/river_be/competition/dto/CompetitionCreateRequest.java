@@ -36,5 +36,6 @@ public class CompetitionCreateRequest {
 
     @JsonProperty("ai_participant_count")
     @Min(1)
+    @Max(4)
     private Integer aiParticipantCount=1;
 }

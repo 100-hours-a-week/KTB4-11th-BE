@@ -32,7 +32,9 @@ public class CompetitionDailyPerformanceService {
     // 같은 대결의 정산·기록 작업은 대결 잠금으로 순서를 지킨다. 실패한 대결의 새 기록은 함께 롤백한다.
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public void recordMissingDays(Long competitionId) {
-        var competition = competitions.findLockedById(competitionId).orElseThrow();
+        // [회원 탈퇴 수정] 후보 선정 후 삭제된 대결에는 일별 성과를 생성하지 않고 정상 종료한다.
+        var competition = competitions.findLockedById(competitionId).orElse(null);
+        if (competition == null) return;
         if (competition.getStartedAt() == null || (competition.getState() != Competition.State.IN_PROGRESS
                 && competition.getState() != Competition.State.COMPLETED)) return;
         var now = tradingHours.now();

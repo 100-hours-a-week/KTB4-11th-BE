@@ -111,6 +111,31 @@ public class KiwoomMarketClient {
         return new StockDetails(stockCode, name, sector == null ? "" : ((String) sector).trim());
     }
 
+    /** DB에 없는 종목 마스터를 확보한다. 종목정보 캐시를 사용하지 않는다. */
+    public StockMaster stockMaster(String stockCode) {
+        var response = stockInfoResponse(stockCode);
+        if (!stockCode.equals(response.get("code"))) {
+            throw new IllegalStateException("키움 종목코드가 일치하지 않습니다.");
+        }
+        String name = masterField(response.get("name"), 100, false);
+        String marketCode = masterField(response.get("marketCode"), 10, false);
+        String sector = masterField(response.get("upName"), 100, true);
+        return new StockMaster(stockCode, name, marketCode, sector);
+    }
+
+    private String masterField(Object raw, int maxLength, boolean optional) {
+        if (raw == null && optional) return null;
+        if (!(raw instanceof String value)) throw new IllegalStateException("키움 종목정보 형식이 올바르지 않습니다.");
+        String trimmed = value.trim();
+        if (trimmed.isEmpty() && optional) return null;
+        if (trimmed.isEmpty() || trimmed.length() > maxLength) {
+            throw new IllegalStateException("키움 종목정보 길이가 올바르지 않습니다.");
+        }
+        return trimmed;
+    }
+
+    public record StockMaster(String stockCode, String stockName, String marketCode, String sector) {}
+
     Map<String, Object> metadata(String stockCode) {
         return metadata.load(stockCode, () -> transport.metadata(stockCode));
     }

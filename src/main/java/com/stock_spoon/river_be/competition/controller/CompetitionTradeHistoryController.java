@@ -1,5 +1,6 @@
 package com.stock_spoon.river_be.competition.controller;
 
+import com.stock_spoon.river_be.config.DbReadRetryable;
 import com.stock_spoon.river_be.competition.dto.CompetitionTradeHistoryResponse;
 import com.stock_spoon.river_be.competition.service.CompetitionTradeHistoryService;
 import lombok.RequiredArgsConstructor;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.*;
 public class CompetitionTradeHistoryController {
     private final CompetitionTradeHistoryService history;
 
+    @DbReadRetryable
     @GetMapping
     public CompetitionTradeHistoryResponse list(@AuthenticationPrincipal Jwt jwt, @PathVariable long accountId,
             @RequestParam(required = false) String cursor, @RequestParam(required = false) Integer limit,

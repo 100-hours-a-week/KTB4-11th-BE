@@ -1,11 +1,5 @@
-.git
-.github
-.gradle
-.idea
-.vscode
-build
-docs
-out
-*.iml
-*.log
-.env.local
+**
+!Dockerfile
+!build/
+!build/libs/
+!build/libs/application.jar

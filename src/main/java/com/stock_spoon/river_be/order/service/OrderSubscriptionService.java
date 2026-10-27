@@ -40,6 +40,10 @@ public class OrderSubscriptionService {
     }
 
     public Order withMarketQuote(String stockCode, Function<QuoteEvent, Order> execute) {
+        return withQuoteSnapshot(stockCode, execute);
+    }
+
+    public <T> T withQuoteSnapshot(String stockCode, Function<QuoteEvent, T> execute) {
         synchronized (this) {
             marketRequests.merge(stockCode, 1, Integer::sum);
         }

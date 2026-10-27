@@ -1,5 +1,8 @@
 package com.stock_spoon.river_be.competition.controller;
 
+import com.stock_spoon.river_be.config.DbReadRetryable;
+import com.stock_spoon.river_be.config.DbWriteReplayBusinessCommand;
+import static com.stock_spoon.river_be.config.DbWriteReplayBusinessCommand.Type.COMPETITION_CREATE;
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateRequest;
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateResponse;
 import com.stock_spoon.river_be.competition.dto.CompetitionListResponse;
@@ -34,18 +37,21 @@ public class CompetitionController {
 
     private final CompetitionService competitionService;
 
+    @DbReadRetryable
     @GetMapping("/{competitionId}/result") // 완료된 대결의 최종 성적과 양측 비교 그래프를 조회한다.
     public CompetitionResultResponse getCompetitionResult(@AuthenticationPrincipal Jwt jwt,
             @PathVariable Long competitionId) {
         return competitionService.getCompetitionResult(Long.parseLong(jwt.getSubject()), competitionId);
     }
 
+    @DbReadRetryable
     @GetMapping("/{competitionId}") // 대결 ID는 URL에서, 조회할 사용자 ID는 인증된 JWT에서 받는다.
     public CompetitionDetailResponse getCompetitionDetail(@AuthenticationPrincipal Jwt jwt,
             @PathVariable Long competitionId) {
         return competitionService.getCompetitionDetail(Long.parseLong(jwt.getSubject()), competitionId);
     }
 
+    @DbReadRetryable
     @GetMapping // JWT의 사용자 ID로 본인의 대결만 조회한다.
     public CompetitionListResponse listCompetitions(@AuthenticationPrincipal Jwt jwt,
             @RequestParam(required = false) String cursor,
@@ -57,6 +63,7 @@ public class CompetitionController {
 
     @PostMapping // 공통 경로로 들어오는 POST 요청을 처리한다.
     @ResponseStatus(HttpStatus.CREATED) // 정상 반환 시 HTTP 상태 코드를 201 Created로 지정한다.
+    @DbWriteReplayBusinessCommand(COMPETITION_CREATE)
     public CompetitionCreateResponse createCompetition(
             @AuthenticationPrincipal Jwt jwt, // 인증된 사용자의 JWT를 주입한다. subject에서 사용자 ID를 읽을 수 있다.
             @Valid @RequestBody CompetitionCreateRequest request) { // JSON 요청 본문을 DTO로 변환한다.

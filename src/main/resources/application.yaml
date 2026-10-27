@@ -24,7 +24,16 @@ spring:
       ddl-auto: ${JPA_DDL_AUTO}
     open-in-view: false
 
+order:
+  queue:
+    enabled: ${ORDER_QUEUE_ENABLED:false}
+    consumer-enabled: ${ORDER_QUEUE_CONSUMER_ENABLED:true}
+    url: ${ORDER_QUEUE_URL:}
+    region: ${AWS_REGION:ap-northeast-2}
+
 kakao:
+  # [회원 탈퇴 추가] 서버 전용 연결 해제 키. 미설정이면 앱 기동은 유지하고 unlink 요청 시 503을 반환한다.
+  admin-key: ${KAKAO_ADMIN_KEY:}
   client-id: ${KAKAO_CLIENT_ID}
   client-secret: ${KAKAO_CLIENT_SECRET}
   redirect-uri: ${KAKAO_REDIRECT_URI}
@@ -36,6 +45,12 @@ jwt:
   issuer: ${JWT_ISSUER:stockspoon}
   access-expiration: ${JWT_ACCESS_EXPIRATION:15m}
   refresh-expiration: ${JWT_REFRESH_EXPIRATION:14d}
+
+loadtest:
+  token-issuer:
+    enabled: ${LOADTEST_TOKEN_ISSUER_ENABLED:false}
+    secret: ${LOADTEST_TOKEN_ISSUER_SECRET:}
+    user-ids: ${LOADTEST_TOKEN_ISSUER_USER_IDS:}
 
 kiwoom:
   app-key: ${KIWOOM_APP_KEY:}
@@ -50,7 +65,12 @@ management:
   endpoints:
     web:
       exposure:
-        include: health
+        include: health,metrics,prometheus
   endpoint:
     health:
       show-details: never
+
+server:
+  tomcat:
+    mbeanregistry:
+      enabled: true

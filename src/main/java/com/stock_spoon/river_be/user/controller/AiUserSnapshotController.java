@@ -1,5 +1,6 @@
 package com.stock_spoon.river_be.user.controller;
 
+import com.stock_spoon.river_be.config.DbReadRetryable;
 import com.stock_spoon.river_be.user.dto.AiUserSnapshotResponse;
 import com.stock_spoon.river_be.user.service.AiUserSnapshotService;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -13,6 +14,7 @@ public class AiUserSnapshotController {
         this.service = service;
     }
 
+    @DbReadRetryable
     @GetMapping("/api/v1/users/ai-server")
     public AiUserSnapshotResponse snapshot() {
         return new AiUserSnapshotResponse(service.snapshot());

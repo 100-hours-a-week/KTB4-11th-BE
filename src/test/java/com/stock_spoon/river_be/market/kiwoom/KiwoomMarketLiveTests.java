@@ -12,6 +12,24 @@ import static org.assertj.core.api.Assertions.assertThat;
 @EnabledIfEnvironmentVariable(named = "KIWOOM_LIVE_TEST", matches = "true")
 class KiwoomMarketLiveTests {
     @Test
+    void retrievesStockMasterDirectly() throws Exception {
+        var local = new Properties();
+        if (Files.exists(Path.of(".env.local"))) {
+            try (var reader = Files.newBufferedReader(Path.of(".env.local"))) {
+                local.load(reader);
+            }
+        }
+        var config = new KiwoomConfig();
+        var provider = config.kiwoomTokenProvider(
+                setting("KIWOOM_APP_KEY", local), setting("KIWOOM_APP_SECRET", local));
+        var master = liveClient(config, provider).stockMaster("005930");
+        assertThat(master.stockCode()).isEqualTo("005930");
+        assertThat(master.stockName()).isEqualTo("삼성전자");
+        assertThat(master.marketCode()).isEqualTo("0");
+        System.out.println("키움 직접 조회 결과: " + master);
+    }
+
+    @Test
     void checksStockInfoMarketAndStatusFields() throws Exception {
         var local = new Properties();
         if (Files.exists(Path.of(".env.local"))) {

@@ -33,6 +33,7 @@ tasks.named('spotbugsTest') { enabled = false }   // 테스트 코드는 검사 
 
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+	implementation 'org.springframework.boot:spring-boot-starter-aspectj'
 	implementation 'org.springframework.boot:spring-boot-starter-jackson'
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-security'
@@ -49,9 +50,11 @@ dependencies {
     implementation 'software.amazon.awssdk:regions'
     implementation 'software.amazon.awssdk:http-auth-aws'
     implementation 'software.amazon.awssdk:sqs'
+    implementation 'io.awspring.cloud:spring-cloud-aws-sqs:4.1.1'
     implementation 'net.ttddyy:datasource-proxy:1.11.0'
   	implementation 'org.springframework.boot:spring-boot-health:4.1.1'
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
 	runtimeOnly 'com.mysql:mysql-connector-j'
 	testRuntimeOnly 'com.h2database:h2'
 
@@ -61,7 +64,24 @@ dependencies {
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
+def testRuntimeClasspathJar = tasks.register('testRuntimeClasspathJar', Jar) {
+    inputs.files(sourceSets.test.runtimeClasspath)
+    archiveFileName = 'test-runtime-classpath.jar'
+    destinationDirectory = layout.buildDirectory.dir('test-classpath')
+    doFirst {
+        manifest.attributes('Class-Path': sourceSets.test.runtimeClasspath.files.collect {
+            it.toURI().toASCIIString()
+        }.join(' '))
+    }
+}
+
 tasks.named('test') {
 	useJUnitPlatform()
-	systemProperty 'test.runtime.classpath', sourceSets.test.runtimeClasspath.asPath
+    dependsOn testRuntimeClasspathJar
+    // A manifest classpath also keeps spawned test JVMs below Windows' command-line limit.
+    systemProperty 'test.runtime.classpath', testRuntimeClasspathJar.get().archiveFile.get().asFile.absolutePath
+}
+
+tasks.named('bootJar') {
+    archiveFileName = 'application.jar'
 }

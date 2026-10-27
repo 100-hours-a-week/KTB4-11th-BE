@@ -120,14 +120,19 @@ public class AccountService {
     }
 
     public List<AccountListResponse> list(long userId) {
+        var availableCash = new HashMap<Long, Long>();
         var snapshot = read.execute(status -> {
             var rows = accountRepository.findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(userId);
+            for (var account : rows) {
+                availableCash.put(account.getId(), orderService.availableCash(account.getId()));
+            }
             return snapshot(rows, false);
         });
         var values = evaluate(snapshot);
         log.info("event=account_valuation_completed accountCount={} holdingCount={}", snapshot.accounts().size(), snapshot.holdings().size());
         return snapshot.accounts().stream().map(a -> AccountListResponse.from(a,
-                values.getOrDefault(a.getId(), 0L), snapshot.competitionAccountIds().contains(a.getId()))).toList();
+                values.getOrDefault(a.getId(), 0L), snapshot.competitionAccountIds().contains(a.getId()),
+                availableCash.get(a.getId()))).toList();
     }
 
     // 호출 서비스가 소유권을 확인한 계좌만 전달한다. 시세 요청은 DB 트랜잭션 밖에서 수행한다.

@@ -78,6 +78,7 @@ public class SecurityConfig {
                 .csrf(config -> {
                     config.csrfTokenRepository(csrf);
                     if (csrfDisabled) config.ignoringRequestMatchers("/api/**");
+                    else config.ignoringRequestMatchers("/api/v1/internal/loadtest/tokens");
                 })
                 .sessionManagement(config -> config.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .requestCache(AbstractHttpConfigurer::disable)
@@ -89,7 +90,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/actuator/health").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/auth/csrf").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/login",
-                                "/api/v1/auth/reissue", "/api/v1/auth/logout").permitAll()
+                                "/api/v1/auth/reissue", "/api/v1/auth/logout",
+                                "/api/v1/internal/loadtest/tokens").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/v1/users/ai-server")
                         .access((authentication, context) -> {
                             var current = authentication.get();

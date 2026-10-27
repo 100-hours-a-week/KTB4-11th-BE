@@ -5,6 +5,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import jakarta.servlet.ServletException;
 import java.sql.SQLException;
+import java.sql.SQLTransientConnectionException;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -81,6 +82,85 @@ class RequestLoggingFilterTests {
                 assertThat(event.getMDCPropertyMap()).containsKey("requestId");
             });
             assertThat(logs.list.toString()).doesNotContain("outer exception secret", "secret-id");
+        } finally {
+            logger.detachAppender(logs);
+            logs.stop();
+        }
+    }
+
+    @Test
+    void marksNestedProxySql9001AsFallbackCandidateForWriteHttpMethod() {
+        Logger logger = (Logger) LoggerFactory.getLogger(RequestLoggingFilter.class);
+        var logs = new ListAppender<ILoggingEvent>();
+        logs.start();
+        logger.addAppender(logs);
+        var poolTimeout = new SQLTransientConnectionException("Hikari pool connection timeout", "08001");
+        poolTimeout.setNextException(new SQLException("ProxySQL hostgroup timeout", "HY000", 9001));
+        var error = new RuntimeException("request failed", poolTimeout);
+        var request = new MockHttpServletRequest("POST", "/api/orders");
+        var response = new MockHttpServletResponse();
+
+        try {
+            assertThatThrownBy(() -> new RequestLoggingFilter().doFilter(request, response,
+                    (req, res) -> { throw error; })).isSameAs(error);
+
+            assertThat(logs.list).anySatisfy(event ->
+                    assertThat(event.getFormattedMessage()).contains(
+                            "event=db_migration_write_fallback_candidate_observed",
+                            "signal=proxysql_error_9001", "method=POST",
+                            "sqlErrorCode=9001", "sqlState=HY000", "action=none"));
+            assertThat(logs.list).anySatisfy(event ->
+                    assertThat(event.getFormattedMessage()).contains(
+                            "event=proxysql_connect_timeout_observed", "writeHttpMethod=true"));
+        } finally {
+            logger.detachAppender(logs);
+            logs.stop();
+        }
+    }
+
+    @Test
+    void doesNotMarkReadHttpMethodAsWriteFallbackCandidate() {
+        Logger logger = (Logger) LoggerFactory.getLogger(RequestLoggingFilter.class);
+        var logs = new ListAppender<ILoggingEvent>();
+        logs.start();
+        logger.addAppender(logs);
+        var request = new MockHttpServletRequest("GET", "/api/orders");
+        var response = new MockHttpServletResponse();
+
+        try {
+            assertThatThrownBy(() -> new RequestLoggingFilter().doFilter(request, response,
+                    (req, res) -> { throw new RuntimeException(new SQLException("ProxySQL hostgroup timeout", "HY000", 9001)); }))
+                    .isInstanceOf(RuntimeException.class);
+
+            assertThat(logs.list).noneSatisfy(event ->
+                    assertThat(event.getFormattedMessage())
+                            .contains("event=db_migration_write_fallback_candidate_observed"));
+            assertThat(logs.list).anySatisfy(event ->
+                    assertThat(event.getFormattedMessage()).contains(
+                            "event=proxysql_connect_timeout_observed", "writeHttpMethod=false"));
+        } finally {
+            logger.detachAppender(logs);
+            logs.stop();
+        }
+    }
+
+    @Test
+    void doesNotMarkOtherSqlErrorCodesAsProxySqlFallbackCandidates() {
+        Logger logger = (Logger) LoggerFactory.getLogger(RequestLoggingFilter.class);
+        var logs = new ListAppender<ILoggingEvent>();
+        logs.start();
+        logger.addAppender(logs);
+        var request = new MockHttpServletRequest("POST", "/api/orders");
+        var response = new MockHttpServletResponse();
+
+        try {
+            assertThatThrownBy(() -> new RequestLoggingFilter().doFilter(request, response,
+                    (req, res) -> { throw new RuntimeException(new SQLException("read only denied", "HY000", 1290)); }))
+                    .isInstanceOf(RuntimeException.class);
+
+            assertThat(logs.list).noneSatisfy(event ->
+                    assertThat(event.getFormattedMessage())
+                            .contains("event=db_migration_write_fallback_candidate_observed"));
         } finally {
             logger.detachAppender(logs);
             logs.stop();

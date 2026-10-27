@@ -17,11 +17,16 @@ import net.ttddyy.dsproxy.ExecutionInfo;
 import net.ttddyy.dsproxy.QueryInfo;
 import net.ttddyy.dsproxy.listener.QueryExecutionListener;
 import net.ttddyy.dsproxy.proxy.ParameterSetOperation;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-/** Captures the failed DML and JDBC bind operations needed by the replay Lambda. */
+/** Captures ordered transactional DML and JDBC bind operations for replay. */
 public class DbWriteReplayQueryListener implements QueryExecutionListener {
     private static final Pattern WRITE_SQL =
             Pattern.compile("(?i)^(INSERT|UPDATE|DELETE|REPLACE)\\b");
+    private static final Pattern INSERT_OR_REPLACE_SQL =
+            Pattern.compile("(?i)^(INSERT|REPLACE)\\b");
+    private static final Pattern SELECT_SQL = Pattern.compile("(?i)^SELECT\\b");
+    private static final Pattern SELECT_INTO = Pattern.compile("(?i)\\bINTO\\b");
 
     private final DbWriteReplayRequestContext requestContext;
 
@@ -31,13 +36,23 @@ public class DbWriteReplayQueryListener implements QueryExecutionListener {
 
     @Override
     public void beforeQuery(ExecutionInfo executionInfo, List<QueryInfo> queryInfoList) {
-        // Capture only after execution so the transaction's rollback result is known separately.
+        // Capture the attempt before sending SQL. afterQuery alone cannot establish that no
+        // mutation was attempted when execution loses its response or instrumentation fails.
+        if (queryInfoList == null || queryInfoList.isEmpty()) {
+            requestContext.markUnreplayableWrite();
+            return;
+        }
+        for (QueryInfo queryInfo : queryInfoList) {
+            String sql = queryInfo == null ? null : queryInfo.getQuery();
+            if (isWriteSql(sql)) requestContext.observeWriteAttempt();
+            else if (!isKnownRead(sql)) requestContext.markUnreplayableWrite();
+        }
     }
 
     @Override
     public void afterQuery(ExecutionInfo executionInfo, List<QueryInfo> queryInfoList) {
         Throwable failure = executionInfo.getThrowable();
-        SQLException proxySqlError = DbMigrationWriteFallbackClassifier.findProxySqlConnectTimeout(failure);
+        SQLException fallbackError = DbMigrationWriteFallbackClassifier.findWriteFallbackFailure(failure);
         List<Map<String, Object>> failedWrites = new ArrayList<>();
         boolean replayable = true;
         boolean sawWrite = false;
@@ -46,11 +61,20 @@ public class DbWriteReplayQueryListener implements QueryExecutionListener {
             for (QueryInfo queryInfo : queryInfoList) {
                 if (queryInfo == null || !isWriteSql(queryInfo.getQuery())) continue;
                 sawWrite = true;
-                if (failure == null) {
-                    requestContext.markSuccessfulWrite();
+                if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+                    requestContext.markUnreplayableWrite();
                     continue;
                 }
-                if (proxySqlError == null) {
+                if (failure == null) {
+                    try {
+                        requestContext.recordSuccessfulWrite(
+                                toReplayStatement(queryInfo), mayDependOnGeneratedKey(queryInfo.getQuery()));
+                    } catch (RuntimeException unsupportedBindValue) {
+                        requestContext.markUnreplayableWrite();
+                    }
+                    continue;
+                }
+                if (fallbackError == null) {
                     requestContext.markUnreplayableWrite();
                     continue;
                 }
@@ -62,15 +86,28 @@ public class DbWriteReplayQueryListener implements QueryExecutionListener {
             }
         }
 
-        if (proxySqlError != null) {
-            requestContext.observeProxyFailure(proxySqlError, failedWrites, sawWrite && replayable);
+        if (fallbackError != null) {
+            requestContext.observeFallbackFailure(
+                    fallbackError, failedWrites, replayable, sawWrite);
         }
+    }
+
+    private static boolean mayDependOnGeneratedKey(String sql) {
+        return INSERT_OR_REPLACE_SQL.matcher(stripLeadingComments(sql)).find();
     }
 
     private static boolean isWriteSql(String sql) {
         if (sql == null) return false;
         String candidate = stripLeadingComments(sql);
         return WRITE_SQL.matcher(candidate).find();
+    }
+
+    private static boolean isKnownRead(String sql) {
+        if (sql == null || sql.contains(";") || sql.contains("/*!")) return false;
+        String candidate = stripLeadingComments(sql);
+        // CALL, CTEs, DDL and other unclassified SQL cannot qualify as pre-DML. Opted-in
+        // endpoints must also avoid SELECT functions with side effects; see the replay contract.
+        return SELECT_SQL.matcher(candidate).find() && !SELECT_INTO.matcher(candidate).find();
     }
 
     private static String stripLeadingComments(String sql) {

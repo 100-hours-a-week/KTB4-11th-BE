@@ -147,47 +147,16 @@ public class OrderExecutionService {
                     "FORBIDDEN_ACCOUNT", "이 계좌에 주문할 권한이 없습니다.");
         }
         if (!account.isActive()) throw new OrderException("활성 계좌가 아닙니다.");
-        if (account.isAiManaged() != (source == Order.Source.AI)) {
-            throw new OrderException(HttpStatus.FORBIDDEN, "FORBIDDEN_ACCOUNT",
-                    "주문 주체와 계좌 운용 유형이 일치하지 않습니다.");
-        }
+        com.stock_spoon.river_be.order.service.OrderAccountSourceValidator.assertAllowed(account, source);
         if (accounts.hasNonTradingCompetition(accountId, clock.instant().atZone(SEOUL))) {
             throw new OrderException(HttpStatus.CONFLICT, "COMPETITION_NOT_IN_PROGRESS", "진행 중인 대결만 주문할 수 있습니다.");
         }
         var now = clock.instant();
         assertMarketTime(now);
         validateMarketBook(stockCode, book, now);
-        var levels = side == Order.Side.BUY ? book.asks() : book.bids();
-        var priority = Comparator.comparing(QuoteLevel::price);
-        if (side == Order.Side.SELL) priority = priority.reversed();
-        var fills = new ArrayList<QuoteLevel>();
-        long remaining = quantity;
-        long amount = 0;
-        try {
-            for (var level : levels) {
-                if (level == null || level.price() == null || level.price().signum() < 0
-                        || level.quantity() < 0 || (level.quantity() > 0 && level.price().signum() == 0)) {
-                    throw unavailableBook();
-                }
-                try {
-                    level.price().longValueExact();
-                } catch (ArithmeticException error) {
-                    throw unavailableBook();
-                }
-            }
-            for (var level : levels.stream().sorted(priority).toList()) {
-                if (remaining == 0) break;
-                long filled = Math.min(remaining, level.quantity());
-                if (filled == 0) continue;
-                amount = Math.addExact(amount, Math.multiplyExact(level.price().longValueExact(), filled));
-                fills.add(new QuoteLevel(level.price(), filled));
-                remaining -= filled;
-            }
-        } catch (ArithmeticException error) {
-            throw new OrderException("호가 또는 주문금액이 허용 범위를 초과합니다.");
-        }
-        if (remaining != 0) throw new OrderException(HttpStatus.BAD_REQUEST, "INSUFFICIENT_MARKET_LIQUIDITY",
-                "시장가 주문을 전량 체결할 상대 호가 잔량이 부족합니다.");
+        var estimate = new MarketOrderPricingService().estimate(stockCode, side, quantity, book, now);
+        long amount = estimate.amount();
+        var fills = estimate.fills();
         var owned = holdings.findByAccountIdAndStockCode(accountId, stockCode).orElse(null);
         // 체결별 원가 계산은 보유정보 갱신 전의 동일한 수량·총 취득원가를 사용한다.
         long originalQuantity = owned == null ? 0 : owned.getQuantity();
@@ -255,16 +224,7 @@ public class OrderExecutionService {
     }
 
     private static void validateMarketBook(String stockCode, OrderBook book, java.time.Instant now) {
-        if (book == null || !stockCode.equals(book.stockCode()) || book.receivedAt() == null
-                || book.quoteTime() == null || book.receivedAt().isAfter(now)
-                || book.receivedAt().isBefore(now.minusSeconds(5))) throw unavailableBook();
-        var local = now.atZone(SEOUL);
-        var quotedAt = local.toLocalDate().atTime(book.quoteTime()).atZone(SEOUL).toInstant();
-        if (book.exchangeTimestamp() != null && !book.exchangeTimestamp().equals(quotedAt)) throw unavailableBook();
-        if (!book.receivedAt().atZone(SEOUL).toLocalDate().equals(local.toLocalDate())
-                || quotedAt.isBefore(now.minusSeconds(5)) || quotedAt.isAfter(now.plusSeconds(1))) {
-            throw unavailableBook();
-        }
+        MarketOrderPricingService.validateBook(stockCode, book, now);
     }
 
     private void recordBuyWeight(Order order,
@@ -322,8 +282,12 @@ public class OrderExecutionService {
     public boolean executeLimit(long accountId, long orderId, long currentPrice,
             java.util.Map<String, BigDecimal> prices, Runnable validate) {
         if (currentPrice <= 0) throw new IllegalArgumentException("현재가는 양수여야 합니다.");
-        var account = accounts.findLockedById(accountId).orElseThrow();
-        var order = orders.findByIdAndAccountId(orderId, accountId).orElseThrow();
+        // [회원 탈퇴 수정] 시세 이벤트가 대기하던 사이 계좌나 주문이 삭제되었으면 체결하지 않고 false를 반환한다.
+        var account = accounts.findLockedById(accountId).orElse(null);
+        // [충돌 해결] 탈퇴로 삭제된 계좌와 개별 비활성 계좌 모두 자동 체결을 중단한다.
+        if (account == null || !account.isActive()) return false;
+        var order = orders.findByIdAndAccountId(orderId, accountId).orElse(null);
+        if (order == null) return false;
         if (order.getStatus() != Order.Status.PENDING || order.getType() != Order.Type.LIMIT) return false;
         var now = clock.instant();
         var local = now.atZone(SEOUL);

@@ -13,6 +13,6 @@ public interface WatchlistRepository extends JpaRepository<Watchlist, WatchlistI
     List<Watchlist> list(@Param("userId") long userId);
 
     @Modifying
-    @Query("delete from Watchlist w where w.userId=:userId and w.stock.id in (select s.id from Stock s where s.symbol=:code)")
+    @Query("delete from Watchlist w where w.userId=:userId and w.stock.id in (select s.id from Stock s where s.stockCode=:code)")
     int remove(@Param("userId") long userId, @Param("code") String code);
 }

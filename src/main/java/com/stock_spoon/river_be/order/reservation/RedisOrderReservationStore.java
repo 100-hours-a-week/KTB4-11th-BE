@@ -35,10 +35,10 @@ public class RedisOrderReservationStore implements OrderReservationStore {
         redis.execute(PUBLISHED,List.of(key(r.message().accountId())),r.message().eventId(),json.writeValueAsString(r),
                 json.writeValueAsString(new Reservation(r.message(),r.amount(),at)));
     }
-    // [회원 탈퇴 추가] 예약 해시와 계좌 인덱스를 함께 정리해 기존 reconcile에서도 대상이 남지 않게 한다.
+    // [계좌 비활성화 추가] 계좌 예약 해시와 스캔 인덱스를 함께 제거한다. 비활성 계좌에는 새 예약이 추가되지 않는다.
     @Override public void removeAll(long accountId) {
         redis.delete(key(accountId));
-        redis.opsForSet().remove(ACCOUNTS, Long.toString(accountId));
+        redis.opsForSet().remove(ACCOUNTS,Long.toString(accountId));
     }
     public List<Long> accounts() {
         var result=new ArrayList<Long>();

@@ -33,10 +33,21 @@ public class AccountController {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AccountController.class);
     private final AccountService service;
     private final AccountHoldingsService holdings;
+    // [계좌 비활성화 추가] 삭제 요청의 검증·대기 주문 취소·비활성화를 전담한다.
+    private final com.stock_spoon.river_be.account.service.AccountDeletionService deletion;
 
-    public AccountController(AccountService service, AccountHoldingsService holdings) {
+    public AccountController(AccountService service, AccountHoldingsService holdings,
+            com.stock_spoon.river_be.account.service.AccountDeletionService deletion) {
         this.service = service;
         this.holdings = holdings;
+        this.deletion = deletion;
+    }
+
+    // [계좌 비활성화 추가] 회원 ID는 인증된 JWT에서만 얻고 커밋 후 기존 명세의 200 응답을 반환한다.
+    @org.springframework.web.bind.annotation.DeleteMapping("/{accountId}")
+    public java.util.Map<String,String> delete(@AuthenticationPrincipal Jwt jwt,@PathVariable long accountId) {
+        deletion.delete(Long.parseLong(jwt.getSubject()),accountId);
+        return java.util.Map.of("message","delete_success");
     }
 
     @PostMapping

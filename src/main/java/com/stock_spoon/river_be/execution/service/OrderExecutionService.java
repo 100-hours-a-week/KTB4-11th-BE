@@ -284,7 +284,8 @@ public class OrderExecutionService {
         if (currentPrice <= 0) throw new IllegalArgumentException("현재가는 양수여야 합니다.");
         // [회원 탈퇴 수정] 시세 이벤트가 대기하던 사이 계좌나 주문이 삭제되었으면 체결하지 않고 false를 반환한다.
         var account = accounts.findLockedById(accountId).orElse(null);
-        if (account == null) return false;
+        // [충돌 해결] 탈퇴로 삭제된 계좌와 개별 비활성 계좌 모두 자동 체결을 중단한다.
+        if (account == null || !account.isActive()) return false;
         var order = orders.findByIdAndAccountId(orderId, accountId).orElse(null);
         if (order == null) return false;
         if (order.getStatus() != Order.Status.PENDING || order.getType() != Order.Type.LIMIT) return false;

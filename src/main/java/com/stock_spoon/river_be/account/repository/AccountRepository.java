@@ -36,8 +36,8 @@ public interface AccountRepository extends JpaRepository<Account, Long> {
 
     Optional<Account> findByIdAndUserIdAndActiveTrue(Long accountId, Long userId);
 
+    // [계좌 목록 수정] 대결 AI 계좌도 포함해 본인의 모든 활성 계좌를 생성 시각·ID 순으로 반환한다.
     @Query("select a from Account a where a.user.id = :userId and a.active = true "
-            + "and not exists (select p.id from CompetitionParticipant p where p.account = a and a.aiManaged = true) "
             + "order by a.createdAt, a.id")
     List<Account> findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(Long userId);
 

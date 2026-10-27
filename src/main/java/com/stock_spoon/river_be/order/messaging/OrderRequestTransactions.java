@@ -1,5 +1,6 @@
 package com.stock_spoon.river_be.order.messaging;
 
+import com.stock_spoon.river_be.account.entity.Account;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import com.stock_spoon.river_be.execution.service.OrderExecutionService;
 import com.stock_spoon.river_be.execution.service.MarketOrderPricingService;
@@ -90,12 +91,44 @@ public class OrderRequestTransactions {
     }
     public OrderRequestRecord reject(OrderRequestMessage message, String code) {
         return tx.execute(status -> {
-            lock(message.accountId());
+            var account=lock(message.accountId());
             var done = existing(message);
             if (done != null) return done;
+            // [계좌 비활성화 수정] 처리 중 비활성화됐다면 원래 오류 대신 계좌 비활성 사유로 종결한다.
             return persist(new OrderRequestRecord(message.eventId(), message.accountId(), message.userId(),
-                    hash(message), null, code, clock.instant()));
+                    hash(message), null, account.isActive()?code:"ACCOUNT_INACTIVE", clock.instant()));
         });
+    }
+
+    // [계좌 비활성화 추가] 외부 시세 확보 전 잠금 재검사한다. 기존 결과는 보존하고 미처리 요청만 거절로 기록한다.
+    public OrderRequestRecord rejectIfInactive(OrderRequestMessage message) {
+        return tx.execute(status -> {
+            var account=lock(message.accountId());
+            if(account.isActive()) return null;
+            return inactiveResult(account,message);
+        });
+    }
+
+    // [계좌 비활성화 추가] Redis만 지우기 전에 요청 결과를 DB에 커밋한다. 실패하면 예약이 남아 다음 reconcile에서 재시도한다.
+    public boolean cleanupInactiveAccount(long accountId) {
+        boolean inactive=Boolean.TRUE.equals(tx.execute(status -> {
+            var account=lock(accountId);
+            if(account.isActive()) return false;
+            for(var reservation:store.list(accountId)) inactiveResult(account,reservation.message());
+            return true;
+        }));
+        if(inactive) store.removeAll(accountId);
+        return inactive;
+    }
+
+    // 예약/메시지가 실제 소유 계좌와 일치하는지 확인하고, 동일 eventId의 기존 결과·충돌 검증을 재사용한다.
+    private OrderRequestRecord inactiveResult(Account account,OrderRequestMessage message) {
+        if(account.getId()!=message.accountId() || !account.belongsTo(message.userId())) throw conflict();
+        var done=existing(message);
+        if(done!=null) return done;
+        validator.validate(message);
+        return persist(new OrderRequestRecord(message.eventId(),message.accountId(),message.userId(),
+                hash(message),null,"ACCOUNT_INACTIVE",clock.instant()));
     }
     public OrderRequestRecord find(OrderRequestMessage message) {
         return tx.execute(status -> existing(message));
@@ -137,9 +170,11 @@ public class OrderRequestTransactions {
             throw new OrderException(HttpStatus.NOT_FOUND,"ORDER_REQUEST_NOT_FOUND","주문 요청을 찾을 수 없습니다.");
         });
     }
-    private void lock(long accountId) {
+    // [계좌 비활성화 수정] 잠금 계좌를 반환해 모든 처리 경로가 refresh한 최신 active 값을 검사할 수 있게 한다.
+    private Account lock(long accountId) {
         var account=accounts.findLockedById(accountId).orElseThrow(() -> new OrderException("계좌를 찾을 수 없습니다."));
         em.refresh(account);
+        return account;
     }
     private List<Reservation> live(long accountId) {
         var all=store.list(accountId);

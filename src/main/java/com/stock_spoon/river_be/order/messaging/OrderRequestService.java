@@ -62,11 +62,18 @@ public class OrderRequestService {
         catch(RuntimeException e) { log.warn("event=order_publish_marker_failed eventId={}",r.message().eventId()); }
     }
     public OrderRequestRecord consume(OrderRequestMessage m) {
-        // [회원 탈퇴 수정] null은 삭제된 계좌의 메시지를 이력 재생성 없이 정상 종료했다는 뜻이다.
-        if (transactions.discardIfAccountDeleted(m.accountId())) return null;
-        var done=transactions.find(m);
-        if(done==null) {
-            try {
+        OrderRequestRecord done;
+        try {
+            // [충돌 해결] 삭제된 계좌를 먼저 걸러낸 뒤 남아 있는 비활성 계좌의 거절 결과를 기록한다.
+            if (transactions.discardIfAccountDeleted(m.accountId())) return null;
+            // [계좌 비활성화 추가] 시세 장애·장외 여부와 무관하게 비활성 계좌의 메시지를 먼저 종결한다.
+            var inactive=transactions.rejectIfInactive(m);
+            if(inactive!=null) {
+                transactions.cleanup(m);
+                return inactive;
+            }
+            done=transactions.find(m);
+            if(done==null) {
                 transactions.validate(m);
                 if(m.expired(clock.instant())) done=transactions.reject(m,"ORDER_REQUEST_EXPIRED");
                 else if(m.market()) {
@@ -75,19 +82,26 @@ public class OrderRequestService {
                     done=subscriptions.withQuoteSnapshot(m.request().stockCode(),q->transactions.process(m,q,valuation,
                             ()->stream.assertSource(m.request().stockCode(),q.source())));
                 } else done=transactions.process(m,null,Map.of(),()->{});
-            } catch(OrderException e) {
-                // [회원 탈퇴 수정] 최초 확인 후 처리 중 삭제됐을 수도 있어 계좌 부재를 다시 확인한다.
-                if (transactions.discardIfAccountDeleted(m.accountId())) return null;
-                if(!e.status().is4xxClientError() || "ORDER_REQUEST_CONFLICT".equals(e.code())) throw e;
-                try { done=transactions.reject(m,e.code()); }
-                catch (OrderException rejection) {
-                    // [회원 탈퇴 수정] 거절 이력 저장 직전에 삭제돼도 새 이력을 만들거나 무한 재시도하지 않는다.
-                    if (transactions.discardIfAccountDeleted(m.accountId())) return null;
-                    throw rejection;
-                }
-            } catch(org.springframework.dao.DataIntegrityViolationException e) {
-                done=transactions.find(m); if(done==null) throw e;
             }
+        } catch(OrderException e) {
+            // [회원 탈퇴 수정] 최초 확인 후 처리 중 삭제됐을 수도 있어 계좌 부재를 다시 확인한다.
+            if (transactions.discardIfAccountDeleted(m.accountId())) return null;
+            // [충돌 해결] 시세 장애 중 비활성화된 경우도 먼저 종결하고, 삭제 경합은 아래에서 다시 확인한다.
+            try {
+                var rejected=transactions.rejectIfInactive(m);
+                if(rejected!=null) done=rejected;
+                else {
+                    if(!e.status().is4xxClientError() || "ORDER_REQUEST_CONFLICT".equals(e.code())) throw e;
+                    done=transactions.reject(m,e.code());
+                }
+            }
+            catch (OrderException rejection) {
+                // [회원 탈퇴 수정] 거절 이력 저장 직전에 삭제돼도 새 이력을 만들거나 무한 재시도하지 않는다.
+                if (transactions.discardIfAccountDeleted(m.accountId())) return null;
+                throw rejection;
+            }
+        } catch(org.springframework.dao.DataIntegrityViolationException e) {
+            done=transactions.find(m); if(done==null) throw e;
         }
         transactions.cleanup(m);
         if(done.orderId()!=null && !m.market()) {
@@ -101,9 +115,10 @@ public class OrderRequestService {
     public Map<String,Object> result(long userId,long accountId,String eventId) { return transactions.result(userId,accountId,eventId); }
     public void reconcile() {
         for(long account:store.accounts()) {
-            // [회원 탈퇴 수정] 커밋 후 예약 정리에 실패한 계좌를 기존 reconcile에서 정리하고 재발행을 생략한다.
+            // [충돌 해결] 삭제된 계좌의 예약은 폐기하고 비활성 계좌는 거절 결과를 커밋한 뒤 정리한다.
             try {
                 if (transactions.discardIfAccountDeleted(account)) continue;
+                if (transactions.cleanupInactiveAccount(account)) continue;
             } catch (RuntimeException error) {
                 // DB/Redis 장애를 계좌 부재로 오인하지 않고 로그를 남긴 뒤 다음 정리 주기에 다시 시도한다.
                 log.warn("event=order_request_reconciliation_failed accountId={} causeType={}", account, error.getClass().getSimpleName());

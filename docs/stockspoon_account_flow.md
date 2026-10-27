@@ -1,8 +1,10 @@
 # 스톡스푼 v1 계좌 구현 흐름
 
-## 현재 임시 응답값 확인 (2026-10-08)
+## 과거 임시 응답값 확인 (2026-10-08)
 
-로컬 dev `2bf90b2`의 DTO를 정적으로 확인했다. 계좌 목록과 상세의 `is_duel_account`는 항상 false이고, 상세의 `executed_trade_count`는 항상 0이다. 실제 대결 상태·체결 횟수를 조회한 결과가 아니다. 반환 위치는 AccountListResponse.from과 AccountDetailResponse.from이다.
+이 절은 2026-10-08 당시 기록이다. 현재 계좌 목록·상세의 `is_duel_account`는 실제 대결 참가 관계에서 계산하고, 상세의 `executed_trade_count`도 체결 주문 수를 조회한다. 아래 임시값 설명을 현재 응답으로 해석하지 않는다.
+
+당시 로컬 dev `2bf90b2`의 DTO를 정적으로 확인했다. 계좌 목록과 상세의 `is_duel_account`는 항상 false이고, 상세의 `executed_trade_count`는 항상 0이다. 실제 대결 상태·체결 횟수를 조회한 결과가 아니다. 반환 위치는 AccountListResponse.from과 AccountDetailResponse.from이다.
 
 반면 available_cash, holdings_market_value, total_assets, return_percent는 DB와 실제 시세에 기반한 계산값이다. 보유종목의 업종 미분류는 누락 대체값이며, 주문 내역의 더미 reason.summary와 AI 리포트 상세의 실제 reason은 별개다. 운영 DB·배포 버전·외부 연동은 이번 확인 범위에 포함하지 않았다.
 
@@ -18,11 +20,12 @@
 |---|---|---|
 | 최초 온보딩 | `POST /api/v1/users/me/onboarding` | 시작 자금으로 `기본 계좌`를 만들고 `users.onboarding_completed=true` |
 | 추가 계좌 생성 | `POST /api/v1/users/me/accounts` | 완료된 사용자에게 계좌 추가 |
+| 계좌 삭제(비활성화) | `DELETE /api/v1/users/me/accounts/{accountId}` | 본인 일반 계좌 비활성화·대기 주문 취소 |
 | 계좌 목록 | `GET /api/v1/users/me/accounts` | 내 활성 계좌 목록 |
 | 계좌 상세 | `GET /api/v1/users/me/accounts/{accountId}` | 내 활성 계좌 한 개 |
 | 계좌명 수정 | `PATCH /api/v1/users/me/accounts/{accountId}` | 내 활성 계좌의 이름 변경 |
 
-계좌 비활성화, 보유종목, 주문·체결, 시세, 총자산·손익·수익률 계산은 아직 구현되지 않았다. 모든 API는 스톡스푼 `access_token` 쿠키 인증을 사용한다. `POST`와 `PATCH`는 CSRF 쿠키와 `X-XSRF-TOKEN` 헤더도 필요하다. FE는 쿠키 전송을 위해 `credentials: 'include'`를 사용한다. 인증·CSRF 발급 방법은 [로그인·인증 흐름](stockspoon_login_auth_flow.md)을 참고한다.
+계좌 비활성화는 본인 일반 계좌의 대기 주문을 취소하고 자산·이력을 보존하는 방식으로 구현했다. 상세한 호출 순서와 예외는 [계좌 비활성화 흐름](stockspoon_account_deactivation.md)을 참고한다. 보유종목·주문·체결·시세의 최신 동작은 해당 절을 참고한다. 모든 API는 스톡스푼 `access_token` 쿠키 인증을 사용한다. `POST`·`PATCH`·`DELETE`는 CSRF 쿠키와 `X-XSRF-TOKEN` 헤더도 필요하다. FE는 쿠키 전송을 위해 `credentials: 'include'`를 사용한다. 인증·CSRF 발급 방법은 [로그인·인증 흐름](stockspoon_login_auth_flow.md)을 참고한다.
 
 ## 2. 온보딩: 첫 계좌 만들기
 
@@ -72,7 +75,32 @@ GET /api/v1/users/me/accounts
 Cookie: access_token={StockSpoon Access JWT}
 ```
 
-`AccountService.list()`는 JWT 사용자 ID로 활성 계좌만 조회한다. 정렬은 `created_at` 오름차순, 같은 시각이면 `account_id` 오름차순이다. 계좌가 없으면 `200 OK`와 `[]`를 반환한다. 다른 사용자의 계좌는 목록에 포함되지 않는다.
+`AccountService.list()`는 JWT 사용자 ID로 본인의 모든 활성 계좌를 조회한다. 일반 계좌, 일반 AI 계좌, 대결 사용자 계좌와 대결 AI 계좌를 모두 포함한다. 대결의 준비·진행·완료·취소 상태는 목록 제외 조건이 아니며, 타 회원 계좌와 `is_active=false`인 계좌만 제외한다. 정렬은 `created_at` 오름차순, 같은 시각이면 `account_id` 오름차순이다. 계좌가 없으면 `200 OK`와 `[]`를 반환한다. 다른 사용자의 계좌는 목록에 포함되지 않는다.
+
+```text
+GET /api/v1/users/me/accounts
+→ account.controller.AccountController.list(jwt)
+→ JWT subject를 long userId로 변환
+→ account.service.AccountService.list(userId)
+→ account.repository.AccountRepository.findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(userId)
+  → a.user.id = :userId AND a.active = true
+  → created_at, account_id 오름차순
+→ 기존 snapshot/자산 평가 및 AccountListResponse 변환
+→ 200 OK, 계좌 배열
+```
+
+계좌 목록 요청은 `AccountController.list()`로 들어오며, 검증된 JWT가 `jwt` 인자로 주입된다. 컨트롤러는 subject를 내부 회원 ID로 변환해 `AccountService.list(userId)`에 전달한다. 서비스가 호출하는 `AccountRepository.findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc()`에서 대결 AI 참가 계좌를 제외하던 `not exists` 조건을 제거했다. Controller와 Service의 코드는 그대로 두고 기존 보유 평가·주문 가능 현금 계산과 DTO 변환을 재사용한다.
+
+| 계좌 | 포함 여부 |
+|---|---|
+| 본인 활성 일반·일반 AI 계좌 | 포함 |
+| 본인 활성 대결 사용자·대결 AI 계좌 | 포함 |
+| 비활성 계좌 | 제외 |
+| 다른 회원 계좌 | 제외 |
+
+대결 양측 계좌는 `is_duel_account=true`로 표시되며 현재 목록 DTO에는 별도의 AI 운용 여부 필드가 없다. 목록에 AI 계좌가 보이는 것과 사용자 직접 주문 허용은 별개다. AI 운용 대상 조회인 `findActiveAiManagedOn()`과 사용자/AI 주문 권한 검증은 기존 정책을 유지한다.
+
+코드: [AccountController](../src/main/java/com/stock_spoon/river_be/account/controller/AccountController.java), [AccountService](../src/main/java/com/stock_spoon/river_be/account/service/AccountService.java), [AccountRepository](../src/main/java/com/stock_spoon/river_be/account/repository/AccountRepository.java).
 
 FE가 목록에서 계좌를 선택하면 해당 `account_id`를 보관하고 상세 조회에 사용한다. 현재 선택된 계좌 ID는 BE DB에 저장하지 않는다.
 
@@ -113,7 +141,7 @@ Cookie: access_token={StockSpoon Access JWT}
 }
 ```
 
-`available_cash`는 기존 주문 로직을 재사용해 현금에서 대기 매수 주문의 예약금을 뺀 실제 값이다. `holdings_market_value`는 전체 보유종목의 키움 현재가 × 보유수량 합계이며, `total_assets`는 현금 잔액 + 보유 평가액이다. `return_percent`는 (총자산 - 초기자본) / 초기자본 × 100을 소수점 4자리 HALF_UP으로 계산한다. `is_duel_account=false`와 `executed_trade_count=0`은 임시 표시값이다.
+`available_cash`는 기존 주문 로직을 재사용해 현금에서 대기 매수 주문의 예약금을 뺀 실제 값이다. `holdings_market_value`는 전체 보유종목의 키움 현재가 × 보유수량 합계이며, `total_assets`는 현금 잔액 + 보유 평가액이다. `return_percent`는 (총자산 - 초기자본) / 초기자본 × 100을 소수점 4자리 HALF_UP으로 계산한다. `is_duel_account`는 실제 대결 참가 관계를, `executed_trade_count`는 해당 계좌의 체결 주문 수를 반영한다.
 
 추가 계좌 생성은 API 문서에 맞춘 `AccountCreateResponse`를 반환한다. 위 온보딩 응답의 `ai_delegated` 대신 `is_ai_managed`를 제공하며, 사용자 운용 상태인 `false`를 반환한다.
 
@@ -133,7 +161,7 @@ Cookie: access_token={StockSpoon Access JWT}
 ]
 ```
 
-목록의 `total_assets`와 `return_percent`는 상세와 같은 기준으로 전체 보유종목 평가액을 반영한다. `is_duel_account=false`는 임시 표시값이다. `cash_balance`는 계좌 생성 시 초기자본으로 초기화되고 매매 체결 시 갱신된다.
+목록의 `total_assets`와 `return_percent`는 상세와 같은 기준으로 전체 보유종목 평가액을 반영한다. `is_duel_account`는 실제 대결 참가 계좌이면 true이며, 위 일반 계좌 예시에서는 false다. `cash_balance`는 계좌 생성 시 초기자본으로 초기화되고 매매 체결 시 갱신된다.
 
 홈 화면의 원화 금액은 목록의 `available_cash`를 사용한다. 현금 잔액에서 미체결 매수 주문의 예약금을 차감한 금액이며, `total_assets` 계산에는 기존 `cash_balance`를 사용한다.
 
@@ -192,7 +220,7 @@ Cookie: access_token={StockSpoon Access JWT}; XSRF-TOKEN={csrf-token}
 ## 8. 남은 정책·구현 간 차이
 
 - 정책은 **비활성 계좌 이름 재사용**을 허용하지만, 현재 DB의 `(user_id, name)` 유일 제약은 비활성 계좌도 포함한다. 서비스의 중복 조회는 활성 계좌만 대상으로 한다. 비활성화 기능을 추가할 때 DB 제약도 함께 변경해야 한다.
-- `is_active`는 생성 시 `true`로 설정되지만 비활성화 API는 없다. 보유주식 0주, 미체결 주문 0건 조건을 검사하려면 보유종목·주문 기능이 필요하다.
+- `is_active`는 생성 시 true이며 계좌 삭제 API가 false로 변경한다. 현금·보유 주식이 있어도 허용하고 모든 대기 주문을 취소한다. 대결 연결 계좌는 개별 비활성화를 거절한다. [계좌 비활성화 흐름](stockspoon_account_deactivation.md)을 참고한다.
 - 계좌 생성·이름 수정의 사전 중복 검사는 동시 요청의 경합까지 보장하지 않는다. 특히 MySQL 이전 시 유일 제약, 예외 변환, 자동 이름 생성의 동시성을 설계해야 한다.
 - 총자산, 수익률, 주문 가능 현금, 보유수량, 주식분할·병합 처리는 보유종목·주문·체결·시세 개발 단계에서 구현해야 한다.
 - 마지막 활성 계좌 비활성화 허용 여부, 활성 계좌 0개일 때 온보딩 상태, 병합 단주는 아직 정책이 확정되지 않았다. 회원 탈퇴는 비활성 계좌를 포함한 모든 계좌와 관련 투자 이력을 Hard Delete한다. [회원 탈퇴 실행 흐름](stockspoon_user_withdrawal.md)을 참고한다.

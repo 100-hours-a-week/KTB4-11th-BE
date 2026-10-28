@@ -56,6 +56,22 @@ class JwtUserExistenceAuthenticationFilterTests {
     }
 
     @Test
+    void ordinaryUserJwtDoesNotRunTheK6OnlyLookup() throws Exception {
+        var verifier = mock(JwtUserExistenceVerifier.class);
+        var filter = new JwtUserExistenceAuthenticationFilter(verifier);
+        authenticateOrdinaryUser();
+        var request = new MockHttpServletRequest("GET", "/protected");
+        var response = new MockHttpServletResponse();
+        var handlerCalls = new AtomicInteger();
+
+        filter.doFilter(request, response, (req, res) -> handlerCalls.incrementAndGet());
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(handlerCalls).hasValue(1);
+        org.mockito.Mockito.verifyNoInteractions(verifier);
+    }
+
+    @Test
     void exhaustedLookupFailureReturns503BeforeProtectedHandlerRuns() throws Exception {
         UserRepository users = mock(UserRepository.class);
         when(users.existsById(42L)).thenThrow(connectionFailure());
@@ -77,6 +93,16 @@ class JwtUserExistenceAuthenticationFilterTests {
 
     private static void authenticateUser() {
         var jwt = Jwt.withTokenValue("test-token")
+                .header("alg", "HS256")
+                .subject("42")
+                .claim("actor", "USER")
+                .claim(JwtUserExistenceAuthenticationFilter.K6_TEST_CLAIM, true)
+                .build();
+        SecurityContextHolder.getContext().setAuthentication(new JwtAuthenticationToken(jwt));
+    }
+
+    private static void authenticateOrdinaryUser() {
+        var jwt = Jwt.withTokenValue("ordinary-user-token")
                 .header("alg", "HS256")
                 .subject("42")
                 .claim("actor", "USER")

@@ -179,6 +179,14 @@ class SecurityJwtTests {
     }
 
     @Test
+    void ordinaryUserJwtDoesNotUseTheK6OnlyLookup() throws Exception {
+        mvc.perform(get("/test/protected").cookie(new Cookie("access_token", authToken("89", false))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.user_id").value("89"));
+        org.mockito.Mockito.verify(userExistenceVerifier, org.mockito.Mockito.never()).exists(anyLong());
+    }
+
+    @Test
     void authenticationDatabaseFailureReturns503AndNeverEntersProtectedWriteHandler() throws Exception {
         PROTECTED_WRITES.set(0);
         doThrow(new AuthenticationServiceException("authentication DB unavailable"))
@@ -252,11 +260,16 @@ class SecurityJwtTests {
     }
 
     private String authToken(String subject) {
+        return authToken(subject, true);
+    }
+
+    private String authToken(String subject, boolean k6Test) {
         Instant now = Instant.now();
         var claims = JwtClaimsSet.builder().issuer(jwtProperties.issuer()).subject(subject)
-                .issuedAt(now).expiresAt(now.plusSeconds(900)).claim("type", "access").claim("actor", "USER").build();
+                .issuedAt(now).expiresAt(now.plusSeconds(900)).claim("type", "access").claim("actor", "USER");
+        if (k6Test) claims.claim(JwtUserExistenceAuthenticationFilter.K6_TEST_CLAIM, true);
         return jwtEncoder.encode(JwtEncoderParameters.from(
-                JwsHeader.with(MacAlgorithm.HS256).type("JWT").build(), claims)).getTokenValue();
+                JwsHeader.with(MacAlgorithm.HS256).type("JWT").build(), claims.build())).getTokenValue();
     }
 
     private String aiToken(String subject, String type, String actor) {

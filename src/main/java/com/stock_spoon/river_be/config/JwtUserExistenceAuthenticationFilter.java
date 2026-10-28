@@ -34,7 +34,7 @@ final class JwtUserExistenceAuthenticationFilter extends OncePerRequestFilter {
         var jwt = jwtAuthentication.getToken();
         String subject = jwt.getSubject();
         boolean aiService = "AI".equals(jwt.getClaimAsString("actor")) && "ai-server".equals(subject);
-        if (aiService) {
+        if (aiService || !Boolean.TRUE.equals(jwt.getClaim(K6_TEST_CLAIM))) {
             chain.doFilter(request, response);
             return;
         }

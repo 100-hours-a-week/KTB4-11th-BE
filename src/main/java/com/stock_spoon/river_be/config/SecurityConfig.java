@@ -21,7 +21,6 @@ import org.springframework.security.authorization.AuthorizationDecision;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.InvalidBearerTokenException;
-import org.springframework.security.authentication.AuthenticationServiceException;
 import org.springframework.security.authentication.AbstractAuthenticationToken;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -178,10 +177,9 @@ public class SecurityConfig {
     private void writeAuthenticationError(jakarta.servlet.http.HttpServletRequest request,
             HttpServletResponse response, AuthenticationException error) throws java.io.IOException {
         RequestLoggingFilter.recordException(request, error);
-        boolean databaseUnavailable = hasAuthenticationServiceFailure(error);
-        int status = databaseUnavailable ? 503 : 401;
-        String code = databaseUnavailable ? "AUTHENTICATION_DATABASE_UNAVAILABLE" : "UNAUTHORIZED";
-        String message = databaseUnavailable ? "인증 확인을 일시적으로 처리할 수 없습니다." : "로그인이 필요합니다.";
+        int status = HttpServletResponse.SC_UNAUTHORIZED;
+        String code = "UNAUTHORIZED";
+        String message = "로그인이 필요합니다.";
         String requestId = RequestLoggingFilter.requestId(request);
         if (response.isCommitted()) {
             log.warn("event=security_response_already_committed requestId={} dispatcherType={} intendedStatus={} actualStatus={} exceptionType={}",
@@ -206,11 +204,5 @@ public class SecurityConfig {
         response.getWriter().write("{\"code\":\"" + code + "\",\"message\":\"" + message + "\"}");
     }
 
-    private static boolean hasAuthenticationServiceFailure(Throwable error) {
-        for (Throwable current = error; current != null; current = current.getCause()) {
-            if (current instanceof AuthenticationServiceException) return true;
-        }
-        return false;
-    }
 }
 //

@@ -4,6 +4,8 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.DispatcherType;
+import jakarta.servlet.RequestDispatcher;
 import java.sql.SQLException;
 import java.sql.SQLTransientConnectionException;
 import org.junit.jupiter.api.Test;
@@ -37,7 +39,8 @@ class RequestLoggingFilterTests {
             assertThat(response.getHeader("X-Request-Id")).matches("[0-9a-f-]{36}");
             assertThat(MDC.get("requestId")).isEqualTo("outer");
             assertThat(logs.list).anySatisfy(event -> {
-                assertThat(event.getFormattedMessage()).contains("event=http_request", "route=/api/{id}", "status=503", "elapsedMs=");
+                assertThat(event.getFormattedMessage()).contains("event=http_response_audit", "route=/api/{id}",
+                        "dispatcherType=REQUEST", "status=503", "elapsedMs=");
             });
             assertThat(logs.list.toString()).doesNotContain("private-secret", "query-secret", "header-secret", "body-secret", "untrusted-id");
         } finally {
@@ -55,6 +58,37 @@ class RequestLoggingFilterTests {
         assertThatThrownBy(() -> new RequestLoggingFilter().doFilter(request, response,
                 (req, res) -> { throw error; })).isSameAs(error);
         assertThat(MDC.get("requestId")).isNull();
+    }
+
+    @Test
+    void nestedErrorDispatchAuditsFinalStatusAndExceptionOnce() throws Exception {
+        Logger logger = (Logger) LoggerFactory.getLogger(RequestLoggingFilter.class);
+        var logs = new ListAppender<ILoggingEvent>();
+        logs.start();
+        logger.addAppender(logs);
+        var request = new MockHttpServletRequest("POST", "/api/write");
+        var response = new MockHttpServletResponse();
+        var filter = new RequestLoggingFilter();
+        try {
+            filter.doFilter(request, response, (req, res) -> {
+                req.setAttribute(RequestDispatcher.ERROR_EXCEPTION,
+                        new IllegalStateException("handler failed", new java.sql.SQLTransientConnectionException("db down")));
+                ((MockHttpServletRequest) req).setDispatcherType(DispatcherType.ERROR);
+                var errorResponse = (MockHttpServletResponse) res;
+                filter.doFilter(req, res, (errorRequest, ignored) -> errorResponse.setStatus(503));
+            });
+
+            var audits = logs.list.stream()
+                    .filter(event -> event.getFormattedMessage().contains("event=http_response_audit"))
+                    .toList();
+            assertThat(audits).hasSize(1);
+            assertThat(audits.get(0).getFormattedMessage()).contains(
+                    "dispatcherType=ERROR", "status=503", "exceptionType=IllegalStateException",
+                    "exceptionCauseType=SQLTransientConnectionException");
+        } finally {
+            logger.detachAppender(logs);
+            logs.stop();
+        }
     }
 
     @Test

@@ -49,6 +49,8 @@ public class JwtConfig {
             Jwt jwt = delegate.decode(token);
             // AI 서버 토큰은 일반 회원 행이 없으므로 기존 전용 인증·권한 검사 경로를 유지한다.
             if ("AI".equals(jwt.getClaimAsString("actor")) && "ai-server".equals(jwt.getSubject())) return jwt;
+            // K6 토큰은 뒤의 제한 재시도 필터가 사용자 존재를 확인하므로 여기서 선조회하지 않는다.
+            if (Boolean.TRUE.equals(jwt.getClaim(JwtUserExistenceAuthenticationFilter.K6_TEST_CLAIM))) return jwt;
             try {
                 // 서명·만료·issuer·type 검증을 통과한 subject로 실제 회원 존재까지 확인한다.
                 if (users.existsById(Long.parseLong(jwt.getSubject()))) return jwt;

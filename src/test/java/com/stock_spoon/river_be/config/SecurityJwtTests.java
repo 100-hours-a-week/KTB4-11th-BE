@@ -180,23 +180,27 @@ class SecurityJwtTests {
 
     @Test
     void ordinaryUserJwtDoesNotUseTheK6OnlyLookup() throws Exception {
-        mvc.perform(get("/test/protected").cookie(new Cookie("access_token", authToken("89", false))))
+        String userId = users.save(new com.stock_spoon.river_be.user.entity.User("일반 테스트 사용자"))
+                .getId().toString();
+        mvc.perform(get("/test/protected").cookie(new Cookie("access_token", authToken(userId, false))))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.user_id").value("89"));
+                .andExpect(jsonPath("$.user_id").value(userId));
         org.mockito.Mockito.verify(userExistenceVerifier, org.mockito.Mockito.never()).exists(anyLong());
     }
 
     @Test
     void authenticationDatabaseFailureReturns503AndNeverEntersProtectedWriteHandler() throws Exception {
         PROTECTED_WRITES.set(0);
+        String userId = users.save(new com.stock_spoon.river_be.user.entity.User("K6 장애 테스트 사용자"))
+                .getId().toString();
         doThrow(new AuthenticationServiceException("authentication DB unavailable"))
-                .when(userExistenceVerifier).exists(77L);
+                .when(userExistenceVerifier).exists(Long.parseLong(userId));
         Logger logger = (Logger) org.slf4j.LoggerFactory.getLogger(RequestLoggingFilter.class);
         var logs = new ListAppender<ILoggingEvent>();
         logs.start();
         logger.addAppender(logs);
         try {
-            var getResult = mvc.perform(get("/test/protected").cookie(new Cookie("access_token", authToken("77"))))
+            var getResult = mvc.perform(get("/test/protected").cookie(new Cookie("access_token", authToken(userId))))
                     .andExpect(status().isServiceUnavailable())
                     .andExpect(jsonPath("$.code").value("AUTHENTICATION_DATABASE_UNAVAILABLE"))
                     .andExpect(header().exists("X-Request-Id"))
@@ -210,7 +214,7 @@ class SecurityJwtTests {
             mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
                             .post("/test/protected-write")
                             .with(csrf())
-                            .cookie(new Cookie("access_token", authToken("77"))))
+                            .cookie(new Cookie("access_token", authToken(userId))))
                     .andExpect(status().isServiceUnavailable());
             org.assertj.core.api.Assertions.assertThat(PROTECTED_WRITES.get()).isZero();
         } finally {
@@ -222,11 +226,13 @@ class SecurityJwtTests {
     @Test
     void successfulAuthenticationLookupAllowsGetAndExecutesPostExactlyOnce() throws Exception {
         PROTECTED_WRITES.set(0);
-        String token = authToken("88");
+        String userId = users.save(new com.stock_spoon.river_be.user.entity.User("K6 정상 테스트 사용자"))
+                .getId().toString();
+        String token = authToken(userId);
 
         mvc.perform(get("/test/protected").cookie(new Cookie("access_token", token)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.user_id").value("88"));
+                .andExpect(jsonPath("$.user_id").value(userId));
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
                         .post("/test/protected-write").with(csrf()).cookie(new Cookie("access_token", token)))
                 .andExpect(status().isOk());

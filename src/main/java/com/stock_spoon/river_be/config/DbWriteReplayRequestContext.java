@@ -64,6 +64,13 @@ public class DbWriteReplayRequestContext {
         request.activeTransactions.add(transaction);
     }
 
+    String transactionId(TransactionExecution execution) {
+        RequestState request = current.get();
+        if (request == null || execution == null) return "none";
+        TransactionState transaction = request.transactionsByExecution.get(execution);
+        return transaction == null ? "none" : transaction.transactionId;
+    }
+
     void observeTransactionBeginFailure(Throwable failure) {
         RequestState request = current.get();
         if (request == null) return;

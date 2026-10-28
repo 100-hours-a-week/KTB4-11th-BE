@@ -3,6 +3,7 @@ package com.stock_spoon.river_be.auth.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -12,16 +13,53 @@ import java.sql.SQLException;
 import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.security.authentication.AuthenticationServiceException;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.AbstractPlatformTransactionManager;
 import org.springframework.transaction.support.DefaultTransactionStatus;
 
 class JwtUserExistenceVerifierTests {
+    @Test
+    void defaultRetryWindowSurvivesAWriterGapLongerThanTwoSeconds() {
+        UserRepository users = mock(UserRepository.class);
+        AtomicLong unavailableSince = new AtomicLong();
+        when(users.existsById(42L)).thenAnswer(invocation -> {
+            long now = System.nanoTime();
+            unavailableSince.compareAndSet(0, now);
+            if (TimeUnit.NANOSECONDS.toMillis(now - unavailableSince.get()) < 2_200) {
+                throw connectionFailure();
+            }
+            return true;
+        });
+        RecordingTransactionManager transactions = new RecordingTransactionManager();
+
+        // Resolve the real @Value defaults so a too-short production retry
+        // window cannot be hidden by tests that explicitly use a zero delay.
+        try (var context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(UserRepository.class, () -> users);
+            context.registerBean(PlatformTransactionManager.class, () -> transactions);
+            context.register(JwtUserExistenceVerifier.class);
+            context.refresh();
+
+            assertThat(context.getBean(JwtUserExistenceVerifier.class).exists(42L)).isTrue();
+        }
+
+        assertThat(transactions.definitions).hasSizeBetween(2, 3)
+                .allSatisfy(definition -> {
+                    assertThat(definition.isReadOnly()).isTrue();
+                    assertThat(definition.getPropagationBehavior())
+                            .isEqualTo(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+                });
+    }
+
     @Test
     void retriesOnlyConnectionFailuresInFreshReadOnlyTransactions() {
         UserRepository users = mock(UserRepository.class);
@@ -61,6 +99,30 @@ class JwtUserExistenceVerifierTests {
         verify(firstConnection).setReadOnly(true);
         verify(secondConnection).setReadOnly(true);
         verify(firstConnection).close();
+        verify(secondConnection).close();
+    }
+
+    @Test
+    void aClosedConnectionDuringRollbackStillRetriesWithANewConnection() throws Exception {
+        UserRepository users = mock(UserRepository.class);
+        when(users.existsById(42L)).thenThrow(connectionFailure()).thenReturn(true);
+        DataSource dataSource = mock(DataSource.class);
+        Connection firstConnection = mock(Connection.class);
+        Connection secondConnection = mock(Connection.class);
+        when(firstConnection.getAutoCommit()).thenReturn(true);
+        when(secondConnection.getAutoCommit()).thenReturn(true);
+        when(dataSource.getConnection()).thenReturn(firstConnection, secondConnection);
+        doThrow(new SQLException("Connection is closed")).when(firstConnection).rollback();
+
+        boolean exists = new JwtUserExistenceVerifier(
+                users, new DataSourceTransactionManager(dataSource), 2, 0).exists(42L);
+
+        assertThat(exists).isTrue();
+        verify(users, times(2)).existsById(42L);
+        verify(dataSource, times(2)).getConnection();
+        verify(firstConnection).rollback();
+        verify(firstConnection).close();
+        verify(secondConnection).commit();
         verify(secondConnection).close();
     }
 

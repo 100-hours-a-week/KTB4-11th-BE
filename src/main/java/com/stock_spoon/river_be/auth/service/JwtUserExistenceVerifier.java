@@ -20,7 +20,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class JwtUserExistenceVerifier {
     private static final Logger log = LoggerFactory.getLogger(JwtUserExistenceVerifier.class);
     private static final int MAX_CONFIGURED_RETRIES = 3;
-    private static final long MAX_CONFIGURED_DELAY_MS = 250;
+    // Writer promotion takes about two seconds. Millisecond retries can all fail
+    // against the same unavailable writer before ProxySQL finishes switching.
+    private static final long MAX_CONFIGURED_DELAY_MS = 2_000;
 
     private final UserRepository users;
     private final TransactionTemplate lookupTransaction;
@@ -29,12 +31,12 @@ public class JwtUserExistenceVerifier {
 
     public JwtUserExistenceVerifier(UserRepository users, PlatformTransactionManager transactionManager,
             @Value("${JWT_AUTH_DB_MAX_RETRIES:2}") int maxRetries,
-            @Value("${JWT_AUTH_DB_RETRY_DELAY_MS:50}") long initialDelayMs) {
+            @Value("${JWT_AUTH_DB_RETRY_DELAY_MS:2000}") long initialDelayMs) {
         if (maxRetries < 0 || maxRetries > MAX_CONFIGURED_RETRIES) {
             throw new IllegalArgumentException("JWT_AUTH_DB_MAX_RETRIES must be between 0 and 3");
         }
         if (initialDelayMs < 0 || initialDelayMs > MAX_CONFIGURED_DELAY_MS) {
-            throw new IllegalArgumentException("JWT_AUTH_DB_RETRY_DELAY_MS must be between 0 and 250");
+            throw new IllegalArgumentException("JWT_AUTH_DB_RETRY_DELAY_MS must be between 0 and 2000");
         }
         this.users = users;
         this.maxRetries = maxRetries;

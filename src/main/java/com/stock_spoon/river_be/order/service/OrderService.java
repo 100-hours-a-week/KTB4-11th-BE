@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 /** 내부 주문 예약·취소 규칙. HTTP 인증과 주문 생성 조건 검증은 컨트롤러에서 선행한다. */
 @Service
 public class OrderService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(OrderService.class);
     private final AccountRepository accounts;
     private final OrderRepository orders;
     private final HoldingRepository holdings;
@@ -142,6 +143,10 @@ public class OrderService {
                 .orElseThrow(() -> new OrderException(HttpStatus.NOT_FOUND,
                         "ORDER_NOT_FOUND", "주문을 찾을 수 없습니다."));
         if (order.getStatus() != Order.Status.PENDING) {
+            log.warn("event=order_cancel_rejected accountId={} orderId={} orderStatus={} "
+                            + "reservedCashReleased={} cancelledAtPresent={} reason=order_not_pending",
+                    accountId, orderId, order.getStatus(), order.getReservedCash() == 0,
+                    order.getCancelledAt() != null);
             throw new OrderException(HttpStatus.CONFLICT, "ORDER_NOT_PENDING",
                     "대기 중인 주문만 취소할 수 있습니다.");
         }

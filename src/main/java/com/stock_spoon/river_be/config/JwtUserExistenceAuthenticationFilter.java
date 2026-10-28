@@ -15,6 +15,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 /** Checks that a validated end-user JWT still identifies a persisted user. */
 final class JwtUserExistenceAuthenticationFilter extends OncePerRequestFilter {
+    static final String K6_TEST_CLAIM = "k6_test";
     private static final Logger log = LoggerFactory.getLogger(JwtUserExistenceAuthenticationFilter.class);
     private final JwtUserExistenceVerifier verifier;
 

@@ -28,6 +28,7 @@ import static org.mockito.Mockito.*;
 @SpringBootTest
 @Transactional
 class AccountHoldingsTests {
+    @MockitoBean com.stock_spoon.river_be.auth.service.JwtUserExistenceVerifier authLookup;
     @org.springframework.test.context.bean.override.mockito.MockitoBean
     com.stock_spoon.river_be.market.RedisMarketPrice redisPrices;
     @Autowired AccountHoldingsService service;
@@ -44,6 +45,9 @@ class AccountHoldingsTests {
     private Account account;
 
     @BeforeEach void setup() {
+        // Keep lookup in the fixture transaction; auth retry isolation is tested separately.
+        when(authLookup.exists(org.mockito.ArgumentMatchers.anyLong()))
+                .thenAnswer(call -> users.existsById(call.getArgument(0, Long.class)));
         user = users.save(new User("보유 테스트"));
         account = accounts.save(new Account(user, "보유 계좌", 1000000));
     }

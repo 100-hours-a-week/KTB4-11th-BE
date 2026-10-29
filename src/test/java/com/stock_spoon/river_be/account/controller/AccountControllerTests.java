@@ -30,6 +30,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @Transactional
 class AccountControllerTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.stock_spoon.river_be.auth.service.JwtUserExistenceVerifier authLookup;
     @Autowired WebApplicationContext context;
     @Autowired UserRepository users;
     @Autowired AccountRepository accounts;
@@ -40,6 +42,9 @@ class AccountControllerTests {
 
     @BeforeEach
     void setup() {
+        // Controller fixtures are uncommitted; real isolated auth retries have their own integration tests.
+        org.mockito.Mockito.when(authLookup.exists(org.mockito.ArgumentMatchers.anyLong()))
+                .thenAnswer(call -> users.existsById(call.getArgument(0, Long.class)));
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
     }
 

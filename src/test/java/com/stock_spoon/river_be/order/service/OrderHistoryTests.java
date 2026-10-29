@@ -36,6 +36,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @Transactional
 class OrderHistoryTests {
+    @MockitoBean com.stock_spoon.river_be.auth.service.JwtUserExistenceVerifier authLookup;
     @Autowired WebApplicationContext context;
     @Autowired UserRepository users;
     @Autowired AccountRepository accounts;
@@ -49,6 +50,9 @@ class OrderHistoryTests {
     private Account account;
 
     @BeforeEach void setup() {
+        // Keep lookup in the fixture transaction; auth retry isolation is tested separately.
+        when(authLookup.exists(org.mockito.ArgumentMatchers.anyLong()))
+                .thenAnswer(call -> users.existsById(call.getArgument(0, Long.class)));
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
         user = users.save(new User("체결목록 사용자"));
         account = accounts.save(new Account(user, "체결목록", 1000000));

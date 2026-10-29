@@ -69,6 +69,21 @@ jobs:
             '.family == $family and ([.containerDefinitions[] | select(.name == $name)] | length) == 1' \
             "$TASK_TEMPLATE" > /dev/null
 
+      # Runtime toggles live in the repository Actions variable PROD_ENV (KEY=VALUE per line).
+      # Render before AWS authentication so a malformed variable fails without touching AWS.
+      - name: Render task definition with PROD_ENV
+        if: steps.source.outputs.deploy == 'true'
+        env:
+          PROD_ENV: ${{ vars.PROD_ENV }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "${PROD_ENV//[[:space:]]/}" ]] || { echo '::error::Actions variable PROD_ENV is empty or not set' >&2; exit 1; }
+          .aws/ecs/render-task-definition.sh "$TASK_TEMPLATE" "$CONTAINER_NAME" "$IMAGE" > next.json
+          {
+            echo '### PROD_ENV keys'
+            grep -Ev '^[[:space:]]*(#|$)' <<<"$PROD_ENV" | cut -d= -f1 | sed 's/^/- `/; s/$/`/'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Configure AWS credentials with OIDC
         if: steps.source.outputs.deploy == 'true'
         uses: aws-actions/configure-aws-credentials@v4
@@ -87,9 +102,6 @@ jobs:
             echo "TIMING phase=register_task_definition seconds=$((SECONDS - started)) status=$status" | tee -a "$GITHUB_STEP_SUMMARY"
           }
           trap report_timing EXIT
-          jq --arg name "$CONTAINER_NAME" --arg image "$IMAGE" \
-            '.containerDefinitions |= map(if .name == $name then .image = $image else . end)' \
-            "$TASK_TEMPLATE" > next.json
           arn="$(aws ecs register-task-definition --cli-input-json file://next.json \
             --query taskDefinition.taskDefinitionArn --output text)"
           [[ -n "$arn" && "$arn" != 'None' ]]

@@ -20,6 +20,27 @@ dev push → 빌드·테스트 → ECR 업로드 → 개발 EC2 배포 → ECS �
 
 비밀값은 직접 적지 않고 `secrets[].valueFrom`으로 참조합니다. 초기 템플릿은 AWS의 실행 설정과 Secret 참조를 옮긴 것이며, Secret 실제 값은 포함하지 않습니다.
 
+## 운영 토글 환경변수 (`PROD_ENV`)
+
+기능을 켜고 끄는 값은 `backend.json`에 두지 않고 GitHub **Settings → Secrets and variables → Actions → Variables**의 Repository variable `PROD_ENV`에 둡니다. CD가 [render-task-definition.sh](render-task-definition.sh)로 템플릿의 `environment`에 합친 뒤 Task Definition을 등록합니다.
+
+```text
+# 주문 큐
+ORDER_QUEUE_ENABLED=false
+ORDER_QUEUE_CONSUMER_ENABLED=true
+ORDER_QUEUE_URL=https://sqs.ap-northeast-2.amazonaws.com/250832562715/stockspoon-v2-prod-order.fifo
+# HTTP 요청 지연 histogram (Grafana p95·p99)
+HTTP_REQUEST_HISTOGRAM_ENABLED=true
+```
+
+- 한 줄에 `KEY=VALUE` 하나. 빈 줄과 `#`로 시작하는 줄은 무시합니다. 값에 따옴표를 붙이지 않습니다.
+- 템플릿에 같은 이름이 있으면 `PROD_ENV` 값이 우선합니다.
+- `PROD_ENV`가 비어 있거나, 형식이 틀리거나, 키가 중복되거나, `secrets[]`의 이름과 겹치면 AWS 인증 전에 CD가 실패합니다.
+- Actions variable은 공개 설정값용입니다. 비밀값은 계속 SSM `secrets[].valueFrom`으로 넣습니다.
+- **값을 바꿔도 실행 중인 Task에는 반영되지 않습니다.** 아래 수동 배포로 dev 최신 커밋 SHA를 다시 배포해야 적용됩니다.
+- 배포에 쓰인 키 목록은 워크플로 실행 Summary의 `PROD_ENV keys`에 남습니다. 값의 변경 이력은 Git에 남지 않으므로 바꿀 때 PR이나 이슈에 기록합니다.
+- 이 스크립트 도입 전 커밋 SHA로는 배포할 수 없습니다.
+
 ## DB 접속 정보
 
 DB 접속 정보는 모두 SSM Parameter Store에서 주입합니다. 템플릿에 주소를 직접 적지 않습니다.

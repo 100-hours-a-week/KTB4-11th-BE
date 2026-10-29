@@ -10,6 +10,8 @@ import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
@@ -171,36 +173,40 @@ class SecurityJwtTests {
         mvc.perform(get("/test/protected")).andExpect(status().isUnauthorized());
     }
 
-    @Test
-    void missingUserBehindAValidSignatureStillReturns401() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void missingUserBehindAValidSignatureStillReturns401(boolean k6Test) throws Exception {
         when(userExistenceVerifier.exists(55_555L)).thenReturn(false);
-        mvc.perform(get("/test/protected").cookie(new Cookie("access_token", authToken("55555"))))
+        mvc.perform(get("/test/protected").cookie(new Cookie("access_token", authToken("55555", k6Test))))
                 .andExpect(status().isUnauthorized());
     }
 
-    @Test
-    void ordinaryUserJwtDoesNotUseTheK6OnlyLookup() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void ordinaryAndK6UserJwtsUseTheSameLookup(boolean k6Test) throws Exception {
         String userId = users.save(new com.stock_spoon.river_be.user.entity.User("일반 테스트 사용자"))
                 .getId().toString();
-        mvc.perform(get("/test/protected").cookie(new Cookie("access_token", authToken(userId, false))))
+        mvc.perform(get("/test/protected").cookie(new Cookie("access_token", authToken(userId, k6Test))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.user_id").value(userId));
-        org.mockito.Mockito.verify(userExistenceVerifier, org.mockito.Mockito.never()).exists(anyLong());
+        org.mockito.Mockito.verify(userExistenceVerifier).exists(Long.parseLong(userId));
     }
 
-    @Test
-    void authenticationDatabaseFailureReturns503AndNeverEntersProtectedWriteHandler() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void authenticationDatabaseFailureReturns503AndNeverEntersProtectedWriteHandler(boolean k6Test) throws Exception {
         PROTECTED_WRITES.set(0);
         String userId = users.save(new com.stock_spoon.river_be.user.entity.User("K6 장애 테스트 사용자"))
                 .getId().toString();
         doThrow(new AuthenticationServiceException("authentication DB unavailable"))
                 .when(userExistenceVerifier).exists(Long.parseLong(userId));
+        String token = authToken(userId, k6Test);
         Logger logger = (Logger) org.slf4j.LoggerFactory.getLogger(RequestLoggingFilter.class);
         var logs = new ListAppender<ILoggingEvent>();
         logs.start();
         logger.addAppender(logs);
         try {
-            var getResult = mvc.perform(get("/test/protected").cookie(new Cookie("access_token", authToken(userId))))
+            var getResult = mvc.perform(get("/test/protected").cookie(new Cookie("access_token", token)))
                     .andExpect(status().isServiceUnavailable())
                     .andExpect(jsonPath("$.code").value("AUTHENTICATION_DATABASE_UNAVAILABLE"))
                     .andExpect(header().exists("X-Request-Id"))
@@ -214,7 +220,7 @@ class SecurityJwtTests {
             mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
                             .post("/test/protected-write")
                             .with(csrf())
-                            .cookie(new Cookie("access_token", authToken(userId))))
+                            .cookie(new Cookie("access_token", token)))
                     .andExpect(status().isServiceUnavailable());
             org.assertj.core.api.Assertions.assertThat(PROTECTED_WRITES.get()).isZero();
         } finally {
@@ -223,12 +229,13 @@ class SecurityJwtTests {
         }
     }
 
-    @Test
-    void successfulAuthenticationLookupAllowsGetAndExecutesPostExactlyOnce() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void successfulAuthenticationLookupAllowsGetAndExecutesPostExactlyOnce(boolean k6Test) throws Exception {
         PROTECTED_WRITES.set(0);
         String userId = users.save(new com.stock_spoon.river_be.user.entity.User("K6 정상 테스트 사용자"))
                 .getId().toString();
-        String token = authToken(userId);
+        String token = authToken(userId, k6Test);
 
         mvc.perform(get("/test/protected").cookie(new Cookie("access_token", token)))
                 .andExpect(status().isOk())
@@ -265,15 +272,11 @@ class SecurityJwtTests {
         org.assertj.core.api.Assertions.assertThat(SecurityConfig.isInternalErrorEndpointDispatch(request)).isFalse();
     }
 
-    private String authToken(String subject) {
-        return authToken(subject, true);
-    }
-
     private String authToken(String subject, boolean k6Test) {
         Instant now = Instant.now();
         var claims = JwtClaimsSet.builder().issuer(jwtProperties.issuer()).subject(subject)
                 .issuedAt(now).expiresAt(now.plusSeconds(900)).claim("type", "access").claim("actor", "USER");
-        if (k6Test) claims.claim(JwtUserExistenceAuthenticationFilter.K6_TEST_CLAIM, true);
+        if (k6Test) claims.claim("k6_test", true);
         return jwtEncoder.encode(JwtEncoderParameters.from(
                 JwsHeader.with(MacAlgorithm.HS256).type("JWT").build(), claims.build())).getTokenValue();
     }

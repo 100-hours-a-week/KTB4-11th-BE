@@ -15,7 +15,6 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 /** Checks that a validated end-user JWT still identifies a persisted user. */
 final class JwtUserExistenceAuthenticationFilter extends OncePerRequestFilter {
-    static final String K6_TEST_CLAIM = "k6_test";
     private static final Logger log = LoggerFactory.getLogger(JwtUserExistenceAuthenticationFilter.class);
     private final JwtUserExistenceVerifier verifier;
 
@@ -35,7 +34,7 @@ final class JwtUserExistenceAuthenticationFilter extends OncePerRequestFilter {
         var jwt = jwtAuthentication.getToken();
         String subject = jwt.getSubject();
         boolean aiService = "AI".equals(jwt.getClaimAsString("actor")) && "ai-server".equals(subject);
-        if (aiService || !Boolean.TRUE.equals(jwt.getClaim(K6_TEST_CLAIM))) {
+        if (aiService) {
             chain.doFilter(request, response);
             return;
         }
@@ -43,6 +42,7 @@ final class JwtUserExistenceAuthenticationFilter extends OncePerRequestFilter {
         long userId;
         try {
             userId = Long.parseLong(subject);
+            if (userId <= 0) throw new IllegalArgumentException("Invalid user ID");
         } catch (RuntimeException invalidSubject) {
             reject(request, response, HttpServletResponse.SC_UNAUTHORIZED, "UNAUTHORIZED",
                     "로그인이 필요합니다.", "InvalidBearerTokenException");

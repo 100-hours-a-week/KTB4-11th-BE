@@ -28,6 +28,8 @@ class CompetitionReportTests {
     @Autowired CompetitionRepository competitions;
     @Autowired JwtTokenProvider tokens;
     @Autowired JdbcTemplate jdbc;
+    @Autowired com.stock_spoon.river_be.competition.service.CompetitionReportService reportService;
+    private final tools.jackson.databind.json.JsonMapper objectMapper = tools.jackson.databind.json.JsonMapper.builder().build();
     private final HttpClient client = HttpClient.newHttpClient();
     private User owner;
     private Competition competition;
@@ -51,6 +53,73 @@ class CompetitionReportTests {
         assertThat((String) JsonPath.read(body, "$.state")).isEqualTo(state.name().toLowerCase(java.util.Locale.ROOT));
         assertThat((List<?>) JsonPath.read(body, "$.market_analyses")).isEmpty();
         assertThat((List<?>) JsonPath.read(body, "$.judgment_summaries")).isEmpty();
+    }
+
+    @Test
+    void returnsNewsWithUnknownDateAsExplicitNull() throws Exception {
+        jdbc.update("insert into competition_market_analyses (competition_id, analysis_date, title, content) values (?, ?, ?, ?)",
+                competition.getId(), null, "카카오 데이터센터 화재", "서비스 장애");
+        var body = get(competition.getId(), owner, 200);
+        java.util.Map<String, Object> item = JsonPath.read(body, "$.market_analyses[0]");
+        assertThat(item).containsEntry("date", null).containsEntry("title", "카카오 데이터센터 화재")
+                .containsEntry("content", "서비스 장애");
+    }
+
+    @Test
+    void savingReportReplacesExistingContentAndAllowsEmptyArrays() throws Exception {
+        var first = objectMapper.readValue("""
+                {"news":[{"title":"첫 뉴스","summary":"첫 요약"}],
+                 "thoughts":[{"title":"첫 판단","text":"첫 내용"}]}
+                """, com.stock_spoon.river_be.competition.dto.CompetitionReportSaveRequest.class);
+        var second = objectMapper.readValue("""
+                {"news":[{"title":"새 뉴스","summary":"새 요약"}],"thoughts":[]}
+                """, com.stock_spoon.river_be.competition.dto.CompetitionReportSaveRequest.class);
+
+        reportService.save(owner.getId(), competition.getId(), first);
+        reportService.save(owner.getId(), competition.getId(), second);
+
+        var body = get(competition.getId(), owner, 200);
+        assertThat((List<?>) JsonPath.read(body, "$.market_analyses")).hasSize(1);
+        assertThat((String) JsonPath.read(body, "$.market_analyses[0].title")).isEqualTo("새 뉴스");
+        assertThat((String) JsonPath.read(body, "$.market_analyses[0].content")).isEqualTo("새 요약");
+        assertThat((List<?>) JsonPath.read(body, "$.judgment_summaries")).isEmpty();
+    }
+
+    @Test
+    void savingReportRejectsOtherOwnersCompetition() throws Exception {
+        var other = users.save(new User("다른 사용자"));
+        var request = objectMapper.readValue("{\"news\":[],\"thoughts\":[]}",
+                com.stock_spoon.river_be.competition.dto.CompetitionReportSaveRequest.class);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                reportService.save(other.getId(), competition.getId(), request))
+                .isInstanceOf(com.stock_spoon.river_be.competition.exception.CompetitionException.class);
+    }
+
+    @Test
+    void failedReplacementKeepsTheEntirePreviousReport() throws Exception {
+        var original = objectMapper.readValue("""
+                {"news":[{"title":"기존 뉴스","summary":"기존 요약"}],
+                 "thoughts":[{"title":"기존 판단","text":"기존 내용"}]}
+                """, com.stock_spoon.river_be.competition.dto.CompetitionReportSaveRequest.class);
+        reportService.save(owner.getId(), competition.getId(), original);
+
+        // 서비스에서 직접 호출해 요청 검증을 건너뛰고 DB 저장 실패를 재현한다.
+        String oversizedTitle = "가".repeat(256);
+        var invalid = objectMapper.readValue("""
+                {"news":[{"title":"새 뉴스","summary":"새 요약"}],
+                 "thoughts":[{"title":"%s","text":"새 내용"}]}
+                """.formatted(oversizedTitle), com.stock_spoon.river_be.competition.dto.CompetitionReportSaveRequest.class);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                reportService.save(owner.getId(), competition.getId(), invalid))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+
+        var body = get(competition.getId(), owner, 200);
+        assertThat((List<?>) JsonPath.read(body, "$.market_analyses")).hasSize(1);
+        assertThat((String) JsonPath.read(body, "$.market_analyses[0].title")).isEqualTo("기존 뉴스");
+        assertThat((String) JsonPath.read(body, "$.market_analyses[0].content")).isEqualTo("기존 요약");
+        assertThat((List<?>) JsonPath.read(body, "$.judgment_summaries")).hasSize(1);
+        assertThat((String) JsonPath.read(body, "$.judgment_summaries[0].title")).isEqualTo("기존 판단");
+        assertThat((String) JsonPath.read(body, "$.judgment_summaries[0].content")).isEqualTo("기존 내용");
     }
 
     @Test

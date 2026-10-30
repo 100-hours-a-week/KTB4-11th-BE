@@ -27,6 +27,8 @@ class CompetitionReportTests {
     @Autowired UserRepository users;
     @Autowired CompetitionRepository competitions;
     @Autowired JwtTokenProvider tokens;
+    @Autowired org.springframework.security.oauth2.jwt.JwtEncoder jwtEncoder;
+    @Autowired com.stock_spoon.river_be.config.JwtProperties jwtProperties;
     @Autowired JdbcTemplate jdbc;
     @Autowired com.stock_spoon.river_be.competition.service.CompetitionReportService reportService;
     private final tools.jackson.databind.json.JsonMapper objectMapper = tools.jackson.databind.json.JsonMapper.builder().build();
@@ -120,6 +122,95 @@ class CompetitionReportTests {
         assertThat((List<?>) JsonPath.read(body, "$.judgment_summaries")).hasSize(1);
         assertThat((String) JsonPath.read(body, "$.judgment_summaries[0].title")).isEqualTo("기존 판단");
         assertThat((String) JsonPath.read(body, "$.judgment_summaries[0].content")).isEqualTo("기존 내용");
+    }
+
+    @Test
+    void concurrentReportSavesDoNotMixNewsAndThoughts() throws Exception {
+        var first = objectMapper.readValue("""
+                {"news":[{"title":"첫 뉴스","summary":"첫 요약"}],
+                 "thoughts":[{"title":"첫 판단","text":"첫 내용"}]}
+                """, com.stock_spoon.river_be.competition.dto.CompetitionReportSaveRequest.class);
+        var second = objectMapper.readValue("""
+                {"news":[{"title":"두 번째 뉴스","summary":"두 번째 요약"}],
+                 "thoughts":[{"title":"두 번째 판단","text":"두 번째 내용"}]}
+                """, com.stock_spoon.river_be.competition.dto.CompetitionReportSaveRequest.class);
+
+        var ready = new java.util.concurrent.CountDownLatch(2);
+        var start = new java.util.concurrent.CountDownLatch(1);
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            var firstSave = executor.submit(() -> {
+                ready.countDown();
+                start.await();
+                reportService.save(owner.getId(), competition.getId(), first);
+                return null;
+            });
+            var secondSave = executor.submit(() -> {
+                ready.countDown();
+                start.await();
+                reportService.save(owner.getId(), competition.getId(), second);
+                return null;
+            });
+            assertThat(ready.await(10, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            firstSave.get(20, java.util.concurrent.TimeUnit.SECONDS);
+            secondSave.get(20, java.util.concurrent.TimeUnit.SECONDS);
+        } finally {
+            start.countDown();
+            executor.shutdownNow();
+        }
+
+        var body = get(competition.getId(), owner, 200);
+        assertThat((List<?>) JsonPath.read(body, "$.market_analyses")).hasSize(1);
+        assertThat((List<?>) JsonPath.read(body, "$.judgment_summaries")).hasSize(1);
+        String newsTitle = JsonPath.read(body, "$.market_analyses[0].title");
+        String thoughtTitle = JsonPath.read(body, "$.judgment_summaries[0].title");
+        assertThat(java.util.List.of(newsTitle, thoughtTitle)).isIn(
+                java.util.List.of("첫 뉴스", "첫 판단"),
+                java.util.List.of("두 번째 뉴스", "두 번째 판단"));
+    }
+
+    @Test
+    void aiServerCanPostReportAndOwnerCanReadItOverHttp() throws Exception {
+        String base = "http://localhost:" + port;
+        var csrfResponse = client.send(HttpRequest.newBuilder(URI.create(base + "/api/v1/auth/csrf"))
+                .GET().build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(csrfResponse.statusCode()).isEqualTo(200);
+        String csrfToken = JsonPath.read(csrfResponse.body(), "$.token");
+        String csrfHeader = JsonPath.read(csrfResponse.body(), "$.header_name");
+        String csrfCookie = csrfResponse.headers().allValues("Set-Cookie").stream()
+                .filter(cookie -> cookie.startsWith("XSRF-TOKEN="))
+                .findFirst().orElseThrow().split(";", 2)[0];
+
+        Instant now = Instant.now();
+        var claims = org.springframework.security.oauth2.jwt.JwtClaimsSet.builder()
+                .issuer(jwtProperties.issuer()).subject(owner.getId().toString())
+                .issuedAt(now).expiresAt(now.plusSeconds(300))
+                .claim("type", "access").claim("actor", "AI").build();
+        String aiToken = jwtEncoder.encode(org.springframework.security.oauth2.jwt.JwtEncoderParameters.from(
+                org.springframework.security.oauth2.jwt.JwsHeader.with(
+                        org.springframework.security.oauth2.jose.jws.MacAlgorithm.HS256).type("JWT").build(), claims))
+                .getTokenValue();
+        String body = """
+                {"news":[{"title":"카카오 데이터센터 화재","summary":"서비스 장애"}],
+                 "thoughts":[{"title":"인플레이션","text":"물가 상승 영향"}]}
+                """;
+        var post = HttpRequest.newBuilder(URI.create(base + "/api/v1/competitions/" + competition.getId() + "/report"))
+                .header("Cookie", "access_token=" + aiToken + "; " + csrfCookie)
+                .header(csrfHeader, csrfToken).header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body)).build();
+        var postResponse = client.send(post, HttpResponse.BodyHandlers.ofString());
+        assertThat(postResponse.statusCode()).as(postResponse.body()).isEqualTo(200);
+        assertThat(((Number) JsonPath.read(postResponse.body(), "$.competition_id")).longValue()).isEqualTo(competition.getId());
+        assertThat((String) JsonPath.read(postResponse.body(), "$.message")).isEqualTo("success");
+
+        var response = get(competition.getId(), owner, 200);
+        assertThat((String) JsonPath.read(response, "$.market_analyses[0].title")).isEqualTo("카카오 데이터센터 화재");
+        assertThat((String) JsonPath.read(response, "$.market_analyses[0].content")).isEqualTo("서비스 장애");
+        java.util.Map<String, Object> marketItem = JsonPath.read(response, "$.market_analyses[0]");
+        assertThat(marketItem).containsEntry("date", null);
+        assertThat((String) JsonPath.read(response, "$.judgment_summaries[0].title")).isEqualTo("인플레이션");
+        assertThat((String) JsonPath.read(response, "$.judgment_summaries[0].content")).isEqualTo("물가 상승 영향");
     }
 
     @Test

@@ -714,9 +714,53 @@ GET /api/v2/users/me/competitions/{competition_id}/report
 
 저장 구조는 `competition_market_analyses`와 `competition_judgment_summaries` 두 테이블이며 각각 대결 ID로 연결한다. v2는 대결당 AI 하나이므로 대결별로 저장한다. 주문별 `ai_order_reports`와는 별개다. 신규 DDL은 `db/competition-reports.sql`이며 실제 DB에는 실행하지 않았다.
 
-**범위:** 이번 구현은 DB 저장 구조와 GET 조회다. AI 서버가 데이터를 보내고 BE가 저장한다는 방향은 정해졌지만 전송 URI·인증·갱신/중복 정책은 아직 정해지지 않아 수신 API는 구현하지 않았다. 수신 연동 전에는 별도로 저장된 데이터만 조회되며, 미저장 상태는 빈 배열이다.
+**구현 시점:** 이 GET 조회는 `feat/139-competition/ai-report`에서 먼저 구현했다. 현재 리포트 저장 API는 아래 별도 항목을 참고한다. 저장된 데이터가 없으면 빈 배열을 반환한다.
 
-검증 항목: 실제 HTTP로 모든 대결 상태 공개, 빈 배열, 날짜 정렬, 본문 전체 반환, 다른 대결 데이터 분리, 미인증 401·타인/없는 대결 404를 확인한다. 최초 구현한 매매 내역 브랜치에서는 매매 내역 테스트도 함께 통과했다. 현재 `feat/139-competition/ai-report` 브랜치는 상세·결과 구현이 포함된 dev 기반이며, 매매 내역 구현과 테스트는 아직 미포함이다.
+검증 항목: 실제 HTTP로 모든 대결 상태 공개, 빈 배열, 날짜 정렬, 본문 전체 반환, 다른 대결 데이터 분리, 미인증 401·타인/없는 대결 404를 확인한다. 최초 구현 당시 `feat/139-competition/ai-report`는 상세·결과 구현이 포함된 dev 기반이었고, 매매 내역 구현과 테스트는 아직 미포함이었다.
+
+## AI 서버의 대결 리포트 저장
+
+현재 브랜치 `feat/228-competition/report-save`의 구현이다. AI 서버가 생성한 결과를 수신하고, 기존 리포트 조회 API에서 사용할 수 있도록 저장한다. **대결 종료 후 SQS에 리포트 생성 요청을 보내는 기능은 아직 구현하지 않았다.**
+
+### 호출 흐름
+
+```text
+AI 서버 → GET /api/v1/auth/csrf → CSRF 토큰과 쿠키 획득
+AI 서버 → POST /api/v1/competitions/{competitionId}/report
+  → SecurityConfig: access_token 쿠키의 JWT 검증, CSRF 확인, actor=AI 검사
+  → CompetitionReportSaveController.save(jwt, competitionId, request)
+      → JSON을 CompetitionReportSaveRequest로 변환하고 @Valid 검증
+      → jwt.getSubject()를 long 사용자 ID로 변환
+  → CompetitionReportService.save(userId, competitionId, request) [트랜잭션]
+      → CompetitionRepository.findLockedById(competitionId): 대결 잠금·소유자 확인
+      → CompetitionMarketAnalysisRepository.findAllByCompetitionIdOrderByDateDescIdDesc(competitionId)
+      → CompetitionMarketAnalysisRepository.deleteAll(기존 뉴스)
+      → CompetitionJudgmentSummaryRepository.findAllByCompetitionIdOrderByIdAsc(competitionId)
+      → CompetitionJudgmentSummaryRepository.deleteAll(기존 판단 요약)
+      → CompetitionMarketAnalysisRepository.save(새 뉴스) / 날짜 null
+      → CompetitionJudgmentSummaryRepository.save(새 판단 요약)
+  → CompetitionReportSaveResponse(competitionId, "success") → HTTP 200
+```
+
+AI 서버의 POST 요청이 들어오면 [SecurityConfig](../src/main/java/com/stock_spoon/river_be/config/SecurityConfig.java)의 보안 필터가 JWT와 CSRF를 확인한다. 이 경로는 `actor`가 `AI`인 JWT를 요구하며, AI 서버가 보내는 토큰의 subject는 대결 소유자의 사용자 ID다. 기존 인증 과정에서 사용자 ID의 형식과 사용자 존재 여부도 검사한다.
+
+인증을 통과하면 [CompetitionReportSaveController.save()](../src/main/java/com/stock_spoon/river_be/competition/controller/CompetitionReportSaveController.java)가 호출된다. 인증된 JWT는 `jwt`, URL의 대결 ID는 `competitionId`, JSON을 변환한 [CompetitionReportSaveRequest](../src/main/java/com/stock_spoon/river_be/competition/dto/CompetitionReportSaveRequest.java)는 `request`로 전달된다. `@Valid` 검증을 통과하면 컨트롤러는 JWT subject를 숫자로 바꿔 [CompetitionReportService.save()](../src/main/java/com/stock_spoon/river_be/competition/service/CompetitionReportService.java)에 사용자 ID, 대결 ID, 요청 DTO를 전달한다.
+
+서비스는 [CompetitionRepository.findLockedById()](../src/main/java/com/stock_spoon/river_be/competition/repository/CompetitionRepository.java)로 대결을 잠그고 해당 사용자 소유인지 확인한다. 이후 기존 뉴스·판단 요약을 조회해 삭제하고 요청의 각 항목을 Entity로 변환해 저장한다. 작업이 정상 커밋되면 컨트롤러가 대결 ID와 `success`를 응답한다. 이후 사용자는 위 GET 조회로 저장된 결과를 볼 수 있다.
+
+| 요청 값 | 저장되는 값 |
+|---|---|
+| `news[].title`, `news[].summary` | `competition_market_analyses.title`, `content` |
+| 뉴스 날짜 | 요청에 없어 `analysis_date`에 `NULL` 저장 |
+| `thoughts[].title`, `thoughts[].text` | `competition_judgment_summaries.title`, `content` |
+
+`news`와 `thoughts` 배열은 필수이며 빈 배열은 허용한다. 각 항목은 null이 아니어야 하고 제목·본문은 공백만 있을 수 없다. 제목은 최대 255자다. 빈 배열로 교체하면 해당 종류의 기존 항목은 모두 삭제된다.
+
+같은 대결의 저장 요청은 대결 행의 쓰기 잠금으로 순서대로 처리하고, 기존 내용을 새 요청 내용으로 교체한다. 삭제와 저장은 하나의 트랜잭션으로 묶여 실패 시 롤백된다. 다만 요청 버전이 없어 오래된 요청이 늦게 도착하면 최신 내용을 덮어쓸 수 있다. 대결 상태에 따른 저장 제한은 현재 구현하지 않았다.
+
+검증 실패는 400, 인증 실패는 401, AI 권한 또는 CSRF 확인 실패는 403이다. 대결이 없거나 JWT의 사용자가 소유자가 아니면 `COMPETITION_NOT_FOUND` 404를 반환한다. DB 오류도 트랜잭션을 롤백한다.
+
+테스트는 [CompetitionReportTests](../src/test/java/com/stock_spoon/river_be/competition/CompetitionReportTests.java)와 [SecurityJwtTests](../src/test/java/com/stock_spoon/river_be/config/SecurityJwtTests.java)에서 저장·교체·실패 롤백·동시 요청·인증과 로컬 HTTP POST→GET을 확인한다. 2026-10-30 전체 테스트는 성공했으며 574개 중 18개는 건너뛰었다. 실제 AI 서버와 운영 DB를 사용한 연동 검증은 아직 수행하지 않았다.
 
 ## 설정과 DB 적용
 
@@ -731,6 +775,7 @@ GET /api/v2/users/me/competitions/{competition_id}/report
 - 기존 대결 테이블이 있는 DB: [competition-completion.sql](../db/competition-completion.sql)로 정산 컬럼만 추가한다. 두 SQL을 중복 적용하지 않는다.
 - 일별 성적 테이블: 위 대결 테이블 준비 후 [competition-daily-performance.sql](../db/competition-daily-performance.sql)을 한 번 추가 적용한다.
 - 대결 시장 분석·판단 요약 테이블: [competition-reports.sql](../db/competition-reports.sql)을 한 번 추가 적용한다.
+- AI 리포트 뉴스에 날짜가 없는 경우를 위해 [competition-report-nullable-analysis-date.sql](../db/competition-report-nullable-analysis-date.sql)로 기존 `analysis_date`의 NULL 허용이 필요하다. 운영 적용 전 인프라 담당자가 기존 컬럼 정의를 확인해야 한다.
 - SQL 파일은 실제 DB에 자동 실행하지 않았다. 운영 스키마 확인 후 적용해야 한다.
 
 ## 기존 기능 연결과 후속 작업
@@ -739,5 +784,5 @@ GET /api/v2/users/me/competitions/{competition_id}/report
 - AI 서버 계좌 조회는 기간 내 진행 중 대결의 AI 계좌를 포함한다. 마감 직후 상태 변경 전에는 목록에 남을 수 있지만 주문은 종료 시각으로 차단한다.
 - 일반 계좌 생성·이름 변경은 대결 생성과 같은 사용자 잠금을 사용해 이름 중복 경쟁을 막는다.
 - 기존 v1 일반 AI 계좌와 저장 데이터는 유지한다. v2 일반 계좌의 사용자 운용 전환·사용자 직접 주문 지원은 별도 작업이다.
-- 이 브랜치에는 일별 누적 수익률 DB 기록, 사용자 상세 조회, 결과 조회와 대결 AI 리포트 조회가 포함된다. 대결 매매 내역은 별도 브랜치에 있으며, AI 시장 분석·판단 요약 수신 연동은 후속 작업이다.
+- AI 리포트 결과 수신·저장은 구현했으며, 대결 종료 후 AI 서버에 SQS 생성 요청을 보내는 기능과 실제 서버 간 연동 검증은 후속 작업이다.
 - 새 기능도 **짧은 호출 흐름 → 전달값 표 → 계산·정책 예시 → 예외 처리**로 기록하고 구현된 내용과 계획을 구분한다.

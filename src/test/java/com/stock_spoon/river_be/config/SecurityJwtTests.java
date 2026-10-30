@@ -95,6 +95,30 @@ class SecurityJwtTests {
     }
 
     @Test
+    void orderPreflightAllowsIdempotencyKeyOnlyForConfiguredOrigin() throws Exception {
+        String path = "/api/v1/accounts/772/orders";
+        String headers = "content-type,idempotency-key,x-xsrf-token";
+        mvc.perform(options(path).header("Origin", "http://localhost:3001")
+                        .header("Access-Control-Request-Method", "POST")
+                        .header("Access-Control-Request-Headers", headers))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Origin", "http://localhost:3001"))
+                .andExpect(header().string("Access-Control-Allow-Credentials", "true"))
+                .andExpect(header().string("Access-Control-Allow-Headers",
+                        org.hamcrest.Matchers.containsStringIgnoringCase("idempotency-key")));
+        mvc.perform(options(path).header("Origin", "https://untrusted.example")
+                        .header("Access-Control-Request-Method", "POST")
+                        .header("Access-Control-Request-Headers", headers))
+                .andExpect(status().isForbidden());
+        mvc.perform(options(path).header("Origin", "http://localhost:3001")
+                        .header("Access-Control-Request-Method", "POST")
+                        .header("Access-Control-Request-Headers", "content-type,x-unknown-header"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Headers",
+                        org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsStringIgnoringCase("x-unknown-header"))));
+    }
+
+    @Test
     void accessTokenCookieAuthenticatesProtectedRequest() throws Exception {
         when(kakao.verifyUser("code"))
                 .thenReturn(new KakaoUserInfo(1000L, "닉네임", null));

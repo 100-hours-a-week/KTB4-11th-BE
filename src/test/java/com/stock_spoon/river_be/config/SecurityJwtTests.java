@@ -197,6 +197,52 @@ class SecurityJwtTests {
         mvc.perform(get("/test/protected")).andExpect(status().isUnauthorized());
     }
 
+    @Test
+    void competitionReportSaveRequiresAiTokenWithUserSubject() throws Exception {
+        String path = "/api/v1/competitions/123/report";
+        var post = org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path);
+        mvc.perform(post.with(csrf()).cookie(new Cookie("access_token", aiToken("1", "access", "USER"))))
+                .andExpect(status().isForbidden());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
+                        .with(csrf()).cookie(new Cookie("access_token", aiToken("1", "access", null))))
+                .andExpect(status().isForbidden());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
+                        .with(csrf()).cookie(new Cookie("access_token", aiToken("ai-server", "access", "AI"))))
+                .andExpect(status().isForbidden());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
+                        .with(csrf()).cookie(new Cookie("access_token", aiToken("1", "access", "AI")))
+                        .contentType("application/json").content("{\"news\":[],\"thoughts\":[]}"))
+                .andExpect(status().isNotFound());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
+                        .cookie(new Cookie("access_token", aiToken("1", "access", "AI"))))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void aiServerCanSaveACompetitionReportAndInvalidBodiesAreRejected() throws Exception {
+        var owner = users.save(new com.stock_spoon.river_be.user.entity.User("리포트 저장 사용자"));
+        var competitions = context.getBean(com.stock_spoon.river_be.competition.repository.CompetitionRepository.class);
+        var competition = competitions.save(new com.stock_spoon.river_be.competition.entity.Competition(
+                owner, "테스트 대결", com.stock_spoon.river_be.competition.entity.Competition.Type.USER_VS_AI,
+                java.time.LocalDate.of(2026, 10, 1), java.time.LocalDate.of(2026, 10, 10), 10000000, 1));
+        String path = "/api/v1/competitions/" + competition.getId() + "/report";
+        var cookie = new Cookie("access_token", aiToken(owner.getId().toString(), "access", "AI"));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
+                        .with(csrf()).cookie(cookie).contentType("application/json")
+                        .content("{\"news\":[{\"title\":\"뉴스\",\"summary\":\"요약\"}],\"thoughts\":[]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.competition_id").value(competition.getId()))
+                .andExpect(jsonPath("$.message").value("success"));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
+                        .with(csrf()).cookie(cookie).contentType("application/json")
+                        .content("{\"news\":[{\"title\":\"\",\"summary\":\"요약\"}],\"thoughts\":[]}"))
+                .andExpect(status().isBadRequest());
+        var saved = context.getBean(com.stock_spoon.river_be.competition.repository.CompetitionMarketAnalysisRepository.class)
+                .findAllByCompetitionIdOrderByDateDescIdDesc(competition.getId());
+        org.assertj.core.api.Assertions.assertThat(saved).hasSize(1);
+        org.assertj.core.api.Assertions.assertThat(saved.get(0).getTitle()).isEqualTo("뉴스");
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void missingUserBehindAValidSignatureStillReturns401(boolean k6Test) throws Exception {

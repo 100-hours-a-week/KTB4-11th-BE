@@ -2,6 +2,8 @@ package com.stock_spoon.river_be.competition.service;
 
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import com.stock_spoon.river_be.competition.entity.Competition;
+import com.stock_spoon.river_be.competition.entity.CompetitionReportOutbox;
+import com.stock_spoon.river_be.competition.repository.CompetitionReportOutboxRepository;
 import com.stock_spoon.river_be.competition.repository.CompetitionRepository;
 import com.stock_spoon.river_be.competition.repository.CompetitionParticipantRepository;
 import com.stock_spoon.river_be.holding.repository.HoldingRepository;
@@ -16,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class CompetitionCompletionService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CompetitionCompletionService.class);
     private final CompetitionRepository competitions;
     private final CompetitionParticipantRepository participants;
     private final AccountRepository accounts;
@@ -24,6 +27,7 @@ public class CompetitionCompletionService {
     private final KiwoomMarketClient market;
     private final CompetitionTradingHours tradingHours;
     private final CompetitionDailyPerformanceService dailyPerformances;
+    private final CompetitionReportOutboxRepository reportOutboxes;
     @jakarta.persistence.PersistenceContext
     private jakarta.persistence.EntityManager entityManager;
 
@@ -72,5 +76,14 @@ public class CompetitionCompletionService {
         }
         competition.complete(winner, now.toInstant());
         dailyPerformances.recordFinalPerformances(competitionId);
+        // 완료와 전송 대기 기록을 함께 커밋한다. 저장 실패를 삼키지 않아 정산도 함께 롤백된다.
+        String requestId = java.util.UUID.randomUUID().toString();
+        try {
+            reportOutboxes.saveAndFlush(new CompetitionReportOutbox(competition, requestId));
+        } catch (RuntimeException error) {
+            log.error("event=competition_report_outbox_creation_failed stage=outbox_save competitionId={} requestId={} causeType={}",
+                    competitionId, requestId, error.getClass().getSimpleName(), error);
+            throw error;
+        }
     }
 }

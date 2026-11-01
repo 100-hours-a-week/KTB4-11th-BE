@@ -31,6 +31,8 @@ public class UserDeletionRepository {
         delete("competition_participants", "competition_id in (" + competitions + ")", userId);
         delete("competition_market_analyses", "competition_id in (" + competitions + ")", userId);
         delete("competition_judgment_summaries", "competition_id in (" + competitions + ")", userId);
+        // 전송 대기·완료 기록도 대결보다 먼저 삭제해 Outbox의 FK를 해제한다.
+        delete("competition_report_outbox", "competition_id in (" + competitions + ")", userId);
         delete("competitions", "user_id=:userId", userId);
         // 4. 관심 등록과 모든 기기의 Refresh Token을 삭제한다. 공용 stocks 행은 유지한다.
         delete("watchlist_stocks", "user_id=:userId", userId);

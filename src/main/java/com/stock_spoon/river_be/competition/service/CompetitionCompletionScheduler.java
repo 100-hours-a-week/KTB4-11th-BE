@@ -34,7 +34,8 @@ public class CompetitionCompletionScheduler {
                 completion.completeCompetition(id);
             } catch (RuntimeException error) {
                 // 종가 미제공·일시 장애는 완료로 만들지 않고 다음 주기에 재시도한다.
-                log.warn("event=competition_completion_failed competitionId={} causeType={}", id, error.getClass().getSimpleName());
+                log.warn("event=competition_completion_failed stage=completion_transaction competitionId={} causeType={}",
+                        id, error.getClass().getSimpleName(), error);
             }
         }
     }

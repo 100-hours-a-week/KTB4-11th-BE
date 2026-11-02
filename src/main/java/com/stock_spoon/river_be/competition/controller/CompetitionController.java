@@ -5,6 +5,8 @@ import com.stock_spoon.river_be.config.DbWriteReplayBusinessCommand;
 import static com.stock_spoon.river_be.config.DbWriteReplayBusinessCommand.Type.COMPETITION_CREATE;
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateRequest;
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateResponse;
+import com.stock_spoon.river_be.competition.dto.CompetitionCancelResponse;
+import com.stock_spoon.river_be.competition.service.CompetitionCancellationService;
 import com.stock_spoon.river_be.competition.dto.CompetitionListResponse;
 import com.stock_spoon.river_be.competition.dto.CompetitionDetailResponse;
 import com.stock_spoon.river_be.competition.dto.CompetitionResultResponse;
@@ -36,6 +38,14 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 public class CompetitionController {
 
     private final CompetitionService competitionService;
+    private final CompetitionCancellationService cancellationService;
+
+    @PostMapping("/{competitionId}/cancel") // 요청 본문 없이 URL의 대결을 취소한다.
+    public CompetitionCancelResponse cancelCompetition(
+            @AuthenticationPrincipal Jwt jwt, @PathVariable Long competitionId) {
+        // 사용자 ID는 요청 JSON이 아니라 인증된 JWT에서 읽는다.
+        return cancellationService.cancel(Long.parseLong(jwt.getSubject()), competitionId);
+    }
 
     @DbReadRetryable
     @GetMapping("/{competitionId}/result") // 완료된 대결의 최종 성적과 양측 비교 그래프를 조회한다.

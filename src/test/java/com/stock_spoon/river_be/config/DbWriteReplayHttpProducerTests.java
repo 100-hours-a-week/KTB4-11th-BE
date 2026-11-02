@@ -436,7 +436,10 @@ class DbWriteReplayHttpProducerTests {
                     mock(com.stock_spoon.river_be.account.service.AccountDeletionService.class));
         }
         @Bean WatchlistController watchlists(ControllerMocks mocks) { return new WatchlistController(mocks.watchlists); }
-        @Bean CompetitionController competitions(ControllerMocks mocks) { return new CompetitionController(mocks.competitions); }
+        @Bean CompetitionController competitions(ControllerMocks mocks) {
+            return new CompetitionController(mocks.competitions,
+                    org.mockito.Mockito.mock(com.stock_spoon.river_be.competition.service.CompetitionCancellationService.class));
+        }
         @Bean OrderController orders(ControllerMocks mocks) {
             return new OrderController(mocks.orders, mock(OrderMarketValidator.class), mocks.subscriptions,
                     mock(OrderExecutionListener.class), mock(OrderHistoryService.class), mock(OrderExecutionService.class),

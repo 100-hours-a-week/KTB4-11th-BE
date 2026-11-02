@@ -107,6 +107,15 @@ public class Competition {
                 && now.toInstant().isBefore(tradingEndsAt());
     }
 
+    // 반복 취소는 허용하며 완료된 대결은 취소 상태로 되돌리지 않는다.
+    public void cancel() {
+        if (state == State.CANCELLED) return;
+        if (state != State.READY && state != State.IN_PROGRESS) {
+            throw new IllegalStateException("대기 중이거나 진행 중인 대결만 취소할 수 있습니다.");
+        }
+        this.state = State.CANCELLED;
+    }
+
     public void complete(Winner winner, Instant completedAt) {
         if (state != State.IN_PROGRESS || completedAt.isBefore(tradingEndsAt())) {
             throw new IllegalStateException("종료 시각이 지난 진행 중 대결만 완료할 수 있습니다.");

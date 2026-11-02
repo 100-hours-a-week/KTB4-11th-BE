@@ -26,6 +26,15 @@ public class DbWriteReplayRequestFilter extends OncePerRequestFilter {
     }
 
     @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        String path = request.getRequestURI().substring(request.getContextPath().length());
+        // S3와 DB를 함께 사용하는 프로필 작업은 SQL만 나중에 재생하지 않는다.
+        return ("PATCH".equals(request.getMethod()) && "/api/v1/users/me".equals(path))
+                || ("POST".equals(request.getMethod())
+                && "/api/v1/users/me/profile-image/presigned-url".equals(path));
+    }
+
+    @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
             FilterChain chain) throws ServletException, IOException {
         String requestId = MDC.get("requestId");

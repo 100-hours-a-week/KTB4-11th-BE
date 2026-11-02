@@ -15,7 +15,7 @@ FE가 전달한 카카오 인가코드 수신
 → provider_user_id, nickname과 선택적 profile_image_url 확인
 → nickname 필수 검증
 → H2 DB에서 기존 회원 조회
-→ 신규 회원 생성 또는 기존 회원 프로필 동기화
+→ 신규 회원 생성 또는 기존 회원 프로필 유지
 → StockSpoon Access/Refresh JWT 발급
 → Refresh Token 해시 저장
 → HttpOnly Cookie 저장
@@ -32,9 +32,9 @@ Access Token 재발급과 로그아웃도 구현되어 있다. 로그인 성공 
 - 카카오 로그인 동의 항목에서 **프로필 이미지를 선택 동의**로 설정
 - 회원가입 화면에서 닉네임을 따로 입력받지 않고 **카카오 닉네임을 그대로 사용**
 - 카카오 사용자 정보에 닉네임이 없거나 빈 값이면 **회원가입과 로그인을 실패 처리**
-- 기존 사용자가 다시 로그인할 때마다 최신 카카오 닉네임을 `users.nickname`에 저장
+- 카카오 닉네임은 최초 가입 때 저장하고 재로그인 시 DB의 닉네임을 유지
 - 프로필 이미지 URL은 `users.profile_image_url`에 nullable로 저장
-- 프로필 이미지 미동의·미제공 시에도 로그인하며 기존 이미지 URL은 `null`로 동기화
+- 프로필 이미지 미동의·미제공 시에도 로그인하며 재로그인 시 기존 이미지 참조를 유지
 - 인증 방식: **토큰 인증**
 - 서비스 자체 토큰:
   - **Access Token**
@@ -120,7 +120,7 @@ BE는 **FE로부터 인가코드를 받은 이후부터** 담당한다.
 5. 카카오 사용자 식별값(`provider_user_id`), 닉네임과 선택적 프로필 이미지 URL 확인
 6. 기존 가입 사용자 여부 조회
 7. 닉네임이 없거나 빈 값이면 로그인 실패 처리
-8. 기존 사용자라면 `users.nickname`, `users.profile_image_url`을 최신 카카오 정보로 갱신
+8. 기존 사용자라면 저장된 `users.nickname`, `users.profile_image_url`을 유지한다. 카카오 정보는 신규 가입 초기값에만 사용한다.
 9. 최초 사용자라면 카카오 닉네임과 선택적 프로필 이미지 URL로 사용자 정보 생성
 10. BE가 **스톡스푼 자체 Access JWT / Refresh JWT 발급**
 11. 두 JWT를 **HttpOnly Cookie**로 응답
@@ -145,7 +145,7 @@ provider_user_id, nickname과 profile_image_url 확인
   ↓
 닉네임 필수 검증
   ↓
-기존 회원 프로필 동기화 / 신규 회원 생성
+기존 회원 프로필 유지 / 신규 회원 생성
   ↓
 StockSpoon Access JWT 생성
 StockSpoon Refresh JWT 생성
@@ -225,7 +225,7 @@ nickname 없음 또는 빈 값
 → 회원가입/로그인 실패
 
 기존 OAuth 사용자 존재
-→ users.nickname과 users.profile_image_url을 현재 Kakao 정보로 갱신
+→ 기존 users.nickname과 users.profile_image_url 유지
 → 기존 user로 로그인
 
 기존 OAuth 사용자 없음
@@ -234,9 +234,9 @@ nickname 없음 또는 빈 값
 → 로그인 처리
 ```
 
-회원가입 화면에서 닉네임을 추가로 입력받지 않는다. 카카오에서 받은 닉네임을 별도로 변경하지 않고 저장한다. 카카오 닉네임은 중복될 수 있으므로 유일 제약조건을 두지 않는다. 프로필 이미지 URL은 선택값이며, 사용자가 동의하지 않았거나 카카오 응답에 값이 없으면 `null`로 저장한다. 재로그인할 때 두 값을 모두 최신 카카오 응답과 동기화한다.
+회원가입 화면에서 닉네임을 추가로 입력받지 않는다. 카카오에서 받은 닉네임을 별도로 변경하지 않고 저장한다. 카카오 닉네임은 중복될 수 있으므로 유일 제약조건을 두지 않는다. 프로필 이미지 URL은 선택값이며, 사용자가 동의하지 않았거나 카카오 응답에 값이 없으면 `null`로 저장한다. 재로그인할 때 두 값은 기존 DB 값으로 유지한다.
 
-최초 회원 생성 시 `users`와 `user_oauth` 생성은 하나의 DB 트랜잭션에서 수행한다. 기존 사용자의 닉네임 갱신도 로그인 처리 트랜잭션에 포함한다. 중간에 실패하면 일부 데이터만 저장되지 않도록 전체 작업을 되돌린다.
+최초 회원 생성 시 `users`와 `user_oauth` 생성은 하나의 DB 트랜잭션에서 수행한다. 기존 사용자는 잠금 재조회하고 닉네임과 이미지 참조는 유지한다. 중간에 실패하면 일부 데이터만 저장되지 않도록 전체 작업을 되돌린다.
 
 ---
 
@@ -360,7 +360,7 @@ FE가 Kakao 로그인 및 인가코드 수신
 → BE가 Kakao 토큰 발급
 → Kakao 사용자 정보 조회
 → 카카오 닉네임 필수 검증
-→ 기존 회원 닉네임 동기화 또는 신규 회원 생성
+→ 기존 회원 프로필 유지 또는 신규 회원 생성
 → BE가 StockSpoon Access/Refresh JWT 발급
 → HttpOnly Cookie 저장
 → 이후 서비스 API는 StockSpoon Access JWT로 인증
@@ -486,7 +486,7 @@ Cookie: refresh_token={Refresh JWT}
 1. `KakaoLoginRequest`: `authorization_code` 입력 형식과 필수값 검증
 2. `AuthController`: CSRF, 로그인, 재발급, 로그아웃 요청 수신과 쿠키 응답
 3. `AuthService`: 카카오 로그인과 Refresh Token 처리를 조립
-4. `KakaoAuthService`: 카카오 인증, 회원 조회·가입과 닉네임 동기화
+4. `KakaoAuthService`: 카카오 인증, 회원 조회·가입과 저장된 프로필 유지
 5. `KakaoClient`: 카카오 토큰 API와 사용자 정보 API 호출
 6. `JwtTokenProvider`: StockSpoon Access/Refresh JWT 생성과 Refresh JWT 검증
 7. `RefreshTokenService`: Refresh Token 해시 저장, Rotation과 로그아웃 폐기
@@ -505,7 +505,7 @@ POST /api/v1/auth/login
 → provider_user_id, nickname과 선택적 profile_image_url 반환
 → nickname 필수 검증
 → H2 DB에서 기존 OAuth 회원 조회
-→ 기존 회원 프로필 갱신 또는 신규 users/user_oauth 생성
+→ 기존 회원 프로필 유지 또는 신규 users/user_oauth 생성
 → Access/Refresh JWT 발급
 → refresh_token 테이블에 Refresh JWT 해시 저장
 → access_token/refresh_token HttpOnly Cookie 응답
@@ -525,8 +525,8 @@ POST /api/v1/auth/login
 6. 닉네임이 없거나 빈 값이면 DB를 변경하지 않고 `KAKAO_NICKNAME_NOT_PROVIDED` 오류를 반환한다.
 7. `UserOAuthRepository`로 카카오 사용자의 가입 여부를 조회한다.
 8. 가입되지 않았다면 카카오 닉네임과 선택적 프로필 이미지 URL로 `users`를 만들고 `user_oauth`를 연결한다.
-9. 가입되어 있다면 닉네임과 프로필 이미지 URL을 기존 `users`에 동기화한다.
-10. H2를 사용하는 테스트로 신규 가입, 기존 회원 프로필 동기화, 이미지 미제공과 닉네임 누락을 검증한다.
+9. 가입되어 있다면 기존 `users`의 닉네임과 프로필 이미지 참조를 유지한다.
+10. H2를 사용하는 테스트로 신규 가입, 기존 회원 프로필 유지, 이미지 삭제 유지와 닉네임 누락을 검증한다.
 
 나중에 MySQL로 바꿀 때는 DataSource와 JPA 방언 등 환경 설정과 DB 스키마 생성 방식을 변경한다. 서비스, 엔티티, 저장소 인터페이스는 최대한 그대로 유지한다.
 

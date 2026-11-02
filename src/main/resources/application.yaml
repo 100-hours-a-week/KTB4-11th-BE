@@ -24,6 +24,14 @@ spring:
       ddl-auto: ${JPA_DDL_AUTO}
     open-in-view: false
 
+profile-image:
+  bucket: ${PROFILE_IMAGE_BUCKET:}
+  region: ${AWS_REGION:ap-northeast-2}
+  max-bytes: ${PROFILE_IMAGE_MAX_BYTES:5242880}
+  upload-ttl-seconds: ${PROFILE_IMAGE_UPLOAD_TTL_SECONDS:300}
+  read-ttl-seconds: ${PROFILE_IMAGE_READ_TTL_SECONDS:900}
+  max-pixels: ${PROFILE_IMAGE_MAX_PIXELS:20000000}
+
 order:
   queue:
     enabled: ${ORDER_QUEUE_ENABLED:false}

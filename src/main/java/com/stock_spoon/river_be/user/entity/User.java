@@ -19,7 +19,7 @@ public class User {
     private String nickname;
 
     @Column(name = "profile_image_url", length = 2048)
-    private String profileImageUrl;
+    private String profileImageRef;
 
     @Column(name = "onboarding_completed", nullable = false)
     private boolean onboardingCompleted;
@@ -31,9 +31,9 @@ public class User {
         this(nickname, null);
     }
 
-    public User(String nickname, String profileImageUrl) {
+    public User(String nickname, String profileImageRef) {
         this.nickname = nickname;
-        this.profileImageUrl = profileImageUrl;
+        this.profileImageRef = profileImageRef;
     }
 
     public Long getId() {
@@ -44,8 +44,8 @@ public class User {
         return nickname;
     }
 
-    public String getProfileImageUrl() {
-        return profileImageUrl;
+    public String getProfileImageRef() {
+        return profileImageRef;
     }
 
     public boolean isOnboardingCompleted() {
@@ -56,8 +56,15 @@ public class User {
         this.onboardingCompleted = true;
     }
 
-    public void synchronizeProfile(String nickname, String profileImageUrl) {
+    public void updateNickname(String nickname) {
         this.nickname = nickname;
-        this.profileImageUrl = profileImageUrl;
+    }
+
+    public void replaceProfileImage(String profileImageRef) {
+        this.profileImageRef = profileImageRef;
+    }
+
+    public void clearProfileImage() {
+        this.profileImageRef = null;
     }
 }

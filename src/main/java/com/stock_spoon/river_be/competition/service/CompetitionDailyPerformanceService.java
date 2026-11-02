@@ -34,7 +34,7 @@ public class CompetitionDailyPerformanceService {
     public void recordMissingDays(Long competitionId) {
         // [회원 탈퇴 수정] 후보 선정 후 삭제된 대결에는 일별 성과를 생성하지 않고 정상 종료한다.
         var competition = competitions.findLockedById(competitionId).orElse(null);
-        if (competition == null) return;
+        if (competition == null || competition.isDailyPerformanceComplete()) return;
         if (competition.getStartedAt() == null || (competition.getState() != Competition.State.IN_PROGRESS
                 && competition.getState() != Competition.State.COMPLETED)) return;
         var now = tradingHours.now();
@@ -62,7 +62,10 @@ public class CompetitionDailyPerformanceService {
             LocalDate day = date;
             if (links.stream().anyMatch(p -> !recorded.getOrDefault(p.getId(), Set.of()).contains(day))) missingDays.add(day);
         }
-        if (missingDays.isEmpty()) return;
+        if (missingDays.isEmpty()) {
+            markCompleteIfFinished(competition, lastDate);
+            return;
+        }
 
         // 장 마감 직전부터 진행하던 체결이 끝날 때까지 같은 계좌 잠금으로 기다린다.
         var accountIds = links.stream().map(p -> p.getAccount().getId()).sorted().toList();
@@ -100,6 +103,14 @@ public class CompetitionDailyPerformanceService {
                 }
                 performances.save(new CompetitionDailyPerformance(link, day, assets));
             }
+        }
+        // 기록 저장과 완료 표시를 같은 트랜잭션으로 묶어 실패하면 다음 주기에도 후보로 남긴다.
+        markCompleteIfFinished(competition, lastDate);
+    }
+
+    private void markCompleteIfFinished(Competition competition, LocalDate lastDate) {
+        if (competition.getState() == Competition.State.COMPLETED && lastDate.equals(competition.tradingEndDate())) {
+            competition.markDailyPerformanceComplete();
         }
     }
 

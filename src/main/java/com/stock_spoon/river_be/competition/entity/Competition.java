@@ -11,7 +11,10 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 @Entity // 이 클래스의 객체를 DB 테이블의 행으로 저장한다.
-@Table(name = "competitions", indexes = @Index(name = "ix_competitions_state_dates", columnList = "state,start_date,end_date"))
+@Table(name = "competitions", indexes = {
+        @Index(name = "ix_competitions_state_dates", columnList = "state,start_date,end_date"),
+        @Index(name = "ix_competitions_daily_pending", columnList = "state,daily_performance_complete,start_date")
+})
 @Getter // 값을 읽는 메서드만 생성한다. 상태 변경은 아래 업무 메서드로 제한한다.
 @NoArgsConstructor(access = AccessLevel.PROTECTED) // JPA가 객체를 복원할 때 사용할 기본 생성자다.
 public class Competition {
@@ -25,6 +28,15 @@ public class Competition {
 
     @Column(name = "completed_at")
     private Instant completedAt;
+
+    // 완료 대결의 전체 일별 기록을 확인한 뒤에만 true로 만든다. 기존 대결은 false로 복구 검사를 시작한다.
+    @Column(name = "daily_performance_complete", nullable = false)
+    private boolean dailyPerformanceComplete;
+
+    public void markDailyPerformanceComplete() {
+        if (state != State.COMPLETED) throw new IllegalStateException("완료 대결만 일별 기록 복구를 마칠 수 있습니다.");
+        this.dailyPerformanceComplete = true;
+    }
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY) // DB가 발급한 자동 증가 ID를 사용한다.

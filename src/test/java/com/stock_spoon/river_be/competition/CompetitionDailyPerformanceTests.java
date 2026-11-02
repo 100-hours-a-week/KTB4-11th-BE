@@ -39,12 +39,59 @@ class CompetitionDailyPerformanceTests {
     @Autowired UserRepository users;
     @Autowired OrderRepository orders;
     @Autowired ExecutionRepository executions;
+    @Autowired org.springframework.transaction.PlatformTransactionManager transactions;
     @MockitoBean KiwoomMarketClient market;
     @MockitoSpyBean CompetitionTradingHours hours;
     private Competition competition;
     private CompetitionParticipant userParticipant;
     private Account userAccount;
     private static final LocalDate MONDAY = LocalDate.of(2026, 10, 12);
+
+    @Test void completedCompetitionIsExcludedOnlyAfterMissingHistoryIsRepaired() {
+        completeFixture();
+        doReturn(time("2026-10-26T16:00:00+09:00")).when(hours).now();
+        assertThat(competitions.findDailyPerformanceCandidates(MONDAY.plusDays(14))).contains(competition.getId());
+        service.recordMissingDays(competition.getId());
+        assertThat(performances.findAllByParticipantCompetitionId(competition.getId())).hasSize(20);
+        assertThat(competitions.findDailyPerformanceCandidates(MONDAY.plusDays(14))).doesNotContain(competition.getId());
+        service.recordMissingDays(competition.getId());
+        assertThat(performances.findAllByParticipantCompetitionId(competition.getId())).hasSize(20);
+    }
+
+    @Test void alreadyCompleteHistoryIsVerifiedOnceAndExcluded() {
+        doReturn(time("2026-10-22T16:00:00+09:00")).when(hours).now();
+        service.recordMissingDays(competition.getId());
+        assertThat(competitions.findDailyPerformanceCandidates(MONDAY.plusDays(10))).contains(competition.getId());
+        completeFixture();
+        service.recordFinalPerformances(competition.getId());
+        doReturn(time("2026-10-26T16:00:00+09:00")).when(hours).now();
+        service.recordMissingDays(competition.getId());
+        assertThat(performances.findAllByParticipantCompetitionId(competition.getId())).hasSize(20);
+        assertThat(competitions.findDailyPerformanceCandidates(MONDAY.plusDays(14))).doesNotContain(competition.getId());
+    }
+
+    @Test void failedCompletedHistoryRepairRemainsCandidateUntilRetrySucceeds() {
+        trade(Order.Side.BUY, 100_000, 10, "2026-10-12T10:00:00+09:00");
+        completeFixture();
+        doReturn(time("2026-10-26T16:00:00+09:00")).when(hours).now();
+        when(market.closingPrice("005930", MONDAY.plusDays(1))).thenThrow(new IllegalStateException("종가 없음"));
+        when(market.closingPrice("005930", MONDAY)).thenReturn(100_000L);
+        assertThatThrownBy(() -> service.recordMissingDays(competition.getId())).isInstanceOf(IllegalStateException.class);
+        assertThat(performances.findAllByParticipantCompetitionId(competition.getId())).isEmpty();
+        assertThat(competitions.findDailyPerformanceCandidates(MONDAY.plusDays(14))).contains(competition.getId());
+        doReturn(100_000L).when(market).closingPrice(eq("005930"), any(LocalDate.class));
+        service.recordMissingDays(competition.getId());
+        assertThat(performances.findAllByParticipantCompetitionId(competition.getId())).hasSize(20);
+        assertThat(competitions.findDailyPerformanceCandidates(MONDAY.plusDays(14))).doesNotContain(competition.getId());
+    }
+
+    private void completeFixture() {
+        new org.springframework.transaction.support.TransactionTemplate(transactions).executeWithoutResult(status -> {
+            var live = competitions.findById(competition.getId()).orElseThrow();
+            live.complete(Competition.Winner.DRAW, time("2026-10-23T16:00:00+09:00").toInstant());
+            for (var link : participants.findAllByCompetitionIdOrderByIdAsc(live.getId())) link.recordFinalAssets(10_000_000);
+        });
+    }
 
     @BeforeEach
     void setup() {

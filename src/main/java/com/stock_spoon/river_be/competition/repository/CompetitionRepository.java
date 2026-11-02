@@ -17,9 +17,9 @@ public interface CompetitionRepository extends JpaRepository<Competition, Long> 
     // 소유자를 함께 조건으로 걸어 타인의 대결을 상세 조회하지 못하게 한다.
     java.util.Optional<Competition> findByIdAndUserId(Long id, Long userId);
 
-    // 완료 대결도 포함해 서버 중단 중 누락된 과거 일별 성적을 복구한다.
+    // 진행 중 대결과 아직 전체 일별 기록을 확인하지 않은 완료 대결만 복구한다.
     @org.springframework.data.jpa.repository.Query("select c.id from Competition c "
-            + "where c.state in (IN_PROGRESS, COMPLETED) and c.startedAt is not null "
+            + "where c.state in (IN_PROGRESS, COMPLETED) and c.dailyPerformanceComplete = false and c.startedAt is not null "
             + "and c.startDate <= :today order by c.id")
     java.util.List<Long> findDailyPerformanceCandidates(java.time.LocalDate today);
 

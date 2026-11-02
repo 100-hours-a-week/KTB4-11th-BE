@@ -111,6 +111,15 @@ public class SecurityConfig {
                                     && "ai-server".equals(token.getToken().getSubject());
                             return new AuthorizationDecision(allowed);
                         })
+                        // 리포트 저장은 사용자 ID를 subject로 가진 AI 서버 토큰만 허용한다.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/competitions/{competitionId}/report")
+                        .access((authentication, context) -> {
+                            var current = authentication.get();
+                            boolean allowed = current instanceof JwtAuthenticationToken token
+                                    && "AI".equals(token.getToken().getClaimAsString("actor"))
+                                    && !"ai-server".equals(token.getToken().getSubject());
+                            return new AuthorizationDecision(allowed);
+                        })
                         .anyRequest().access((authentication, context) -> {
                             var current = authentication.get();
                             boolean allowed = current instanceof JwtAuthenticationToken token

@@ -1,6 +1,9 @@
 package com.stock_spoon.river_be.competition.service;
 
 import com.stock_spoon.river_be.competition.dto.CompetitionReportResponse;
+import com.stock_spoon.river_be.competition.dto.CompetitionReportSaveRequest;
+import com.stock_spoon.river_be.competition.entity.CompetitionMarketAnalysis;
+import com.stock_spoon.river_be.competition.entity.CompetitionJudgmentSummary;
 import com.stock_spoon.river_be.competition.exception.CompetitionException;
 import com.stock_spoon.river_be.competition.repository.*;
 import java.util.Locale;
@@ -15,6 +18,27 @@ public class CompetitionReportService {
     private final CompetitionRepository competitions;
     private final CompetitionMarketAnalysisRepository analyses;
     private final CompetitionJudgmentSummaryRepository summaries;
+
+    @Transactional // 기존 내용을 지우고 새 내용을 저장하는 작업을 하나로 처리한다.
+    public void save(long userId, long competitionId, CompetitionReportSaveRequest request) {
+        // 같은 대결의 저장 요청이 동시에 들어오면 순서대로 처리한다.
+        var competition = competitions.findLockedById(competitionId)
+                .filter(c -> c.getUser().getId().equals(userId))
+                .orElseThrow(() -> new CompetitionException(HttpStatus.NOT_FOUND,
+                        "COMPETITION_NOT_FOUND", "대결을 찾을 수 없습니다."));
+
+        // 재전송 시 기존 항목을 지우고 요청받은 내용으로 교체한다.
+        analyses.deleteAll(analyses.findAllByCompetitionIdOrderByDateDescIdDesc(competitionId));
+        summaries.deleteAll(summaries.findAllByCompetitionIdOrderByIdAsc(competitionId));
+
+        for (var news : request.getNews()) {
+            // AI 서버가 뉴스 날짜를 보내지 않으므로 null로 저장한다.
+            analyses.save(new CompetitionMarketAnalysis(competition, null, news.getTitle(), news.getSummary()));
+        }
+        for (var thought : request.getThoughts()) {
+            summaries.save(new CompetitionJudgmentSummary(competition, thought.getTitle(), thought.getText()));
+        }
+    }
 
     @Transactional(readOnly = true) // 저장된 내용만 조회하며 AI 생성 요청이나 데이터 변경은 하지 않는다.
     public CompetitionReportResponse get(long userId, long competitionId) {

@@ -27,7 +27,7 @@ public class CompetitionTradeHistoryService {
 
     public CompetitionTradeHistoryResponse list(long userId, long accountId, String cursor, Integer limit, String orderSide) {
         // 1. 소유 계좌인지 확인한 뒤 대결 참가 여부와 AI 공개 시점을 검사한다.
-        if (accounts.findByIdAndUserIdAndActiveTrue(accountId, userId).isEmpty()) {
+        if (accounts.findByIdAndUserId(accountId, userId).isEmpty()) {
             throw new CompetitionException(HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND", "계좌를 찾을 수 없습니다.");
         }
         access.check(userId, accountId, true);

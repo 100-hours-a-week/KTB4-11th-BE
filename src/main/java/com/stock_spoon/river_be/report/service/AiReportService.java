@@ -31,8 +31,9 @@ public class AiReportService {
 
     @Transactional(readOnly = true)
     public AiReportResponse get(long userId, long accountId, long orderId) {
-        accounts.findByIdAndUserIdAndActiveTrue(accountId, userId).orElseThrow(() ->
-                new OrderException(HttpStatus.FORBIDDEN, "FORBIDDEN_ACCOUNT", "이 계좌를 조회할 권한이 없습니다."));
+        if (accounts.findByIdAndUserId(accountId, userId).isEmpty()) {
+            throw new OrderException(HttpStatus.FORBIDDEN, "FORBIDDEN_ACCOUNT", "이 계좌를 조회할 권한이 없습니다.");
+        }
         competitionAccess.check(userId, accountId, false);
         var order = orders.findByIdAndAccountId(orderId, accountId).orElseThrow(AiReportService::notFound);
         if (order.getSource() != Order.Source.AI || order.getReport() == null

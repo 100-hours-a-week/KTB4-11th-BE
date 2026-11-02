@@ -273,6 +273,40 @@ class CompetitionTradeHistoryTests {
         get(reportPath(ai, Long.MAX_VALUE), owner, 403);
     }
 
+    @Test
+    void inactiveOwnedAccountsKeepHistoryAccessAndCancelledAiHistoryRemainsHidden() throws Exception {
+        var aiOrder = order(ai, Order.Side.BUY, true);
+        executions.save(new Execution(aiOrder, 100, 10, null, null, TIME));
+        competition.complete(Competition.Winner.DRAW, TIME.plusSeconds(3600));
+        competitions.save(competition);
+        mine.deactivate(); ai.deactivate();
+        accounts.save(mine); accounts.save(ai);
+        get(path(mine), owner, 200);
+        get(path(ai), owner, 200);
+        get(reportPath(ai, aiOrder.getId()), owner, 200);
+        get("/api/v1/accounts/" + ai.getId() + "/orders", owner, 200);
+        get(path(mine), users.save(new User("非所有者")), 404);
+
+        ReflectionTestUtils.setField(competition, "state", Competition.State.CANCELLED);
+        competitions.save(competition);
+        get(path(mine), owner, 200);
+        get(path(ai), owner, 403);
+        get(reportPath(ai, aiOrder.getId()), owner, 403);
+        var ordinary = accounts.save(new Account(owner, "비활성 일반", 10000000, true));
+        var ordinaryOrder = order(ordinary, Order.Side.BUY, true);
+        executions.save(new Execution(ordinaryOrder, 100, 10, null, null, TIME));
+        ordinary.deactivate(); accounts.save(ordinary);
+        String history = get("/api/v1/accounts/" + ordinary.getId() + "/orders", owner, 200);
+        assertThat(history).contains("삼성전자");
+        String report = get(reportPath(ordinary, ordinaryOrder.getId()), owner, 200);
+        assertThat((String) JsonPath.read(report, "$.reason")).isEqualTo("실적 개선");
+        var stranger = users.save(new User("다른 소유자"));
+        get("/api/v1/accounts/" + ordinary.getId() + "/orders", stranger, 404);
+        get(reportPath(ordinary, ordinaryOrder.getId()), stranger, 403);
+        // 대결 전용 매매 내역 URI는 일반 계좌에 열지 않는다.
+        get(path(ordinary), owner, 404);
+    }
+
     private Order order(Account account, Order.Side side, boolean executed) {
         var order = Order.pendingLimit(account, "005930", side, 10, 100,
                 account.isAiManaged() ? Order.Source.AI : Order.Source.USER,

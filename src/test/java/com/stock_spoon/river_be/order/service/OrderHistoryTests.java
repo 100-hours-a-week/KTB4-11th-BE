@@ -297,7 +297,7 @@ class OrderHistoryTests {
         verifyNoInteractions(market);
     }
 
-    @Test void rejectsUnauthenticatedForeignMissingAndInactiveAccounts() throws Exception {
+    @Test void rejectsUnauthenticatedForeignAndMissingAccountsButAllowsOwnedInactiveAccount() throws Exception {
         mvc.perform(get("/api/v1/accounts/{id}/orders", account.getId())).andExpect(status().isUnauthorized());
         var other = users.save(new User("타인"));
         mvc.perform(get("/api/v1/accounts/{id}/orders", account.getId())
@@ -310,7 +310,7 @@ class OrderHistoryTests {
         em.createNativeQuery("update accounts set is_active=false where account_id=:id")
                 .setParameter("id", account.getId()).executeUpdate();
         em.clear();
-        list("").andExpect(status().isNotFound());
+        list("").andExpect(status().isOk());
         verifyNoInteractions(market);
     }
 

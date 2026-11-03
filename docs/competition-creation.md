@@ -118,6 +118,39 @@ requestId=... event=competition_creation_failed stage=user_participant_save code
 
 범위가 닫히면 생성용 MDC를 복원한다. API 경계 없이 서비스를 직접 호출하는 테스트·내부 호출에서는 단계 정보를 남기지 않는다. 기존 공통 HTTP 로그는 별도로 유지하므로 내부 오류 시 HTTP 실패 로그가 추가로 보일 수 있다. 스케줄러·다른 대결 조회 로그 및 CloudWatch 수집 설정은 이번 변경 범위에 포함하지 않는다.
 
+## 대결명 사용 가능 여부 확인
+
+### 호출 흐름
+
+```text
+GET /api/v3/users/me/competitions/name-availability?competition_name=반도체
+  → SecurityConfig: access_token 쿠키의 JWT 인증
+  → CompetitionNameAvailabilityController.checkNameAvailability(jwt, competitionName)
+      → JWT subject를 사용자 ID로 변환, 쿼리 파라미터와 함께 전달
+  → CompetitionService.checkNameAvailability(userId, competitionName)
+      → 공백·원본 길이 검사 → 사용할 수 없으면 available=false
+      → 앞뒤 공백 제거 후 AccountRepository.existsByUserIdAndNameIgnoreCase(userId, name)
+      → 중복이 아니면 available=true
+  → CompetitionNameAvailabilityResponse → HTTP 200
+```
+
+이름 확인 요청이 들어오면 `competition.controller` 패키지의 [CompetitionNameAvailabilityController.checkNameAvailability()](../src/main/java/com/stock_spoon/river_be/competition/controller/CompetitionNameAvailabilityController.java)가 호출된다. 인증된 JWT는 `jwt`에, 쿼리 파라미터 `competition_name`의 값은 `competitionName`에 전달된다. 컨트롤러는 JWT subject를 숫자 사용자 ID로 변환해 이름과 함께 [CompetitionService.checkNameAvailability()](../src/main/java/com/stock_spoon/river_be/competition/service/CompetitionService.java)에 전달한다.
+
+서비스는 이름이 비어 있거나 공백만 있는지, 앞뒤 공백을 포함한 원본이 20자를 초과하는지 먼저 검사한다. 형식에 맞으면 앞뒤 공백을 제거하고 [AccountRepository.existsByUserIdAndNameIgnoreCase()](../src/main/java/com/stock_spoon/river_be/account/repository/AccountRepository.java)로 해당 사용자의 계좌명과 대소문자를 구분하지 않고 비교한다. 조회 결과를 반대로 바꾸어 [CompetitionNameAvailabilityResponse](../src/main/java/com/stock_spoon/river_be/competition/dto/CompetitionNameAvailabilityResponse.java)의 `available`에 담아 반환한다.
+
+| 단계 | 전달값 | 결과 |
+|---|---|---|
+| 컨트롤러 | JWT의 사용자 ID, `competition_name` | 서비스에 사용자 ID와 입력 이름 전달 |
+| 서비스 | 사용자 ID, 입력 이름 | 형식 검사와 앞뒤 공백 제거 |
+| Repository | 사용자 ID, 정리한 이름 | 해당 사용자의 계좌명 중복 여부 |
+| 응답 | 중복·형식 검사 결과 | HTTP 200, `available` boolean |
+
+예를 들어 본인 계좌에 `Tech`가 있으면 ` tech `는 `{"available":false}`다. 같은 이름이 다른 사용자의 계좌에만 있다면 `true`다. 활성·비활성 계좌를 모두 확인하므로 종료된 대결의 계좌명이 남아 있으면 다시 사용할 수 없다. 이 검사는 대결명 테이블을 별도로 검색하지 않고 계좌명을 기준으로 한다.
+
+빈 값이나 형식에 맞지 않는 이름은 HTTP 200과 `{"available":false}`를 반환한다. 필수 쿼리 파라미터를 생략하면 HTTP 400, 인증되지 않은 요청은 HTTP 401이다. 사용 가능 여부는 조회 시점의 결과이며 대결 생성을 보장하지 않는다. 확인 후 다른 요청으로 같은 계좌명이 생길 수 있어 `CompetitionService.createCompetition()`에서도 이름을 다시 검사한다.
+
+검증 코드는 [CompetitionNameAvailabilityControllerTests](../src/test/java/com/stock_spoon/river_be/competition/CompetitionNameAvailabilityControllerTests.java), [CompetitionNameAvailabilityTests](../src/test/java/com/stock_spoon/river_be/competition/CompetitionNameAvailabilityTests.java)와 [CompetitionCreationTests](../src/test/java/com/stock_spoon/river_be/competition/CompetitionCreationTests.java)에 있다. 컨트롤러 테스트는 테스트용 JWT와 DB 계좌 데이터를 사용한다.
+
 ## 2. 자동 시작
 
 ### 호출 흐름

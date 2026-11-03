@@ -39,6 +39,8 @@ public class CompetitionService {
     private final CompetitionTradingHours tradingHours;
     private final AccountService accountService;
     private final CompetitionDailyPerformanceRepository dailyPerformances;
+    private final CompetitionAgentCreationService agentCreation;
+    private final jakarta.validation.Validator validator;
 
     @Transactional(readOnly = true) // 이름의 사용 가능 여부만 확인한다.
     public CompetitionNameAvailabilityResponse checkNameAvailability(Long userId, String competitionName) {
@@ -53,7 +55,8 @@ public class CompetitionService {
             return new CompetitionNameAvailabilityResponse(false);
         }
         // 활성·비활성 계좌를 모두 조회해 종료된 대결명도 중복으로 판단한다.
-        boolean duplicate = accounts.existsByUserIdAndNameIgnoreCase(userId, name);
+        boolean duplicate = accounts.existsByUserIdAndNameIgnoreCase(userId, name)
+                || competitions.existsByUserIdAndCompetitionNameIgnoreCase(userId, name);
         return new CompetitionNameAvailabilityResponse(!duplicate);
     }
 
@@ -112,6 +115,11 @@ public class CompetitionService {
         var competition = competitions.findByIdAndUserId(competitionId, userId)
                 .orElseThrow(() -> new CompetitionException(HttpStatus.NOT_FOUND,
                         "COMPETITION_NOT_FOUND", "대결을 찾을 수 없습니다."));
+
+        if (competition.getCompetitionType() == Competition.Type.AI_VS_AI) {
+            throw new CompetitionException(HttpStatus.CONFLICT, "COMPETITION_TYPE_NOT_SUPPORTED",
+                    "AI 간 대결의 상세 조회는 아직 지원하지 않습니다.");
+        }
 
         // 2. 두 참가자의 계좌 ID는 매매 내역 조회에 필요하다. 수익률 기록은 사용자 것만 읽는다.
         var links = participants.findAllByCompetitionIdOrderByIdAsc(competitionId);
@@ -234,8 +242,12 @@ public class CompetitionService {
         return new CompetitionListResponse(ongoingCount, items, pagination);
     }
 
-    @Transactional // 대결·계좌 두 개·참가자 중 하나라도 저장에 실패하면 모두 롤백한다.
+    @Transactional // 대결·참가 계좌·전략 중 하나라도 저장에 실패하면 모두 롤백한다.
     public CompetitionCreateResponse createCompetition(Long userId, CompetitionCreateRequest request) {
+        CompetitionCreationLog.stage("request_validation");
+        if (request == null || !validator.validate(request).isEmpty()) {
+            throw invalid("INVALID_REQUEST", "요청 형식이 올바르지 않습니다.");
+        }
         CompetitionCreationLog.stage("read_trading_time");
         var now = tradingHours.now(); // 자정 경계에서도 한 요청은 같은 날짜·시각으로 판단한다.
         CompetitionCreationLog.stage("user_lookup");
@@ -247,12 +259,25 @@ public class CompetitionService {
         }
         // 단일 필드의 필수값·범위는 @Valid로 검사하고 여기서는 대결 정책을 검사한다.
         CompetitionCreationLog.stage("validate_competition_type");
-        if (!"user_vs_ai".equals(request.getCompetitionType())) {
+        boolean aiVsAi = "ai_vs_ai".equals(request.getCompetitionType());
+        if (!aiVsAi && !"user_vs_ai".equals(request.getCompetitionType())) {
             throw invalid("INVALID_COMPETITION_TYPE", "지원하지 않는 대결 유형입니다.");
         }
         CompetitionCreationLog.stage("validate_ai_participant_count");
-        if (request.getAiParticipantCount() != 1) {
-            throw invalid("INVALID_AI_PARTICIPANT_COUNT", "v2 대결에는 AI 한 명만 참여할 수 있습니다.");
+        Integer count = request.getAiParticipantCount();
+        if (count == null || (aiVsAi ? count < 2 || count > 4 : count != 1)) {
+            throw invalid("INVALID_AI_PARTICIPANT_COUNT", "사용자 대 AI는 1명, AI 간 대결은 2~4명의 AI가 필요합니다.");
+        }
+        CompetitionCreationLog.stage("validate_agents");
+        if (aiVsAi) {
+            if (request.getAgents() == null) {
+                throw invalid("INVALID_REQUEST", "AI 간 대결에는 에이전트 설정이 필요합니다.");
+            }
+            if (request.getAgents().size() != count) {
+                throw invalid("AGENT_COUNT_MISMATCH", "대결의 AI 참가자 수와 설정 개수가 일치해야 합니다.");
+            }
+        } else if (request.getAgents() != null) {
+            throw invalid("INVALID_REQUEST", "사용자 대 AI 대결에는 에이전트 설정을 지정할 수 없습니다.");
         }
         CompetitionCreationLog.stage("validate_start_date");
         if (!request.getStartDate().equals(now.toLocalDate())) {
@@ -268,14 +293,21 @@ public class CompetitionService {
             throw invalid("INVALID_COMPETITION_NAME", "대결 이름은 공백이 아닌 20자 이하여야 합니다.");
         }
         CompetitionCreationLog.stage("check_account_name");
-        if (accounts.existsByUserIdAndNameIgnoreCase(userId, name)) {
+        if (accounts.existsByUserIdAndNameIgnoreCase(userId, name)
+                || competitions.existsByUserIdAndCompetitionNameIgnoreCase(userId, name)) {
             throw new CompetitionException(HttpStatus.CONFLICT, "DUPLICATE_ACCOUNT_NAME", "이미 사용 중인 계좌 이름입니다.");
         }
 
         CompetitionCreationLog.stage("competition_save");
-        var competition = competitions.save(new Competition(user, name, Competition.Type.USER_VS_AI,
-                request.getStartDate(), request.getEndDate(), request.getInitialCapital(), 1));
+        var competition = competitions.save(new Competition(user, name,
+                aiVsAi ? Competition.Type.AI_VS_AI : Competition.Type.USER_VS_AI,
+                request.getStartDate(), request.getEndDate(), request.getInitialCapital(), count));
         CompetitionCreationLog.competitionId(competition.getId());
+        if (aiVsAi) {
+            agentCreation.createParticipants(competition, request.getAgents());
+            CompetitionCreationLog.stage("transaction_commit");
+            return new CompetitionCreateResponse("success", competition.getId(), "ready");
+        }
         CompetitionCreationLog.stage("initialize_competition_state");
         if (tradingHours.isOpen(now)) competition.start(now.toInstant());
 

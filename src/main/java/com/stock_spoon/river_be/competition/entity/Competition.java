@@ -18,7 +18,7 @@ import org.hibernate.annotations.UpdateTimestamp;
 @Getter // 값을 읽는 메서드만 생성한다. 상태 변경은 아래 업무 메서드로 제한한다.
 @NoArgsConstructor(access = AccessLevel.PROTECTED) // JPA가 객체를 복원할 때 사용할 기본 생성자다.
 public class Competition {
-    public enum Type { USER_VS_AI }
+    public enum Type { USER_VS_AI, AI_VS_AI }
     public enum State { READY, IN_PROGRESS, COMPLETED, CANCELLED }
     public enum Winner { USER, AI, DRAW }
 
@@ -95,7 +95,8 @@ public class Competition {
     }
 
     public void start(Instant startedAt) {
-        if (state != State.READY) {
+        // shortcut: 다수 AI 운용·정산 연동 전에는 생성·설정만 제공한다. 운용 지원 시 이 제한을 확장한다.
+        if (state != State.READY || competitionType == Type.AI_VS_AI) {
             throw new IllegalStateException("시작 대기 중인 대결만 시작할 수 있습니다.");
         }
         this.startedAt = java.util.Objects.requireNonNull(startedAt);

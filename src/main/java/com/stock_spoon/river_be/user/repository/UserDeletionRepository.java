@@ -27,6 +27,11 @@ public class UserDeletionRepository {
         delete("trade_orders", "account_id in (" + accounts + ")", userId);
         delete("holdings", "account_id in (" + accounts + ")", userId);
         // 3. 성과 -> 참가자·분석·판정 -> 대결 순으로 삭제해 참가자의 계좌 참조도 제거한다.
+        String participants = "select participant_id from competition_participants where competition_id in (" + competitions + ")";
+        String agents = "select agent_id from competition_agents where participant_id in (" + participants + ")";
+        delete("competition_agent_preferred_themes", "agent_id in (" + agents + ")", userId);
+        delete("competition_agent_excluded_themes", "agent_id in (" + agents + ")", userId);
+        delete("competition_agents", "participant_id in (" + participants + ")", userId);
         delete("competition_daily_performances", "participant_id in (select participant_id from competition_participants where competition_id in (" + competitions + "))", userId);
         delete("competition_participants", "competition_id in (" + competitions + ")", userId);
         delete("competition_market_analyses", "competition_id in (" + competitions + ")", userId);

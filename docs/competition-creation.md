@@ -19,6 +19,8 @@
 
 ## 1. 대결 생성
 
+2026-11-03부터 같은 생성 API가 `ai_vs_ai`와 nullable `agents`를 지원한다. 아래 기존 1:1 흐름은 `user_vs_ai`에 해당하며, AI 간 대결의 단일 트랜잭션 생성·전략 검증·FE 변경·DB 적용은 [통합 생성 문서](competition-ai-creation.md)를 따른다. 별도 ai-settings API는 제공하지 않는다.
+
 ### 호출 흐름
 
 ```text
@@ -66,7 +68,7 @@ AI 계좌: 내부 이름 사용 / 자금 10,000,000원
 ```
 
 - JWT의 `sub`에서 사용자 ID를 읽는다. 온보딩 완료 사용자만 생성할 수 있다.
-- v2는 `user_vs_ai`, `ai_participant_count = 1`이다.
+- `user_vs_ai`는 `ai_participant_count = 1`이며 `agents` 생략/null을 허용한다. `ai_vs_ai`는 AI 2~4명과 같은 개수의 `agents`를 생성 요청에 함께 전달한다. AI 간 대결은 현재 READY로 유지하며 실제 운용은 후속 작업이다.
 - 시작일은 한국 시간 기준 오늘, 종료일과의 날짜 차이는 최소 3일이다.
 - 대결명은 앞뒤 공백을 제거한 뒤 20자 이하이며, 같은 사용자의 일반·대결 계좌명과 중복될 수 없다.
 - AI 계좌명은 `AI-{대결 ID의 36진수}`이며 충돌 시 접미사를 붙인다.

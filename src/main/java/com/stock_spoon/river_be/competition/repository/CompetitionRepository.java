@@ -10,6 +10,8 @@ import java.util.List;
 
 // save(), findById() 등 기본 저장·조회 기능은 Spring Data JPA가 구현한다.
 public interface CompetitionRepository extends JpaRepository<Competition, Long> {
+    boolean existsByUserIdAndCompetitionNameIgnoreCase(Long userId, String competitionName);
+    boolean existsByUserIdAndCompetitionTypeAndCompetitionNameIgnoreCase(Long userId, Competition.Type competitionType, String competitionName);
     // [회원 탈퇴 추가] 소유 대결 전체를 ID 순으로 잠근 뒤 계좌를 잠가, 기존 대결 정산의 잠금 순서를 유지한다.
     @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
     @Query("select c from Competition c where c.user.id = :userId order by c.id")
@@ -56,7 +58,7 @@ public interface CompetitionRepository extends JpaRepository<Competition, Long> 
 
     // 여러 BE 인스턴스가 동시에 실행해도 같은 대결을 중복 시작하지 않도록 잠근다.
     @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
-    @org.springframework.data.jpa.repository.Query("select c from Competition c where c.state = READY "
+    @org.springframework.data.jpa.repository.Query("select c from Competition c where c.state = READY and c.competitionType = USER_VS_AI "
             + "and c.startDate <= :today and c.endDate >= :today order by c.id")
     java.util.List<Competition> findWaitingToStart(java.time.LocalDate today);
 }

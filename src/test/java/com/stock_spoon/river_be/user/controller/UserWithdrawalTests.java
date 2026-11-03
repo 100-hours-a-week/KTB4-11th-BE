@@ -57,7 +57,9 @@ class UserWithdrawalTests {
     static final List<String> TABLES = List.of("users", "user_oauth", "accounts", "holdings",
             "trade_orders", "executions", "ai_order_reports", "ai_report_reasoning", "competitions",
             "competition_participants", "competition_daily_performances", "competition_market_analyses",
-            "competition_judgment_summaries", "competition_report_outbox", "refresh_token", "watchlist_stocks", "order_request_records");
+            "competition_judgment_summaries", "competition_report_outbox", "competition_agents",
+            "competition_agent_preferred_themes", "competition_agent_excluded_themes",
+            "refresh_token", "watchlist_stocks", "order_request_records");
 
     // 매 테스트마다 연관 데이터가 있는 새 회원과 인증 쿠키를 준비한다. 요청 자체가 커밋하도록 테스트 전체를 트랜잭션으로 감싸지 않는다.
     @BeforeEach void setup() {
@@ -87,6 +89,7 @@ class UserWithdrawalTests {
         var competition = new Competition(user, "대결", Competition.Type.USER_VS_AI,
                 LocalDate.now(), LocalDate.now().plusDays(1), 100000, 1); em.persist(competition);
         var participant = new CompetitionParticipant(competition, ai); em.persist(participant);
+        em.persist(new CompetitionAgent(participant, 0, 1, List.of("반도체"), List.of("게임"), "장기 성장"));
         em.persist(new CompetitionReportOutbox(competition, java.util.UUID.randomUUID().toString()));
         em.persist(new CompetitionDailyPerformance(participant, LocalDate.now(), 100000));
         em.persist(new CompetitionMarketAnalysis(competition, LocalDate.now(), "분석", "내용"));

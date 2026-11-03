@@ -15,3 +15,15 @@
 - Final review: 별도 리뷰 에이전트가 tracked diff와 untracked 구현·테스트·SQL·문서를 검토했으며 actionable P1/P2 없음. 추가 코드 수정 권고 없음.
 - Environment limitation: docker.exe는 있으나 Docker Linux engine 파이프가 없어 격리 MySQL을 실행하지 못했다. JPA/H2는 검증했고 실제 DB에는 SQL을 실행하지 않았다.
 - Integration: 이 작업의 변경만 217번 브랜치에 커밋하여 보존한다. 원격 push/PR/merge/deploy 및 Google Sheets/FE 수정은 수행하지 않는다. 해당 범위는 별도 연동 작업이다.
+
+## 후속 검증 — BE만 변경 (2026-11-03)
+
+- 사용자 지시: FE 코드는 참고용이며 절대 수정하지 않는다. 이 세션에서 만든 FE 수정/생성 파일은 모두 원복했고 FE git status/diff가 깨끗함을 확인했다. FE 커밋·푸시는 없다.
+- 설치된 MySQL 8.4.11을 별도 데이터 폴더와 loopback:33379에서 실행해 실제 마이그레이션을 검증했다. 운영 .env/계정/DB에는 접속하지 않았다.
+- 새 opt-in CompetitionAiMySqlMigrationTests 5개 PASS: 기존 데이터 보존, 실제 DDL의 JPA 저장/조회, CHECK/UNIQUE, 마지막 저장 오류 전체 롤백, 탈퇴 자식 삭제/타인 데이터 보존.
+- Test ruling: MySQL CHECK 위반의 SQLState HY000/오류3819가 Spring에서 UncategorizedSQLException으로 분류되어 정확한 DB 오류 번호를 검증하도록 했다. 제품 코드 변경은 없다.
+- Review fix: MockitoSpyBean은 매 테스트 후 시계를 리셋한다. 고정일을 실제 오늘과 다르게 두자 5개 중 3개가 INVALID_START_DATE로 실패하는 RED를 확인했다. BeforeEach에서 시계를 복원한 뒤 MySQL 5개 GREEN을 확인했다.
+- 운영 변경 안내 docs/competition-ai-production-schema.md 및 읽기 전용 db/competition-ai-settings-preflight.sql 작성. preflight SQL 문법도 격리 MySQL에서 확인했다. 적용할 변경은 ENUM 확장+신규3개 테이블이며 설정 완료 컬럼은 없다.
+- BE PR 제목/본문 초안은 docs/pull-requests/217-ai-competition-creation.md에 준비했다. PR 생성·원격 푸시·운영 DDL 적용은 하지 않았다.
+- 검증 종료 후 데이터 경로를 확인하고 직접 만든 임시 MySQL만 종료했다. 기존 MySQL 서비스는 건드리지 않았다.
+- 후속 최종 검증: `./gradlew.bat test spotbugsMain --console=plain` PASS, 전체 679개/실패 0/오류 0/건너뜀 23(MySQL opt-in 5개 포함). 격리 MySQL은 별도로 5개/실패 0/오류 0 PASS. 리뷰의 시계 초기화 지적은 RED→GREEN으로 수정 완료했다.

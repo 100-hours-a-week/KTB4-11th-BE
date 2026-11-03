@@ -46,6 +46,7 @@ class OrderRequestTransactionsTests {
     @Autowired EntityManager em;
     @Autowired Validator validator;
     @Autowired PlatformTransactionManager manager;
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
     @Autowired com.stock_spoon.river_be.competition.service.CompetitionCancellationService cancellations;
     @Autowired com.stock_spoon.river_be.competition.repository.CompetitionRepository competitions;
     @Autowired com.stock_spoon.river_be.competition.repository.CompetitionParticipantRepository participants;
@@ -60,6 +61,41 @@ class OrderRequestTransactionsTests {
         processing = new OrderRequestTransactions(accounts, records, em, manager, orderService, execution,
                 new OrderRequestValidator(validator, new OrderMarketValidator()), store,
                 new MarketOrderPricingService(), Clock.fixed(now, ZoneOffset.UTC));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"limit", "market"})
+    void persistsOriginalAiReasonIdFromQueuePayload(String type) {
+        var result = processAiReason(type, "550E8400-E29B-41D4-A716-446655440000");
+        assertThat(jdbc.queryForObject("select reason_id from ai_order_reports where order_id=?", String.class, result.orderId()))
+                .isEqualTo("550E8400-E29B-41D4-A716-446655440000");
+        assertThat(orders.findById(result.orderId()).orElseThrow().getStatus())
+                .isEqualTo(type.equals("market") ? Order.Status.EXECUTED : Order.Status.PENDING);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"limit", "market"})
+    void legacyAiOrderWithoutReasonIdStillPersistsReport(String type) {
+        var result = processAiReason(type, null);
+        assertThat(jdbc.queryForObject("select count(*) from ai_order_reports where order_id=? and reason_id is null", Long.class, result.orderId()))
+                .isEqualTo(1);
+    }
+
+    private com.stock_spoon.river_be.order.entity.OrderRequestRecord processAiReason(String type, String reasonId) {
+        var ai = accounts.save(new Account(account.getUser(), "AI", 100000, true));
+        var json = tools.jackson.databind.json.JsonMapper.builder().build();
+        var body = json.createObjectNode();
+        body.put("eventId", UUID.randomUUID().toString());
+        var payload = body.putObject("payload");
+        payload.put("account_id", ai.getId()); payload.put("user_id", ai.getUser().getId());
+        payload.put("stock_code", "005930"); payload.put("stock_name", "삼성전자");
+        payload.put("order_side", "buy"); payload.put("order_type", type);
+        if (type.equals("limit")) payload.put("limit_price", 10000);
+        payload.put("quantity", 1); payload.put("reason", "실적 개선");
+        payload.put("holding_weight_limit_percent", 20);
+        if (reasonId != null) payload.put("reason_id", reasonId);
+        var message = new OrderRequestCodec(json).decode(json.writeValueAsString(body), now);
+        return processing.process(message, type.equals("market") ? quote(10000) : null, Map.of(), () -> {});
     }
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})

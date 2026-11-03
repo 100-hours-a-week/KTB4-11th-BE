@@ -24,6 +24,19 @@ spring:
       ddl-auto: ${JPA_DDL_AUTO}
     open-in-view: false
 
+competition:
+  completion:
+    close-cron: "${COMPETITION_COMPLETION_CLOSE_CRON:0 30,35 15 * * MON-FRI}"
+  report:
+    dispatch:
+      enabled: ${REPORT_DISPATCH_ENABLED:true}
+      interval-ms: ${REPORT_DISPATCH_INTERVAL_MS:60000}
+      batch-size: ${REPORT_DISPATCH_BATCH_SIZE:20}
+    queue:
+      enabled: ${REPORT_QUEUE_ENABLED:false}
+      url: ${REPORT_QUEUE_URL:}
+      region: ${AWS_REGION:ap-northeast-2}
+
 order:
   queue:
     enabled: ${ORDER_QUEUE_ENABLED:false}

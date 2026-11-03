@@ -16,6 +16,10 @@ public class AiOrderReport {
     @Column(nullable = false, columnDefinition = "MEDIUMTEXT", updatable = false)
     private String reason;
 
+    // BE의 report_id와 별개로 AI가 전달한 원본 식별자를 보존한다. 과거 리포트는 null이다.
+    @Column(name = "reason_id", length = 36, updatable = false)
+    private String reasonId;
+
     @Column(name = "stock_name", length = 255, updatable = false)
     private String stockName;
     @Column(name = "holding_weight_after_trade_percent")
@@ -42,6 +46,15 @@ public class AiOrderReport {
 
     public AiOrderReport(Order order, String reason, String stockName, java.util.List<ReportReasoning> reasoning,
             Double holdingWeightLimitPercent, Boolean isLowerTriggered) {
+        this(order, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered, null);
+    }
+
+    public AiOrderReport(Order order, String reason, String stockName, java.util.List<ReportReasoning> reasoning,
+            Double holdingWeightLimitPercent, Boolean isLowerTriggered, String reasonId) {
+        if (reasonId != null && !reasonId.matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")) {
+            throw new IllegalArgumentException("AI 판단 근거 ID는 UUID 형식이어야 합니다.");
+        }
+        this.reasonId = reasonId;
         if (holdingWeightLimitPercent != null && (!Double.isFinite(holdingWeightLimitPercent)
                 || holdingWeightLimitPercent < 0 || holdingWeightLimitPercent > 100)) {
             throw new IllegalArgumentException("비중 상한은 0~100의 숫자여야 합니다.");
@@ -68,6 +81,7 @@ public class AiOrderReport {
     public Boolean getIsLowerTriggered() { return isLowerTriggered; }
     public Long getId() { return id; }
     public String getReason() { return reason; }
+    public String getReasonId() { return reasonId; }
     public String getStockName() { return stockName; }
     public java.util.List<ReportReasoning> getReasoning() { return java.util.List.copyOf(reasoning); }
 }

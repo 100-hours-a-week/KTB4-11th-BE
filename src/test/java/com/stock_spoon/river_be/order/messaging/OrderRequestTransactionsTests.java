@@ -46,6 +46,10 @@ class OrderRequestTransactionsTests {
     @Autowired EntityManager em;
     @Autowired Validator validator;
     @Autowired PlatformTransactionManager manager;
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
+    @Autowired com.stock_spoon.river_be.competition.service.CompetitionCancellationService cancellations;
+    @Autowired com.stock_spoon.river_be.competition.repository.CompetitionRepository competitions;
+    @Autowired com.stock_spoon.river_be.competition.repository.CompetitionParticipantRepository participants;
     final MemoryReservations store = new MemoryReservations();
     OrderRequestTransactions processing;
     Account account;
@@ -58,6 +62,80 @@ class OrderRequestTransactionsTests {
                 new OrderRequestValidator(validator, new OrderMarketValidator()), store,
                 new MarketOrderPricingService(), Clock.fixed(now, ZoneOffset.UTC));
     }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"limit", "market"})
+    void persistsOriginalAiReasonIdFromQueuePayload(String type) {
+        var result = processAiReason(type, "550E8400-E29B-41D4-A716-446655440000");
+        assertThat(jdbc.queryForObject("select reason_id from ai_order_reports where order_id=?", String.class, result.orderId()))
+                .isEqualTo("550E8400-E29B-41D4-A716-446655440000");
+        assertThat(orders.findById(result.orderId()).orElseThrow().getStatus())
+                .isEqualTo(type.equals("market") ? Order.Status.EXECUTED : Order.Status.PENDING);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"limit", "market"})
+    void legacyAiOrderWithoutReasonIdStillPersistsReport(String type) {
+        var result = processAiReason(type, null);
+        assertThat(jdbc.queryForObject("select count(*) from ai_order_reports where order_id=? and reason_id is null", Long.class, result.orderId()))
+                .isEqualTo(1);
+    }
+
+    private com.stock_spoon.river_be.order.entity.OrderRequestRecord processAiReason(String type, String reasonId) {
+        var ai = accounts.save(new Account(account.getUser(), "AI", 100000, true));
+        var json = tools.jackson.databind.json.JsonMapper.builder().build();
+        var body = json.createObjectNode();
+        body.put("eventId", UUID.randomUUID().toString());
+        var payload = body.putObject("payload");
+        payload.put("account_id", ai.getId()); payload.put("user_id", ai.getUser().getId());
+        payload.put("stock_code", "005930"); payload.put("stock_name", "삼성전자");
+        payload.put("order_side", "buy"); payload.put("order_type", type);
+        if (type.equals("limit")) payload.put("limit_price", 10000);
+        payload.put("quantity", 1); payload.put("reason", "실적 개선");
+        payload.put("holding_weight_limit_percent", 20);
+        if (reasonId != null) payload.put("reason_id", reasonId);
+        var message = new OrderRequestCodec(json).decode(json.writeValueAsString(body), now);
+        return processing.process(message, type.equals("market") ? quote(10000) : null, Map.of(), () -> {});
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void cancelledCompetitionRejectsDelayedAndInFlightQueueRequests(boolean cancelBeforeConsume) {
+        var owner = account.getUser();
+        var competition = new com.stock_spoon.river_be.competition.entity.Competition(owner, "큐 취소 대결",
+                com.stock_spoon.river_be.competition.entity.Competition.Type.USER_VS_AI,
+                LocalDate.of(2026, 10, 1), LocalDate.of(2099, 10, 30), 100000, 1);
+        competition.start(now.minusSeconds(3600));
+        competitions.save(competition);
+        participants.save(new com.stock_spoon.river_be.competition.entity.CompetitionParticipant(competition, account));
+        var ai = accounts.save(new Account(owner, "queue-ai", 100000, true));
+        participants.save(new com.stock_spoon.river_be.competition.entity.CompetitionParticipant(competition, ai));
+        var request = message("buy", "limit", 70000L, 1);
+        processing.admit(request, null);
+        assertThat(store.list(account.getId())).hasSize(1);
+
+        if (cancelBeforeConsume) cancellations.cancel(owner.getId(), competition.getId());
+        else {
+            // 소비 시작 시 활성 검사를 통과한 후 주문 생성 직전에 대결을 취소한다.
+            processing = org.mockito.Mockito.spy(processing);
+            org.mockito.Mockito.doAnswer(call -> {
+                cancellations.cancel(owner.getId(), competition.getId());
+                return call.callRealMethod();
+            }).when(processing).validate(request);
+        }
+        long ordersBefore = orders.count();
+        var consumer = service(org.mockito.Mockito.mock(OrderRequestPublisher.class));
+        var rejected = consumer.consume(request);
+        assertThat(rejected.reasonCode()).isEqualTo("ACCOUNT_INACTIVE");
+        assertThat(rejected.orderId()).isNull();
+        assertThat(consumer.consume(request).reasonCode()).isEqualTo("ACCOUNT_INACTIVE");
+        assertThat(store.list(account.getId())).isEmpty();
+        assertThat(orders.count()).isEqualTo(ordersBefore);
+        assertThat(accounts.findById(account.getId()).orElseThrow().getCashBalance()).isEqualTo(100000);
+        assertThat(accounts.findById(ai.getId()).orElseThrow().isActive()).isFalse();
+        assertThat(competitions.findById(competition.getId()).orElseThrow().getState())
+                .isEqualTo(com.stock_spoon.river_be.competition.entity.Competition.State.CANCELLED);
+    }
+
     @Test void concurrentBuyReservationsCannotSpendSameCash() throws Exception {
         try (var pool = Executors.newFixedThreadPool(2)) {
             var start = new CountDownLatch(1);

@@ -12,6 +12,7 @@ import java.util.Deque;
 import java.util.IdentityHashMap;
 import java.util.Set;
 import java.util.UUID;
+import jakarta.servlet.DispatcherType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -26,36 +27,128 @@ import org.springframework.web.servlet.HandlerMapping;
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class RequestLoggingFilter extends OncePerRequestFilter {
     private static final Logger log = LoggerFactory.getLogger(RequestLoggingFilter.class);
+    private static final String REQUEST_ID_ATTRIBUTE = RequestLoggingFilter.class.getName() + ".requestId";
+    private static final String STARTED_ATTRIBUTE = RequestLoggingFilter.class.getName() + ".startedNanos";
+    static final String EXCEPTION_ATTRIBUTE = RequestLoggingFilter.class.getName() + ".exceptionType";
+    static final String EXCEPTION_CAUSE_ATTRIBUTE = RequestLoggingFilter.class.getName() + ".exceptionCauseType";
+    private static final String ERROR_DISPATCH_ATTRIBUTE = RequestLoggingFilter.class.getName() + ".errorDispatchSeen";
+    private static final String RESPONSE_AUDIT_ATTRIBUTE = RequestLoggingFilter.class.getName() + ".responseAudited";
+
+    static String requestId(HttpServletRequest request) {
+        Object value = request.getAttribute(REQUEST_ID_ATTRIBUTE);
+        return value instanceof String requestId ? requestId : "missing";
+    }
+
+    static void recordException(HttpServletRequest request, Throwable error) {
+        if (error == null) return;
+        request.setAttribute(EXCEPTION_ATTRIBUTE, error.getClass().getSimpleName());
+        if (error.getCause() != null) {
+            request.setAttribute(EXCEPTION_CAUSE_ATTRIBUTE, error.getCause().getClass().getSimpleName());
+        }
+    }
+
+    static void recordException(HttpServletRequest request, String exceptionType, String causeType) {
+        if (exceptionType != null && !exceptionType.isBlank()) {
+            request.setAttribute(EXCEPTION_ATTRIBUTE, exceptionType);
+        }
+        if (causeType != null && !causeType.isBlank()) {
+            request.setAttribute(EXCEPTION_CAUSE_ATTRIBUTE, causeType);
+        }
+    }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
             FilterChain chain) throws ServletException, IOException {
         String previous = MDC.get("requestId");
-        String requestId = UUID.randomUUID().toString();
-        long started = System.nanoTime();
+        String previousDispatcherType = MDC.get("dispatcherType");
+        String requestId = (String) request.getAttribute(REQUEST_ID_ATTRIBUTE);
+        if (requestId == null) {
+            requestId = UUID.randomUUID().toString();
+            request.setAttribute(REQUEST_ID_ATTRIBUTE, requestId);
+            request.setAttribute(STARTED_ATTRIBUTE, System.nanoTime());
+        }
+        Object startedValue = request.getAttribute(STARTED_ATTRIBUTE);
+        long started = startedValue instanceof Long value ? value : System.nanoTime();
         boolean failed = false;
+        if (request.getDispatcherType() == DispatcherType.ERROR) {
+            request.setAttribute(ERROR_DISPATCH_ATTRIBUTE, Boolean.TRUE);
+            recordException(request, (Throwable) request.getAttribute(jakarta.servlet.RequestDispatcher.ERROR_EXCEPTION));
+        }
         MDC.put("requestId", requestId);
-        response.setHeader("X-Request-Id", requestId);
+        MDC.put("dispatcherType", request.getDispatcherType().name());
+        if (!response.containsHeader("X-Request-Id")) response.setHeader("X-Request-Id", requestId);
         try {
             log.debug("event=http_request_started method={}", request.getMethod());
             chain.doFilter(request, response);
         } catch (ServletException | IOException | RuntimeException error) {
             failed = true;
-            log.error("event=http_request_failed causeType={}", error.getClass().getSimpleName());
+            recordException(request, error);
+            log.error("event=http_request_failed requestId={} dispatcherType={} exceptionType={} causeType={}",
+                    requestId, request.getDispatcherType(), error.getClass().getSimpleName(),
+                    error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
             logSqlExceptionIfPresent(request, error);
             throw error;
         } finally {
             try {
-                String pattern = routePattern(request);
-                int status = failed ? 500 : response.getStatus();
-                var level = status >= 500 ? log.atError() : status >= 400 ? log.atWarn() : log.atInfo();
-                level.log("event=http_request method={} route={} status={} elapsedMs={}",
-                        request.getMethod(), pattern, status, (System.nanoTime() - started) / 1_000_000);
+                // An exception escaping REQUEST is finalized by the container's ERROR dispatch.
+                // Never guess 500 here; record that final dispatch when it occurs.
+                if (!failed || request.getDispatcherType() == DispatcherType.ERROR) {
+                    auditResponse(request, response, started, requestId);
+                }
             } finally {
                 if (previous == null) MDC.remove("requestId");
                 else MDC.put("requestId", previous);
+                if (previousDispatcherType == null) MDC.remove("dispatcherType");
+                else MDC.put("dispatcherType", previousDispatcherType);
             }
         }
+    }
+
+    @Override
+    protected boolean shouldNotFilterErrorDispatch() {
+        return false;
+    }
+
+    @Override
+    protected void doFilterNestedErrorDispatch(HttpServletRequest request, HttpServletResponse response,
+            FilterChain chain) throws ServletException, IOException {
+        request.setAttribute(ERROR_DISPATCH_ATTRIBUTE, Boolean.TRUE);
+        recordException(request, (Throwable) request.getAttribute(jakarta.servlet.RequestDispatcher.ERROR_EXCEPTION));
+        String requestId = requestId(request);
+        String previous = MDC.get("requestId");
+        String previousDispatcherType = MDC.get("dispatcherType");
+        Object startedValue = request.getAttribute(STARTED_ATTRIBUTE);
+        long started = startedValue instanceof Long value ? value : System.nanoTime();
+        if (previous == null) MDC.put("requestId", requestId);
+        MDC.put("dispatcherType", DispatcherType.ERROR.name());
+        try {
+            chain.doFilter(request, response);
+        } finally {
+            auditResponse(request, response, started, requestId);
+            if (previous == null) MDC.remove("requestId");
+            else MDC.put("requestId", previous);
+            if (previousDispatcherType == null) MDC.remove("dispatcherType");
+            else MDC.put("dispatcherType", previousDispatcherType);
+        }
+    }
+
+    private static void auditResponse(HttpServletRequest request, HttpServletResponse response,
+            long started, String requestId) {
+        if (Boolean.TRUE.equals(request.getAttribute(RESPONSE_AUDIT_ATTRIBUTE))) return;
+        request.setAttribute(RESPONSE_AUDIT_ATTRIBUTE, Boolean.TRUE);
+        String pattern = routePattern(request);
+        int status = response.getStatus();
+        String dispatcher = Boolean.TRUE.equals(request.getAttribute(ERROR_DISPATCH_ATTRIBUTE))
+                || request.getDispatcherType() == DispatcherType.ERROR
+                ? DispatcherType.ERROR.name() : request.getDispatcherType().name();
+        Object exception = request.getAttribute(EXCEPTION_ATTRIBUTE);
+        String exceptionType = exception == null ? "none" : exception.toString();
+        Object cause = request.getAttribute(EXCEPTION_CAUSE_ATTRIBUTE);
+        String causeType = cause == null ? "none" : cause.toString();
+        var level = status >= 500 ? log.atError() : status >= 400 ? log.atWarn() : log.atInfo();
+        level.log("event=http_response_audit requestId={} dispatcherType={} method={} route={} status={} exceptionType={} exceptionCauseType={} elapsedMs={}",
+                requestId, dispatcher, request.getMethod(), pattern, status, exceptionType, causeType,
+                (System.nanoTime() - started) / 1_000_000);
     }
 
     private static void logSqlExceptionIfPresent(HttpServletRequest request, Throwable error) {

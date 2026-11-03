@@ -24,6 +24,19 @@ spring:
       ddl-auto: ${JPA_DDL_AUTO}
     open-in-view: false
 
+competition:
+  completion:
+    close-cron: "${COMPETITION_COMPLETION_CLOSE_CRON:0 30,35 15 * * MON-FRI}"
+  report:
+    dispatch:
+      enabled: ${REPORT_DISPATCH_ENABLED:true}
+      interval-ms: ${REPORT_DISPATCH_INTERVAL_MS:60000}
+      batch-size: ${REPORT_DISPATCH_BATCH_SIZE:20}
+    queue:
+      enabled: ${REPORT_QUEUE_ENABLED:false}
+      url: ${REPORT_QUEUE_URL:}
+      region: ${AWS_REGION:ap-northeast-2}
+
 order:
   queue:
     enabled: ${ORDER_QUEUE_ENABLED:false}
@@ -46,12 +59,6 @@ jwt:
   access-expiration: ${JWT_ACCESS_EXPIRATION:15m}
   refresh-expiration: ${JWT_REFRESH_EXPIRATION:14d}
 
-loadtest:
-  token-issuer:
-    enabled: ${LOADTEST_TOKEN_ISSUER_ENABLED:false}
-    secret: ${LOADTEST_TOKEN_ISSUER_SECRET:}
-    user-ids: ${LOADTEST_TOKEN_ISSUER_USER_IDS:}
-
 kiwoom:
   app-key: ${KIWOOM_APP_KEY:}
   app-secret: ${KIWOOM_APP_SECRET:}
@@ -66,6 +73,20 @@ management:
     web:
       exposure:
         include: health,metrics,prometheus
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: ${HTTP_REQUEST_HISTOGRAM_ENABLED:false}
+        hikaricp.connections.acquire: ${HIKARI_ACQUIRE_HISTOGRAM_ENABLED:false}
+        jvm.gc.pause: ${JVM_GC_PAUSE_HISTOGRAM_ENABLED:false}
+      minimum-expected-value:
+        http.server.requests: 1ms
+        hikaricp.connections.acquire: 1ms
+        jvm.gc.pause: 1ms
+      maximum-expected-value:
+        http.server.requests: 30s
+        hikaricp.connections.acquire: 30s
+        jvm.gc.pause: 30s
   endpoint:
     health:
       show-details: never

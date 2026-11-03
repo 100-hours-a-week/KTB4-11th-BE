@@ -1,14 +1,22 @@
 package com.stock_spoon.river_be.config;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import java.time.Instant;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.authentication.AuthenticationServiceException;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
@@ -24,8 +32,12 @@ import org.springframework.web.context.WebApplicationContext;
 import com.stock_spoon.river_be.auth.client.KakaoClient;
 import com.stock_spoon.river_be.auth.client.KakaoUserInfo;
 import com.stock_spoon.river_be.auth.service.AuthService;
+import com.stock_spoon.river_be.auth.service.JwtUserExistenceVerifier;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -47,11 +59,16 @@ class SecurityJwtTests {
     // [회원 탈퇴 테스트 수정] 일반 토큰에 DB 회원 존재 검사가 추가되어 실제 회원 fixture가 필요하다.
     @Autowired com.stock_spoon.river_be.user.repository.UserRepository users;
     @MockitoBean KakaoClient kakao;
+    @MockitoBean JwtUserExistenceVerifier userExistenceVerifier;
     private MockMvc mvc;
+    private static final AtomicInteger PROTECTED_WRITES = new AtomicInteger();
 
     @BeforeEach
     void setup() {
-        mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
+        when(userExistenceVerifier.exists(anyLong())).thenReturn(true);
+        mvc = MockMvcBuilders.webAppContextSetup(context)
+                .addFilters(context.getBean(RequestLoggingFilter.class))
+                .apply(springSecurity()).build();
     }
 
     @Test
@@ -75,6 +92,30 @@ class SecurityJwtTests {
                         .header("Access-Control-Request-Method", "POST"))
                 .andExpect(status().isForbidden())
                 .andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
+    }
+
+    @Test
+    void orderPreflightAllowsIdempotencyKeyOnlyForConfiguredOrigin() throws Exception {
+        String path = "/api/v1/accounts/772/orders";
+        String headers = "content-type,idempotency-key,x-xsrf-token";
+        mvc.perform(options(path).header("Origin", "http://localhost:3001")
+                        .header("Access-Control-Request-Method", "POST")
+                        .header("Access-Control-Request-Headers", headers))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Origin", "http://localhost:3001"))
+                .andExpect(header().string("Access-Control-Allow-Credentials", "true"))
+                .andExpect(header().string("Access-Control-Allow-Headers",
+                        org.hamcrest.Matchers.containsStringIgnoringCase("idempotency-key")));
+        mvc.perform(options(path).header("Origin", "https://untrusted.example")
+                        .header("Access-Control-Request-Method", "POST")
+                        .header("Access-Control-Request-Headers", headers))
+                .andExpect(status().isForbidden());
+        mvc.perform(options(path).header("Origin", "http://localhost:3001")
+                        .header("Access-Control-Request-Method", "POST")
+                        .header("Access-Control-Request-Headers", "content-type,x-unknown-header"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Headers",
+                        org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsStringIgnoringCase("x-unknown-header"))));
     }
 
     @Test
@@ -156,6 +197,160 @@ class SecurityJwtTests {
         mvc.perform(get("/test/protected")).andExpect(status().isUnauthorized());
     }
 
+    @Test
+    void competitionReportSaveRequiresAiTokenWithUserSubject() throws Exception {
+        String path = "/api/v1/competitions/123/report";
+        var post = org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path);
+        mvc.perform(post.with(csrf()).cookie(new Cookie("access_token", aiToken("1", "access", "USER"))))
+                .andExpect(status().isForbidden());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
+                        .with(csrf()).cookie(new Cookie("access_token", aiToken("1", "access", null))))
+                .andExpect(status().isForbidden());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
+                        .with(csrf()).cookie(new Cookie("access_token", aiToken("ai-server", "access", "AI"))))
+                .andExpect(status().isForbidden());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
+                        .with(csrf()).cookie(new Cookie("access_token", aiToken("1", "access", "AI")))
+                        .contentType("application/json").content("{\"news\":[],\"thoughts\":[]}"))
+                .andExpect(status().isNotFound());
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
+                        .cookie(new Cookie("access_token", aiToken("1", "access", "AI"))))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void aiServerCanSaveACompetitionReportAndInvalidBodiesAreRejected() throws Exception {
+        var owner = users.save(new com.stock_spoon.river_be.user.entity.User("리포트 저장 사용자"));
+        var competitions = context.getBean(com.stock_spoon.river_be.competition.repository.CompetitionRepository.class);
+        var competition = competitions.save(new com.stock_spoon.river_be.competition.entity.Competition(
+                owner, "테스트 대결", com.stock_spoon.river_be.competition.entity.Competition.Type.USER_VS_AI,
+                java.time.LocalDate.of(2026, 10, 1), java.time.LocalDate.of(2026, 10, 10), 10000000, 1));
+        String path = "/api/v1/competitions/" + competition.getId() + "/report";
+        var cookie = new Cookie("access_token", aiToken(owner.getId().toString(), "access", "AI"));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
+                        .with(csrf()).cookie(cookie).contentType("application/json")
+                        .content("{\"news\":[{\"title\":\"뉴스\",\"summary\":\"요약\"}],\"thoughts\":[]}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.competition_id").value(competition.getId()))
+                .andExpect(jsonPath("$.message").value("success"));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
+                        .with(csrf()).cookie(cookie).contentType("application/json")
+                        .content("{\"news\":[{\"title\":\"\",\"summary\":\"요약\"}],\"thoughts\":[]}"))
+                .andExpect(status().isBadRequest());
+        var saved = context.getBean(com.stock_spoon.river_be.competition.repository.CompetitionMarketAnalysisRepository.class)
+                .findAllByCompetitionIdOrderByDateDescIdDesc(competition.getId());
+        org.assertj.core.api.Assertions.assertThat(saved).hasSize(1);
+        org.assertj.core.api.Assertions.assertThat(saved.get(0).getTitle()).isEqualTo("뉴스");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void missingUserBehindAValidSignatureStillReturns401(boolean k6Test) throws Exception {
+        when(userExistenceVerifier.exists(55_555L)).thenReturn(false);
+        mvc.perform(get("/test/protected").cookie(new Cookie("access_token", authToken("55555", k6Test))))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void ordinaryAndK6UserJwtsUseTheSameLookup(boolean k6Test) throws Exception {
+        String userId = users.save(new com.stock_spoon.river_be.user.entity.User("일반 테스트 사용자"))
+                .getId().toString();
+        mvc.perform(get("/test/protected").cookie(new Cookie("access_token", authToken(userId, k6Test))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.user_id").value(userId));
+        org.mockito.Mockito.verify(userExistenceVerifier).exists(Long.parseLong(userId));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void authenticationDatabaseFailureReturns503AndNeverEntersProtectedWriteHandler(boolean k6Test) throws Exception {
+        PROTECTED_WRITES.set(0);
+        String userId = users.save(new com.stock_spoon.river_be.user.entity.User("K6 장애 테스트 사용자"))
+                .getId().toString();
+        doThrow(new AuthenticationServiceException("authentication DB unavailable"))
+                .when(userExistenceVerifier).exists(Long.parseLong(userId));
+        String token = authToken(userId, k6Test);
+        Logger logger = (Logger) org.slf4j.LoggerFactory.getLogger(RequestLoggingFilter.class);
+        var logs = new ListAppender<ILoggingEvent>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            var getResult = mvc.perform(get("/test/protected").cookie(new Cookie("access_token", token)))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.code").value("AUTHENTICATION_DATABASE_UNAVAILABLE"))
+                    .andExpect(header().exists("X-Request-Id"))
+                    .andReturn();
+            String requestId = getResult.getResponse().getHeader("X-Request-Id");
+            org.assertj.core.api.Assertions.assertThat(logs.list).anySatisfy(event ->
+                    org.assertj.core.api.Assertions.assertThat(event.getFormattedMessage()).contains(
+                            "event=http_response_audit", "requestId=" + requestId,
+                            "dispatcherType=REQUEST", "status=503",
+                            "exceptionType=AuthenticationServiceException"));
+            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                            .post("/test/protected-write")
+                            .with(csrf())
+                            .cookie(new Cookie("access_token", token)))
+                    .andExpect(status().isServiceUnavailable());
+            org.assertj.core.api.Assertions.assertThat(PROTECTED_WRITES.get()).isZero();
+        } finally {
+            logger.detachAppender(logs);
+            logs.stop();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void successfulAuthenticationLookupAllowsGetAndExecutesPostExactlyOnce(boolean k6Test) throws Exception {
+        PROTECTED_WRITES.set(0);
+        String userId = users.save(new com.stock_spoon.river_be.user.entity.User("K6 정상 테스트 사용자"))
+                .getId().toString();
+        String token = authToken(userId, k6Test);
+
+        mvc.perform(get("/test/protected").cookie(new Cookie("access_token", token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.user_id").value(userId));
+        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/test/protected-write").with(csrf()).cookie(new Cookie("access_token", token)))
+                .andExpect(status().isOk());
+
+        org.assertj.core.api.Assertions.assertThat(PROTECTED_WRITES.get()).isEqualTo(1);
+    }
+
+    @Test
+    void errorDispatcherOutsideErrorEndpointDoesNotBypassAuthentication() throws Exception {
+        mvc.perform(get("/test/error-dispatch").with(request -> {
+                    request.setDispatcherType(DispatcherType.ERROR);
+                    return request;
+                }).cookie(new Cookie("access_token", "malformed-token")))
+                .andExpect(status().isUnauthorized());
+        org.mockito.Mockito.verify(userExistenceVerifier, org.mockito.Mockito.never()).exists(anyLong());
+    }
+
+    @Test
+    void onlyServletErrorDispatchToErrorEndpointIsPublic() {
+        var request = new org.springframework.mock.web.MockHttpServletRequest();
+        request.setContextPath("/app");
+        request.setRequestURI("/app/error");
+        request.setDispatcherType(DispatcherType.ERROR);
+        org.assertj.core.api.Assertions.assertThat(SecurityConfig.isInternalErrorEndpointDispatch(request)).isTrue();
+
+        request.setRequestURI("/app/test/protected");
+        org.assertj.core.api.Assertions.assertThat(SecurityConfig.isInternalErrorEndpointDispatch(request)).isFalse();
+        request.setRequestURI("/app/error");
+        request.setDispatcherType(DispatcherType.REQUEST);
+        org.assertj.core.api.Assertions.assertThat(SecurityConfig.isInternalErrorEndpointDispatch(request)).isFalse();
+    }
+
+    private String authToken(String subject, boolean k6Test) {
+        Instant now = Instant.now();
+        var claims = JwtClaimsSet.builder().issuer(jwtProperties.issuer()).subject(subject)
+                .issuedAt(now).expiresAt(now.plusSeconds(900)).claim("type", "access").claim("actor", "USER");
+        if (k6Test) claims.claim("k6_test", true);
+        return jwtEncoder.encode(JwtEncoderParameters.from(
+                JwsHeader.with(MacAlgorithm.HS256).type("JWT").build(), claims.build())).getTokenValue();
+    }
+
     private String aiToken(String subject, String type, String actor) {
         Instant now = Instant.now();
         var claims = JwtClaimsSet.builder().issuer(jwtProperties.issuer()).subject(subject)
@@ -169,6 +364,17 @@ class SecurityJwtTests {
 
     @RestController
     static class ProtectedController {
+        @GetMapping("/test/error-dispatch")
+        Map<String, String> errorDispatchEndpoint() {
+            return Map.of("result", "error-dispatch-allowed");
+        }
+
+        @org.springframework.web.bind.annotation.PostMapping("/test/protected-write")
+        Map<String, String> protectedWrite() {
+            PROTECTED_WRITES.incrementAndGet();
+            return Map.of("result", "written");
+        }
+
         @GetMapping("/test/protected")
         Map<String, String> protectedEndpoint(Authentication authentication) {
             return Map.of("user_id", authentication.getName());

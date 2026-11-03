@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.*;
 
 @RestController
 @ConditionalOnProperty(name="order.queue.enabled",havingValue="true")
-@RequestMapping("/api/v1/accounts/{accountId}/order-requests")
+@RequestMapping({"/api/v1/accounts/{accountId}/order-requests", "/api/v3/accounts/{accountId}/order-requests"})
 public class OrderRequestResultController {
     private final OrderRequestService service;
     public OrderRequestResultController(OrderRequestService service) { this.service=service; }

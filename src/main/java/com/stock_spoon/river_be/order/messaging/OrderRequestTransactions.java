@@ -163,7 +163,32 @@ public class OrderRequestTransactions {
             if(result!=null && result.accountId()==account.getId() && result.userId()==userId) {
                 Map<String,Object> response=new LinkedHashMap<>();
                 response.put("request_id",eventId); response.put("status",result.status().toLowerCase(Locale.ROOT));
-                response.put("order_id",result.orderId()); response.put("reason_code",result.reasonCode()); return response;
+                response.put("order_id",result.orderId()); response.put("reason_code",result.reasonCode());
+                if (result.orderId() != null) {
+                    var order = em.find(Order.class, result.orderId());
+                    if (order == null || order.getAccountId() != accountId)
+                        throw new OrderException(HttpStatus.INTERNAL_SERVER_ERROR,"INVALID_ORDER_DATA","주문 정보를 확인할 수 없습니다.");
+                    var fills = em.createQuery("select e from Execution e where e.order.id = :id",
+                            com.stock_spoon.river_be.execution.entity.Execution.class)
+                            .setParameter("id", order.getId()).getResultList();
+                    long quantity = 0;
+                    BigDecimal amount = BigDecimal.ZERO;
+                    for (var fill : fills) {
+                        quantity = Math.addExact(quantity, fill.getQuantity());
+                        amount = amount.add(BigDecimal.valueOf(fill.getPrice()).multiply(BigDecimal.valueOf(fill.getQuantity())));
+                    }
+                    if (order.getStatus() == Order.Status.EXECUTED && quantity == 0)
+                        throw new OrderException(HttpStatus.INTERNAL_SERVER_ERROR,"INVALID_ORDER_DATA","체결 정보를 확인할 수 없습니다.");
+                    response.put("stock_code", order.getStockCode());
+                    response.put("order_side", order.getSide().name().toLowerCase(Locale.ROOT));
+                    response.put("order_type", order.getType().name().toLowerCase(Locale.ROOT));
+                    response.put("order_status", order.getStatus().name().toLowerCase(Locale.ROOT));
+                    response.put("quantity", order.getQuantity());
+                    response.put("limit_price", order.getLimitPrice());
+                    response.put("executed_quantity", quantity);
+                    response.put("execution_price", quantity == 0 ? null : amount.divide(BigDecimal.valueOf(quantity), 2, java.math.RoundingMode.HALF_UP));
+                }
+                return response;
             }
             if(store.list(accountId).stream().anyMatch(r -> r.message().eventId().equals(eventId) && r.message().userId()==userId))
                 return Map.of("request_id",eventId,"status","processing");

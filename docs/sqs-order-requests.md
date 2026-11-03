@@ -104,7 +104,25 @@ Idempotency-Key: 1e0181a0-d6e6-423a-af50-be42b5a48ab9
 
 사전 검증에서 현금·주식이 부족하면 즉시 기존 오류 형식으로 응답한다. 202는 Redis 임시 예약과 SQS 접수가 완료되었다는 뜻이다. 이후 최종 상태는 인증된 동일 계좌에서 조회한다.
 
-`GET /api/v1/accounts/{accountId}/order-requests/{eventId}`
+`GET /api/v3/accounts/{accountId}/order-requests/{request_id}`
+
+`request_id`는 POST의 `Idempotency-Key`와 동일하다. 기존 v1 결과 조회 경로도 호환성을 위해 유지한다.
+조회는 인증된 본인 소유 활성 계좌에서만 허용한다. HTTP 200은 조회 성공이며 체결 성공을 뜻하지 않는다.
+
+`created` 응답에는 `request_id`, `status`, `order_id`, `reason_code` 외에 최신 DB 주문의
+`stock_code`, `order_side`, `order_type`, `order_status`, `quantity`, `limit_price`,
+`executed_quantity`, `execution_price`를 포함한다. 요청 처리 기록을 확인한 뒤 해당 주문과 체결을 읽는다.
+`quantity`는 요청 수량, `executed_quantity`는 실제 체결 수량 합계다.
+`execution_price`는 체결 수량 가중 평균가(소수점 2자리 HALF_UP)이며 미체결이면 null이다.
+시장가의 `limit_price`는 null이다. 같은 요청을 재조회하면 대기 이후의 최신 체결 결과를 확인할 수 있다.
+
+```json
+{"request_id":"...","status":"created","order_id":4156,"reason_code":null,"stock_code":"005930","order_side":"buy","order_type":"limit","order_status":"pending","quantity":10,"limit_price":70000,"executed_quantity":0,"execution_price":null}
+```
+
+FE는 `processing`이면 재조회하고, `created`이면 `order_status`로 대기/완료를 구분한다.
+`rejected`이면 거절을 안내한다. 처리 지연이나 404를 체결 실패로 단정하여 새 키로 자동 재주문하지 않는다.
+장중/장외 정보는 반환하지 않으므로 pending만으로 다음 정규장 안내 여부를 판단하지 않는다.
 
 - `processing`: Redis에 임시 예약이 있고 아직 DB 최종 결과가 없음.
 - `created`: `order_id` 포함. 기존 주문/체결 조회로 연결한다. 지정가는 PENDING일 수 있고 시장가 성공은 EXECUTED다.

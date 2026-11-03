@@ -21,6 +21,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @Transactional
 class UserControllerTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.stock_spoon.river_be.auth.service.JwtUserExistenceVerifier authLookup;
     @Autowired WebApplicationContext context;
     @Autowired UserRepository users;
     @Autowired JwtTokenProvider tokens;
@@ -28,6 +30,9 @@ class UserControllerTests {
 
     @BeforeEach
     void setup() {
+        // Preserve real membership checks in this test's uncommitted fixture transaction.
+        org.mockito.Mockito.when(authLookup.exists(org.mockito.ArgumentMatchers.anyLong()))
+                .thenAnswer(call -> users.existsById(call.getArgument(0, Long.class)));
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
     }
 

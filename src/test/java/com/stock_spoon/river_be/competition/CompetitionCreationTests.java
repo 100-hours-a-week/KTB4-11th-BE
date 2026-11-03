@@ -45,8 +45,31 @@ class CompetitionCreationTests {
     @Autowired com.stock_spoon.river_be.holding.repository.HoldingRepository holdings;
     @Autowired com.stock_spoon.river_be.competition.service.CompetitionCompletionService completion;
     @Autowired com.stock_spoon.river_be.order.repository.OrderRepository orders;
-    @Autowired com.stock_spoon.river_be.competition.service.CompetitionDailyPerformanceService dailyPerformances;
+    @MockitoSpyBean com.stock_spoon.river_be.competition.service.CompetitionDailyPerformanceService dailyPerformances;
     private User user;
+
+    @Test void schedulerCompletesCompetitionBeforeSlowHistoricalRepair() throws Exception {
+        var start = java.time.ZonedDateTime.parse("2026-10-12T10:00:00+09:00[Asia/Seoul]");
+        org.mockito.Mockito.doReturn(start).when(tradingHours).now();
+        var req = request("정산 우선", 4, 1);
+        ReflectionTestUtils.setField(req, "startDate", start.toLocalDate());
+        ReflectionTestUtils.setField(req, "endDate", LocalDate.of(2026, 10, 16));
+        var id = service.createCompetition(user.getId(), req).getCompetitionId();
+        org.mockito.Mockito.doReturn(start.plusDays(4).withHour(16)).when(tradingHours).now();
+        var repairStarted = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        org.mockito.Mockito.doAnswer(call -> { repairStarted.countDown(); release.await(5, java.util.concurrent.TimeUnit.SECONDS); return null; })
+                .when(dailyPerformances).recordMissingDays(id);
+        try (var pool = java.util.concurrent.Executors.newSingleThreadExecutor()) {
+            var running = pool.submit(() -> new com.stock_spoon.river_be.competition.service.CompetitionCompletionScheduler(
+                    competitions, completion, tradingHours, dailyPerformances).completeExpiredCompetitions());
+            try {
+                assertThat(repairStarted.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+                assertThat(competitions.findById(id).orElseThrow().getState().name()).isEqualTo("COMPLETED");
+            } finally { release.countDown(); }
+            running.get(5, java.util.concurrent.TimeUnit.SECONDS);
+        }
+    }
 
     @BeforeEach
     void setup() {
@@ -383,6 +406,18 @@ class CompetitionCreationTests {
         assertThat(competitions.count()).isEqualTo(competitionCount);
         assertThat(accounts.count()).isEqualTo(accountCount);
         assertThat(participants.count()).isEqualTo(participantCount);
+    }
+
+    @Test
+    void nameAvailabilityAgreesWithCreatingACompetitionUsingTheSameName() {
+        assertThat(service.checkNameAvailability(user.getId(), " 기술 투자 ").isAvailable()).isTrue();
+        service.createCompetition(user.getId(), request(" 기술 투자 ", 3, 1));
+
+        assertThat(service.checkNameAvailability(user.getId(), "기술 투자").isAvailable()).isFalse();
+        assertThatThrownBy(() -> service.createCompetition(user.getId(), request("기술 투자", 3, 1)))
+                .isInstanceOf(CompetitionException.class)
+                .satisfies(error -> assertThat(((CompetitionException) error).getCode())
+                        .isEqualTo("DUPLICATE_ACCOUNT_NAME"));
     }
 
     private static LocalDate today() { return LocalDate.now(ZoneId.of("Asia/Seoul")); }

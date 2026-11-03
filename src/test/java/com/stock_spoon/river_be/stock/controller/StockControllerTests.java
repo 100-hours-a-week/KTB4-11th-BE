@@ -17,11 +17,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest(properties = {"kiwoom.stream.enabled=false"})
 class StockControllerTests {
+    @MockitoBean com.stock_spoon.river_be.auth.service.JwtUserExistenceVerifier authLookup;
     @Autowired WebApplicationContext context;
     @MockitoBean KiwoomMarketClient market;
     MockMvc mvc;
 
     @BeforeEach void setup() {
+        // These endpoint tests use a mock authenticated principal rather than a persisted user fixture.
+        when(authLookup.exists(1L)).thenReturn(true);
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
     }
 

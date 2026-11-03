@@ -27,7 +27,9 @@ COPY --from=builder --chown=spring:spring /workspace/extracted/dependencies/ ./
 COPY --from=builder --chown=spring:spring /workspace/extracted/spring-boot-loader/ ./
 COPY --from=builder --chown=spring:spring /workspace/extracted/snapshot-dependencies/ ./
 COPY --from=builder --chown=spring:spring /workspace/extracted/application/ ./
-COPY --from=otel-agent --chown=spring:spring --chmod=0444 /opentelemetry-javaagent.jar /opt/otel/opentelemetry-javaagent.jar
+COPY --from=otel-agent --chown=spring:spring /opentelemetry-javaagent.jar /opt/otel/opentelemetry-javaagent.jar
+RUN chmod 0555 /opt/otel \
+    && chmod 0444 /opt/otel/opentelemetry-javaagent.jar
 
 # Dev containers stay quiet by default; ECS PROD_ENV enables OTLP traces explicitly.
 ENV OTEL_TRACES_EXPORTER=none \
@@ -35,6 +37,9 @@ ENV OTEL_TRACES_EXPORTER=none \
     OTEL_LOGS_EXPORTER=none
 
 USER spring:spring
+
+# Verify the runtime user can traverse the directory and load the agent.
+RUN java -javaagent:/opt/otel/opentelemetry-javaagent.jar -version
 
 EXPOSE 8080
 

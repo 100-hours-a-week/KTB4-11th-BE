@@ -81,7 +81,7 @@ public class SecurityConfig {
                     .toList());
         }
         cors.setAllowedMethods(List.of("GET", "POST", "PATCH", "DELETE", "OPTIONS"));
-        cors.setAllowedHeaders(List.of("Content-Type", "X-XSRF-TOKEN", "ngrok-skip-browser-warning"));
+        cors.setAllowedHeaders(List.of("Content-Type", "X-XSRF-TOKEN", "ngrok-skip-browser-warning", "Idempotency-Key"));
         cors.setAllowCredentials(true);
         cors.setExposedHeaders(List.of("X-Request-Id"));
         var source = new UrlBasedCorsConfigurationSource();
@@ -109,6 +109,15 @@ public class SecurityConfig {
                             boolean allowed = current instanceof JwtAuthenticationToken token
                                     && "AI".equals(token.getToken().getClaimAsString("actor"))
                                     && "ai-server".equals(token.getToken().getSubject());
+                            return new AuthorizationDecision(allowed);
+                        })
+                        // 리포트 저장은 사용자 ID를 subject로 가진 AI 서버 토큰만 허용한다.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/competitions/{competitionId}/report")
+                        .access((authentication, context) -> {
+                            var current = authentication.get();
+                            boolean allowed = current instanceof JwtAuthenticationToken token
+                                    && "AI".equals(token.getToken().getClaimAsString("actor"))
+                                    && !"ai-server".equals(token.getToken().getSubject());
                             return new AuthorizationDecision(allowed);
                         })
                         .anyRequest().access((authentication, context) -> {

@@ -77,10 +77,16 @@ management:
     distribution:
       percentiles-histogram:
         http.server.requests: ${HTTP_REQUEST_HISTOGRAM_ENABLED:false}
+        hikaricp.connections.acquire: ${HIKARI_ACQUIRE_HISTOGRAM_ENABLED:false}
+        jvm.gc.pause: ${JVM_GC_PAUSE_HISTOGRAM_ENABLED:false}
       minimum-expected-value:
         http.server.requests: 1ms
+        hikaricp.connections.acquire: 1ms
+        jvm.gc.pause: 1ms
       maximum-expected-value:
         http.server.requests: 30s
+        hikaricp.connections.acquire: 30s
+        jvm.gc.pause: 30s
   endpoint:
     health:
       show-details: never

@@ -408,6 +408,18 @@ class CompetitionCreationTests {
         assertThat(participants.count()).isEqualTo(participantCount);
     }
 
+    @Test
+    void nameAvailabilityAgreesWithCreatingACompetitionUsingTheSameName() {
+        assertThat(service.checkNameAvailability(user.getId(), " 기술 투자 ").isAvailable()).isTrue();
+        service.createCompetition(user.getId(), request(" 기술 투자 ", 3, 1));
+
+        assertThat(service.checkNameAvailability(user.getId(), "기술 투자").isAvailable()).isFalse();
+        assertThatThrownBy(() -> service.createCompetition(user.getId(), request("기술 투자", 3, 1)))
+                .isInstanceOf(CompetitionException.class)
+                .satisfies(error -> assertThat(((CompetitionException) error).getCode())
+                        .isEqualTo("DUPLICATE_ACCOUNT_NAME"));
+    }
+
     private static LocalDate today() { return LocalDate.now(ZoneId.of("Asia/Seoul")); }
 
     private CompetitionCreateRequest request(String name, int days, int count) {

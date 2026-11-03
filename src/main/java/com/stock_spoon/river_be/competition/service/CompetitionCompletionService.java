@@ -85,5 +85,8 @@ public class CompetitionCompletionService {
                     competitionId, requestId, error.getClass().getSimpleName(), error);
             throw error;
         }
+        // 최종 결과와 기록은 보존하고 양측 계좌를 일반 계좌 목록·거래 대상에서 제외한다.
+        // 정산과 같은 트랜잭션이므로 커밋 실패 시 비활성화도 함께 롤백된다.
+        for (var link : links) link.getAccount().deactivate();
     }
 }

@@ -2,6 +2,7 @@ package com.stock_spoon.river_be.competition.service;
 
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateRequest;
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateResponse;
+import com.stock_spoon.river_be.competition.dto.CompetitionNameAvailabilityResponse;
 import com.stock_spoon.river_be.competition.dto.CompetitionListResponse;
 import com.stock_spoon.river_be.competition.dto.CompetitionListCursor;
 import org.springframework.data.domain.PageRequest;
@@ -38,6 +39,23 @@ public class CompetitionService {
     private final CompetitionTradingHours tradingHours;
     private final AccountService accountService;
     private final CompetitionDailyPerformanceRepository dailyPerformances;
+
+    @Transactional(readOnly = true) // 이름의 사용 가능 여부만 확인한다.
+    public CompetitionNameAvailabilityResponse checkNameAvailability(Long userId, String competitionName) {
+        // 생성 요청 DTO와 동일하게 공백 여부와 원본 문자열 길이를 먼저 검사한다.
+        if (competitionName == null || competitionName.isBlank() || competitionName.length() > 20) {
+            return new CompetitionNameAvailabilityResponse(false);
+        }
+
+        // 생성 시 계좌명으로 저장할 값의 앞뒤 공백을 제거한다.
+        String name = competitionName.trim();
+        if (name.isBlank()) {
+            return new CompetitionNameAvailabilityResponse(false);
+        }
+        // 활성·비활성 계좌를 모두 조회해 종료된 대결명도 중복으로 판단한다.
+        boolean duplicate = accounts.existsByUserIdAndNameIgnoreCase(userId, name);
+        return new CompetitionNameAvailabilityResponse(!duplicate);
+    }
 
     @Transactional(readOnly = true)
     public CompetitionResultResponse getCompetitionResult(Long userId, Long competitionId) {

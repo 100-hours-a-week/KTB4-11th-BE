@@ -69,10 +69,10 @@ public class OrderHistoryService {
         final Order.Side selectedSide = side;
         log.debug("주문내역 조회 시작 accountId={} limit={} requestedStatus={}", accountId, count, selectedStatus);
         Snapshot snapshot = read.execute(status -> {
-            accounts.findByIdAndUserIdAndActiveTrue(accountId, userId).orElseThrow(() -> {
+            if (accounts.findByIdAndUserId(accountId, userId).isEmpty()) {
                 log.warn("주문내역 계좌 접근 실패 accountId={} code=ACCOUNT_NOT_FOUND", accountId);
-                return new OrderException(HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND", "계좌를 찾을 수 없습니다.");
-            });
+                throw new OrderException(HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND", "계좌를 찾을 수 없습니다.");
+            }
             competitionAccess.check(userId, accountId, false);
             long total = pageNumber == null ? 0
                     : orders.countHistory(accountId, selectedStatus, selectedSide, stockCode);

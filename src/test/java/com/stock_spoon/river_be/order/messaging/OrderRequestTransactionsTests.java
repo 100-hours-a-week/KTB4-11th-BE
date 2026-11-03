@@ -47,6 +47,9 @@ class OrderRequestTransactionsTests {
     @Autowired Validator validator;
     @Autowired PlatformTransactionManager manager;
     @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
+    @Autowired com.stock_spoon.river_be.competition.service.CompetitionCancellationService cancellations;
+    @Autowired com.stock_spoon.river_be.competition.repository.CompetitionRepository competitions;
+    @Autowired com.stock_spoon.river_be.competition.repository.CompetitionParticipantRepository participants;
     final MemoryReservations store = new MemoryReservations();
     OrderRequestTransactions processing;
     Account account;
@@ -94,6 +97,45 @@ class OrderRequestTransactionsTests {
         var message = new OrderRequestCodec(json).decode(json.writeValueAsString(body), now);
         return processing.process(message, type.equals("market") ? quote(10000) : null, Map.of(), () -> {});
     }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void cancelledCompetitionRejectsDelayedAndInFlightQueueRequests(boolean cancelBeforeConsume) {
+        var owner = account.getUser();
+        var competition = new com.stock_spoon.river_be.competition.entity.Competition(owner, "큐 취소 대결",
+                com.stock_spoon.river_be.competition.entity.Competition.Type.USER_VS_AI,
+                LocalDate.of(2026, 10, 1), LocalDate.of(2099, 10, 30), 100000, 1);
+        competition.start(now.minusSeconds(3600));
+        competitions.save(competition);
+        participants.save(new com.stock_spoon.river_be.competition.entity.CompetitionParticipant(competition, account));
+        var ai = accounts.save(new Account(owner, "queue-ai", 100000, true));
+        participants.save(new com.stock_spoon.river_be.competition.entity.CompetitionParticipant(competition, ai));
+        var request = message("buy", "limit", 70000L, 1);
+        processing.admit(request, null);
+        assertThat(store.list(account.getId())).hasSize(1);
+
+        if (cancelBeforeConsume) cancellations.cancel(owner.getId(), competition.getId());
+        else {
+            // 소비 시작 시 활성 검사를 통과한 후 주문 생성 직전에 대결을 취소한다.
+            processing = org.mockito.Mockito.spy(processing);
+            org.mockito.Mockito.doAnswer(call -> {
+                cancellations.cancel(owner.getId(), competition.getId());
+                return call.callRealMethod();
+            }).when(processing).validate(request);
+        }
+        long ordersBefore = orders.count();
+        var consumer = service(org.mockito.Mockito.mock(OrderRequestPublisher.class));
+        var rejected = consumer.consume(request);
+        assertThat(rejected.reasonCode()).isEqualTo("ACCOUNT_INACTIVE");
+        assertThat(rejected.orderId()).isNull();
+        assertThat(consumer.consume(request).reasonCode()).isEqualTo("ACCOUNT_INACTIVE");
+        assertThat(store.list(account.getId())).isEmpty();
+        assertThat(orders.count()).isEqualTo(ordersBefore);
+        assertThat(accounts.findById(account.getId()).orElseThrow().getCashBalance()).isEqualTo(100000);
+        assertThat(accounts.findById(ai.getId()).orElseThrow().isActive()).isFalse();
+        assertThat(competitions.findById(competition.getId()).orElseThrow().getState())
+                .isEqualTo(com.stock_spoon.river_be.competition.entity.Competition.State.CANCELLED);
+    }
+
     @Test void concurrentBuyReservationsCannotSpendSameCash() throws Exception {
         try (var pool = Executors.newFixedThreadPool(2)) {
             var start = new CountDownLatch(1);

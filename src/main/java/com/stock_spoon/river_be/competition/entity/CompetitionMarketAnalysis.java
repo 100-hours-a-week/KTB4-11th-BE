@@ -18,7 +18,8 @@ public class CompetitionMarketAnalysis {
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "competition_id", nullable = false)
     private Competition competition;
-    @Column(name = "analysis_date", nullable = false)
+    // AI 서버가 뉴스 날짜를 보내지 않으면 알 수 없는 날짜로 저장한다.
+    @Column(name = "analysis_date")
     private LocalDate date;
     @Column(nullable = false)
     private String title;

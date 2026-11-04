@@ -59,11 +59,17 @@ jwt:
   access-expiration: ${JWT_ACCESS_EXPIRATION:15m}
   refresh-expiration: ${JWT_REFRESH_EXPIRATION:14d}
 
+market:
+  http:
+    base-url: ${MARKET_HTTP_BASE_URL:https://stock-spoon.com/market}
+
 kiwoom:
+  legacy:
+    enabled: ${KIWOOM_LEGACY_ENABLED:false}
   app-key: ${KIWOOM_APP_KEY:}
   app-secret: ${KIWOOM_APP_SECRET:}
   collector:
-    enabled: ${KIWOOM_COLLECTOR_ENABLED:false}
+    enabled: ${KIWOOM_COLLECTOR_ENABLED:false} # legacy.enabled=true인 경우에만 사용한다.
     url: ${KIWOOM_COLLECTOR_URL:}
     secret: ${KIWOOM_COLLECTOR_SECRET:}
   stream:

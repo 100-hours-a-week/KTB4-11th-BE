@@ -38,6 +38,7 @@ public class MultiProcessRedisNode {
                 "--spring.data.redis.host=localhost", "--spring.data.redis.port=" + args[3],
                 "--spring.data.redis.timeout=3s", "--spring.data.redis.connect-timeout=3s",
                 "--kiwoom.collector.enabled=" + args[0], "--kiwoom.stream.enabled=true",
+                "--kiwoom.legacy.enabled=true",
                 "--kiwoom.collector.url=" + args[2], "--kiwoom.collector.secret=test-only-process-secret",
                 "--kiwoom.app-key=", "--kiwoom.app-secret=",
                 "--kakao.client-id=test", "--kakao.client-secret=test", "--kakao.redirect-uri=http://localhost/callback",
@@ -183,6 +184,12 @@ public class MultiProcessRedisNode {
 
     @TestConfiguration(proxyBeanMethods = false)
     static class Fixture {
+        // 이 시나리오는 기존 담당 BE 중계·공유 캐시를 검증한다. HTTP 전환은 MarketStockHttpTests가 검증한다.
+        @Bean @Primary
+        KiwoomMarketClient legacyMarketFixture(KiwoomRestTransport transport, StockMetadataCache metadata) {
+            return new KiwoomMarketClient(transport, metadata);
+        }
+
         @Bean static org.springframework.beans.factory.config.BeanPostProcessor fixedMarketClock() {
             var fixed = Clock.fixed(testTime(), ZoneOffset.UTC);
             return new org.springframework.beans.factory.config.BeanPostProcessor() {

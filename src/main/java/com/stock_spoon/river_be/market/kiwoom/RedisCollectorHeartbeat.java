@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 
 /** 고정 담당만 시작 시 소유권을 얻는다. 만료 후에는 재시작 전까지 재획득하지 않는다. */
 @Component
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "kiwoom.legacy.enabled", havingValue = "true")
 public class RedisCollectorHeartbeat {
     static final String KEY = "coord:kiwoom:collector";
     private static final DefaultRedisScript<Long> RENEW = new DefaultRedisScript<>(

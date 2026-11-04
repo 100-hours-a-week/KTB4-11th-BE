@@ -11,6 +11,7 @@ import org.springframework.web.client.RestClient;
 @Configuration
 public class KiwoomConfig {
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "kiwoom.legacy.enabled", havingValue = "true")
     KiwoomTokenProvider sharedKiwoomTokenProvider(
             @Value("${kiwoom.app-key:}") String appKey,
             @Value("${kiwoom.app-secret:}") String appSecret,
@@ -26,6 +27,7 @@ public class KiwoomConfig {
     }
 
     @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "kiwoom.legacy.enabled", havingValue = "true")
     KiwoomRestTransport kiwoomRestTransport(KiwoomTokenProvider tokenProvider,
             RedisCollectorHeartbeat heartbeat,
             org.springframework.data.redis.core.StringRedisTemplate redis,
@@ -51,8 +53,15 @@ public class KiwoomConfig {
     }
 
     @Bean
-    KiwoomMarketClient kiwoomMarketClient(KiwoomRestTransport transport, StockMetadataCache metadata) {
-        return new KiwoomMarketClient(transport, metadata);
+    KiwoomMarketClient marketClient(StockMetadataCache metadata,
+            com.stock_spoon.river_be.market.MarketStockClient stocks) {
+        return new KiwoomMarketClient(null, metadata, stocks);
+    }
+
+    // 기존 중계 단독 테스트용 팩터리. 운영 빈은 marketClient에서 HTTP 전용으로 생성한다.
+    KiwoomMarketClient kiwoomMarketClient(KiwoomRestTransport transport, StockMetadataCache metadata,
+            com.stock_spoon.river_be.market.MarketStockClient stocks) {
+        return new KiwoomMarketClient(transport, metadata, stocks);
     }
 
     @Bean

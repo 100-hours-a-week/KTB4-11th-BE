@@ -1,5 +1,7 @@
 # AI Valkey 현재가·호가 연동
 
+> 2026-11-04 변경: 종목정보의 운영 조회는 [시세 서버 HTTP](../market-http-stock-info.md)로 전환했다. 아래의 종목정보 키움 REST 유지 설명은 과거 기록이며, 최종 사용자 결정으로 종가도 시세 서버 HTTP의 수정주가를 사용한다. 원주가와 수정주가의 차이 및 평가 영향은 위 문서에 기록했다.
+
 최종 갱신: 2026-10-18. 각 BE가 시세 서버의 Redis 원본 키와 채널을 직접 사용한다. 기존 담당 BE의 시세 재저장·재발행 단계를 제거했다. 변경 내역과 이전 설계 기록은 [기존 키움 연동 정리](legacy-kiwoom-cleanup.md)를 참고한다.
 
 ## 데이터 흐름
@@ -55,7 +57,7 @@
 - 수신 콜백은 BE마다 1개 스레드와 최대 256개 대기열을 사용한다. Pub/Sub 누락은 재생하지 않는다.
 - Redis 수집기 쪽 세션·heartbeat 정보는 AI 원본 규격에 없으므로 해당 연결 생존 자체를 증명할 수 없다. 시세의 시각 검증과 Redis 구독 세대 검증을 사용한다.
 
-일반 BE는 `KIWOOM_STREAM_ENABLED=true`로 직접 구독을 활성화한다. 시세 수신만을 위해 `KIWOOM_COLLECTOR_ENABLED=true`를 설정할 필요는 없다. 다만 기존 종목정보·종가 REST 전달에는 여전히 담당 BE와 URL·비밀키가 필요하다. 키움 REST의 담당 상태와 Redis 직접 시세 수신은 별개다.
+일반 BE는 `KIWOOM_STREAM_ENABLED=true`로 직접 구독을 활성화한다. 시세 수신만을 위해 `KIWOOM_COLLECTOR_ENABLED=true`를 설정할 필요는 없다. 종목정보·종가는 시세 서버 HTTP를 사용하며 담당 BE와 URL·비밀키를 거치지 않는다. 이전 중계 호환 엔드포인트는 남아 있다.
 
 ## 평가용 현재가 직접 조회
 
@@ -67,11 +69,11 @@
 
 ## 남아 있는 REST와 권한
 
-[시세 서버 HTTP 명세](https://stock-spoon.com/market/openapi.json)는 `/prices`, `/orderbooks`, `/bars/{code}`, `/indices/{name}` 등을 제공한다. 종목명·업종·시장 구분과 날짜별 종가의 Redis 키 규격은 이 명세에 없다. 현재 남아 있는 종목명·업종 및 날짜별 종가 조회는 기존 REST 경로를 유지한다. 주문 시장 검증 정책은 이번 시세 수신 변경 대상이 아니다. 내부 REST는 `ka10100`, `ka10081`만 허용하며 `ka10001`은 차단한다.
+[시세 서버 HTTP 명세](https://stock-spoon.com/market/openapi.json)는 `/prices`, `/orderbooks`, `/bars/{code}`, `/indices/{name}` 등을 제공한다. 종목명·업종·시장 구분과 날짜별 종가의 Redis 키 규격은 이 명세에 없다. 종목명·업종 및 날짜별 종가는 시세 서버 HTTP로 전환했다. 종가에는 최종 사용자 결정에 따라 수정주가를 사용한다. 주문 시장 검증 정책은 이번 시세 수신 변경 대상이 아니다. 내부 REST는 `ka10100`, `ka10081`만 허용하며 `ka10001`은 차단한다.
 
 각 BE는 `%R~price:* %R~orderbook:* &price:* &orderbook:*` 등 원본 키 GET 및 원본 채널 SUBSCRIBE/UNSUBSCRIBE 권한이 필요하다. BE의 이 시세 수신 경로에는 원본 쓰기·삭제·PUBLISH 권한이 필요 없다. 기존 메타데이터·토큰·REST 담당 상태 권한까지 삭제하면 안 된다. IAM 연결 인증과 데이터 ACL은 별개다.
 
-새 환경변수나 시세 서버 HTTP 호출은 추가하지 않았다. 일반 BE 전환 전 원본 채널 권한을 준비하고, 미전환 BE가 남아 있는 동안 기존 시세 중계 담당을 중단하면 해당 BE의 체결이 멈출 수 있다. 배포 Valkey IAM·TLS·ACL과 실제 AI 공급 연결은 별도 검증 대상이다.
+2026-11-04 종목정보·종가 전환으로 `MARKET_HTTP_BASE_URL` 설정과 시세 서버 HTTP 호출을 추가했다. 일반 BE 전환 전 원본 채널 권한을 준비하고, 미전환 BE가 남아 있는 동안 기존 시세 중계 담당을 중단하면 해당 BE의 체결이 멈출 수 있다. 배포 Valkey IAM·TLS·ACL과 실제 AI 공급 연결은 별도 검증 대상이다.
 
 ## 로컬 검증 (2026-10-18)
 

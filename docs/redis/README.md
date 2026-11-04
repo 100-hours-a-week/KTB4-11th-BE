@@ -4,6 +4,7 @@ Redis 전환의 로컬 검증 후 인프라의 Serverless IAM 환경변수를 �
 
 | 목적 | 문서 |
 |---|---|
+| 종목정보·수정주가 종가 HTTP 전환과 최신 배포 설정 | [시세 서버 HTTP 전환](../market-http-stock-info.md) |
 | AI 현재가·호가 키·JSON·체결 경계 | [AI Valkey 호환](ai-quotes.md) |
 | 최신 검증 결과와 남은 단계 | [배포 준비](redis-deployment-checklist.md) |
 | 인프라 인계·설정·배포·장애 복구 | [운영 인계](operations-handoff.md) |
@@ -17,4 +18,4 @@ Redis 전환의 로컬 검증 후 인프라의 Serverless IAM 환경변수를 �
 | 기존 메모리 데이터 조사 기록 | [메모리 데이터 및 계획](in-memory-data-and-redis-plan.md) |
 | 단계별 설계 기록 | [설계 초안](redis-transition-design-draft.md) |
 
-배포 환경변수 예시는 [공통](deployment-common.env.example), [담당](deployment-collector.env.example), [일반 BE](deployment-consumer.env.example)로 나뉜다. 실제 값과 비밀값을 예시 파일에 저장하지 않는다.
+현재 HTTP 전환 배포는 [공통 환경변수](deployment-common.env.example)를 기준으로 한다. [담당](deployment-collector.env.example)·[일반 BE](deployment-consumer.env.example) 예시는 이전 담당 구조의 레거시 시험용이며 현재 운영 배포에 사용하지 않는다. 실제 값과 비밀값을 예시 파일에 저장하지 않는다.

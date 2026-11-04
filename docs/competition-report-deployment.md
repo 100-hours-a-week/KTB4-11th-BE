@@ -9,8 +9,11 @@
 | ai_order_reports | reason_id VARCHAR(36) NULL 추가 | [ai_report_reason_id.sql](../db/ai_report_reason_id.sql) |
 | competition_report_outbox | 대결별 전송 대기·성공 기록 테이블, 유일 제약·FK·조회 인덱스 생성 | [competition-report-outbox.sql](../db/competition-report-outbox.sql) |
 | competitions | daily_performance_complete BOOLEAN NOT NULL DEFAULT FALSE 및 후보 조회 인덱스 추가 | [competition-daily-performance-complete.sql](../db/competition-daily-performance-complete.sql) |
+| competitions | report_ready BOOLEAN NOT NULL DEFAULT FALSE 추가 및 기존 리포트 완료 표시 보정 | [competition-report-ready.sql](../db/competition-report-ready.sql) |
 
 실제 대상 DB에서 먼저 기존 테이블·컬럼·인덱스 존재 여부를 확인한다. SQL은 중복 실행용이 아니므로 존재한다면 정의를 대조하고 필요한 변경만 반영한다. 과거 주문의 reason_id는 NULL로 유지하며 임의 생성하지 않는다. 기존 report_id 및 주문 테이블 속성은 변경하지 않는다.
+
+report_ready 컬럼의 ALTER는 배포 전에 한 번 적용한다. 기존 시장 분석·판단 요약이 있는 대결을 true로 보정하는 UPDATE는 멱등이므로 적용 시 실행하고 구버전 앱의 저장이 끝난 배포 완료 후에도 재실행한다. 내용이 모두 비어 있던 과거 리포트는 수신 완료 여부를 알 수 없으므로 재전달이나 확인된 데이터의 별도 보정이 필요하다. 기존 조회 JSON state는 report_state로 바뀌며 pending/completed를 반환한다. 이는 대결 완료 상태와 별개다.
 
 새 엔티티 매핑은 reason_id 컬럼을 조회·저장하므로 ALTER가 먼저다. 회원 탈퇴 삭제 코드도 Outbox 테이블을 참조하므로 해당 테이블 역시 먼저 필요하다. 기존 앱은 추가 컬럼·테이블을 사용하지 않으므로 애플리케이션을 롤백해도 기본적으로 DB 추가분은 남긴다. 기록을 삭제하는 DROP은 자동 롤백 절차가 아니다.
 

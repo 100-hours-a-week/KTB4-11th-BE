@@ -732,6 +732,8 @@ GET /api/v2/users/me/competitions/{competition_id}/report
   → CompetitionReportController.get(jwt, competitionId)
   → CompetitionReportService.get(userId, competitionId)
       → CompetitionRepository.findById(): 본인 소유 대결인지 검사
+      → competition.reportReady=false: report_state=pending + 빈 배열 반환
+      → competition.reportReady=true: 저장된 본문 조회 후 report_state=completed 반환
       → CompetitionMarketAnalysisRepository.findAllByCompetitionIdOrderByDateDescIdDesc()
       → CompetitionJudgmentSummaryRepository.findAllByCompetitionIdOrderByIdAsc()
   → CompetitionReportResponse: 대결 정보 + 시장 분석 + 판단 요약 → 200
@@ -743,11 +745,15 @@ GET /api/v2/users/me/competitions/{competition_id}/report
 | 서비스 | 대결 ID와 소유자 | 타인 대결과 없는 대결은 모두 404 COMPETITION_NOT_FOUND |
 | 시장 분석 | competition_id | analysis_id·date·title·content, 날짜 내림차순·동률은 ID 내림차순 |
 | 판단 요약 | competition_id | title·content, 저장 ID 오름차순 |
-| 응답 | 조회된 대결·분석·요약 | competition_id·competition_name·start_date·end_date·state·market_analyses·judgment_summaries |
+| 응답 | 조회된 대결·분석·요약 | competition_id·competition_name·start_date·end_date·report_state·market_analyses·judgment_summaries |
 
 사용자가 확정한 정책에 따라 **READY / IN_PROGRESS / COMPLETED / CANCELLED 상태와 관계없이 본인의 리포트를 공개**한다. 이 조회에는 AI 매매 내역의 완료 후 공개 검사를 적용하지 않는다. AI 매매 내역 및 주문별 판단 근거의 공개 제한은 별도 매매 내역 브랜치에서 구현한 정책이며 현재 브랜치에는 아직 포함되지 않았다.
 
-시장 분석 본문을 최초 응답에 포함하므로 화면의 접기·펼치기는 FE에서 처리한다. 데이터가 아직 없으면 `market_analyses: []`, `judgment_summaries: []`를 반환한다. 예시 문구나 주문별 판단 근거를 대신 채우지 않는다. 페이지네이션 없이 저장된 전체를 반환한다.
+시장 분석 본문을 최초 응답에 포함하므로 화면의 접기·펼치기는 FE에서 처리한다. 리포트 저장 전에는 `report_state: pending`, `market_analyses: []`, `judgment_summaries: []`를 반환한다. AI 저장 API가 정상 완료되면 배열이 비어 있더라도 `report_state: completed`다. 대결의 state를 리포트 상태로 반환하지 않는다. 예시 문구나 주문별 판단 근거를 대신 채우지 않는다. 페이지네이션 없이 저장된 전체를 반환한다.
+
+CompetitionReportService.save()는 기존 내용 교체와 competition.markReportReady()를 같은 트랜잭션에서 수행한다. 저장 실패 시 내용과 완료 표시가 함께 롤백된다. get()은 본인 소유를 검사한 후 이 표시를 확인해 아직 준비되지 않았으면 빈 배열을 즉시 반환하고, 준비됐으면 Repository에서 본문을 조회한다. JSON 필드명은 state에서 report_state로 변경되므로 FE도 이 이름으로 읽어야 한다. 날짜 반환 방식과 대결 상태별 접근 정책은 바꾸지 않았다.
+
+운영 DB에는 [competition-report-ready.sql](../db/competition-report-ready.sql)을 새 코드 배포 전에 적용해야 한다. 기존 내용이 있는 리포트는 완료 표시를 보정한다. 과거에 빈 배열로만 저장한 리포트는 기존 구조에 수신 기록이 없어 판별할 수 없으므로 재전달 또는 확인된 건의 별도 보정이 필요하다. 현재 개발에서는 운영 DB에 적용하지 않았다.
 
 저장 구조는 `competition_market_analyses`와 `competition_judgment_summaries` 두 테이블이며 각각 대결 ID로 연결한다. v2는 대결당 AI 하나이므로 대결별로 저장한다. 주문별 `ai_order_reports`와는 별개다. 신규 DDL은 `db/competition-reports.sql`이며 실제 DB에는 실행하지 않았다.
 

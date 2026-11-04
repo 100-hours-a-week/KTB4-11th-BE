@@ -52,15 +52,39 @@ class CompetitionReportTests {
         assertThat((String) JsonPath.read(body, "$.competition_name")).isEqualTo("반도체 집중");
         assertThat((String) JsonPath.read(body, "$.start_date")).isEqualTo("2026-10-12");
         assertThat((String) JsonPath.read(body, "$.end_date")).isEqualTo("2026-10-16");
-        assertThat((String) JsonPath.read(body, "$.state")).isEqualTo(state.name().toLowerCase(java.util.Locale.ROOT));
+        assertThat((String) JsonPath.read(body, "$.report_state")).isEqualTo("pending");
+        assertThat(((java.util.Map<?, ?>) JsonPath.read(body, "$")).containsKey("state")).isFalse();
         assertThat((List<?>) JsonPath.read(body, "$.market_analyses")).isEmpty();
         assertThat((List<?>) JsonPath.read(body, "$.judgment_summaries")).isEmpty();
+    }
+
+    @Test void savedEmptyReportIsCompletedRatherThanPending() throws Exception {
+        var request = objectMapper.readValue("{\"news\":[],\"thoughts\":[]}",
+                com.stock_spoon.river_be.competition.dto.CompetitionReportSaveRequest.class);
+        reportService.save(owner.getId(), competition.getId(), request);
+        var body = get(competition.getId(), owner, 200);
+        assertThat((String) JsonPath.read(body, "$.report_state")).isEqualTo("completed");
+        assertThat((List<?>) JsonPath.read(body, "$.market_analyses")).isEmpty();
+        assertThat((List<?>) JsonPath.read(body, "$.judgment_summaries")).isEmpty();
+    }
+
+    @Test void failedInitialSaveLeavesReportPending() throws Exception {
+        var invalid = objectMapper.readValue("""
+                {"news":[{"title":"뉴스","summary":"내용"}],
+                 "thoughts":[{"title":"%s","text":"내용"}]}
+                """.formatted("가".repeat(256)), com.stock_spoon.river_be.competition.dto.CompetitionReportSaveRequest.class);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> reportService.save(owner.getId(), competition.getId(), invalid))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+        var body = get(competition.getId(), owner, 200);
+        assertThat((String) JsonPath.read(body, "$.report_state")).isEqualTo("pending");
+        assertThat((List<?>) JsonPath.read(body, "$.market_analyses")).isEmpty();
     }
 
     @Test
     void returnsNewsWithUnknownDateAsExplicitNull() throws Exception {
         jdbc.update("insert into competition_market_analyses (competition_id, analysis_date, title, content) values (?, ?, ?, ?)",
                 competition.getId(), null, "카카오 데이터센터 화재", "서비스 장애");
+        jdbc.update("update competitions set report_ready=true where competition_id=?", competition.getId());
         var body = get(competition.getId(), owner, 200);
         java.util.Map<String, Object> item = JsonPath.read(body, "$.market_analyses[0]");
         assertThat(item).containsEntry("date", null).containsEntry("title", "카카오 데이터센터 화재")
@@ -82,6 +106,7 @@ class CompetitionReportTests {
 
         var body = get(competition.getId(), owner, 200);
         assertThat((List<?>) JsonPath.read(body, "$.market_analyses")).hasSize(1);
+        assertThat((String) JsonPath.read(body, "$.report_state")).isEqualTo("completed");
         assertThat((String) JsonPath.read(body, "$.market_analyses[0].title")).isEqualTo("새 뉴스");
         assertThat((String) JsonPath.read(body, "$.market_analyses[0].content")).isEqualTo("새 요약");
         assertThat((List<?>) JsonPath.read(body, "$.judgment_summaries")).isEmpty();
@@ -245,6 +270,7 @@ class CompetitionReportTests {
     private void analysis(long competitionId, String date, String title, String content) {
         jdbc.update("insert into competition_market_analyses (competition_id, analysis_date, title, content) values (?, ?, ?, ?)",
                 competitionId, LocalDate.parse(date), title, content);
+        jdbc.update("update competitions set report_ready=true where competition_id=?", competitionId);
     }
     private String get(long id, User user, int expected) throws Exception {
         var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/v2/users/me/competitions/" + id + "/report"))

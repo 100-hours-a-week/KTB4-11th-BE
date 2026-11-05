@@ -130,6 +130,7 @@ class CompetitionUnifiedCreationTests {
     }
 
     @Test void concurrentSameNameRequestsCreateOnlyOneCompleteCompetition() throws Exception {
+        long[] before = counts();
         var start = new java.util.concurrent.CountDownLatch(1);
         try (var pool = java.util.concurrent.Executors.newFixedThreadPool(2)) {
             java.util.concurrent.Callable<String> call = () -> {
@@ -141,7 +142,9 @@ class CompetitionUnifiedCreationTests {
             assertThat(List.of(first.get(15, java.util.concurrent.TimeUnit.SECONDS), second.get(15, java.util.concurrent.TimeUnit.SECONDS)))
                     .containsExactlyInAnyOrder("ok", "DUPLICATE_ACCOUNT_NAME");
         }
-        assertThat(accounts.findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(owner.getId())).hasSize(2);
+        // AI 대결 계좌는 생성되지만 사용자 계좌 목록에는 노출하지 않는다.
+        assertThat(accounts.findAllByUserIdAndActiveTrueAndAiManagedFalseOrderByCreatedAtAscIdAsc(owner.getId())).isEmpty();
+        assertThat(counts()).containsExactly(before[0] + 1, before[1] + 2, before[2] + 2, before[3] + 2);
         assertThat(competitions.countByUserIdAndState(owner.getId(), Competition.State.READY)).isEqualTo(1);
     }
 

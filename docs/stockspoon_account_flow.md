@@ -75,30 +75,31 @@ GET /api/v1/users/me/accounts
 Cookie: access_token={StockSpoon Access JWT}
 ```
 
-`AccountService.list()`는 JWT 사용자 ID로 본인의 모든 활성 계좌를 조회한다. 일반 계좌, 일반 AI 계좌, 대결 사용자 계좌와 대결 AI 계좌를 모두 포함한다. 대결의 준비·진행·완료·취소 상태는 목록 제외 조건이 아니며, 타 회원 계좌와 `is_active=false`인 계좌만 제외한다. 정렬은 `created_at` 오름차순, 같은 시각이면 `account_id` 오름차순이다. 계좌가 없으면 `200 OK`와 `[]`를 반환한다. 다른 사용자의 계좌는 목록에 포함되지 않는다.
+`AccountService.list()`는 JWT 사용자 ID로 본인의 활성 비AI 계좌만 조회한다. 일반 계좌와 대결 사용자 계좌를 포함하고, `is_ai_managed=true`인 일반 AI·대결 AI 계좌는 제외한다. 대결의 준비·진행·완료·취소 상태는 목록 제외 조건이 아니며, 타 회원 계좌와 `is_active=false`인 계좌도 제외한다. 정렬은 `created_at` 오름차순, 같은 시각이면 `account_id` 오름차순이다. 조건에 맞는 계좌가 없거나 활성 AI 계좌만 있으면 `200 OK`와 `[]`를 반환한다.
 
 ```text
 GET /api/v1/users/me/accounts
 → account.controller.AccountController.list(jwt)
 → JWT subject를 long userId로 변환
 → account.service.AccountService.list(userId)
-→ account.repository.AccountRepository.findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(userId)
-  → a.user.id = :userId AND a.active = true
+→ account.repository.AccountRepository.findAllByUserIdAndActiveTrueAndAiManagedFalseOrderByCreatedAtAscIdAsc(userId)
+  → a.user.id = :userId AND a.active = true AND a.aiManaged = false
   → created_at, account_id 오름차순
 → 기존 snapshot/자산 평가 및 AccountListResponse 변환
 → 200 OK, 계좌 배열
 ```
 
-계좌 목록 요청은 `AccountController.list()`로 들어오며, 검증된 JWT가 `jwt` 인자로 주입된다. 컨트롤러는 subject를 내부 회원 ID로 변환해 `AccountService.list(userId)`에 전달한다. 서비스가 호출하는 `AccountRepository.findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc()`에서 대결 AI 참가 계좌를 제외하던 `not exists` 조건을 제거했다. Controller와 Service의 코드는 그대로 두고 기존 보유 평가·주문 가능 현금 계산과 DTO 변환을 재사용한다.
+계좌 목록 요청은 `AccountController.list()`로 들어오며, 검증된 JWT가 `jwt` 인자로 주입된다. 컨트롤러는 subject를 내부 회원 ID로 변환해 `AccountService.list(userId)`에 전달한다. 서비스가 호출하는 `AccountRepository.findAllByUserIdAndActiveTrueAndAiManagedFalseOrderByCreatedAtAscIdAsc()`의 `aiManaged=false` 조건으로 자산 평가 전에 AI 계좌를 제외한다. 기존 보유 평가·주문 가능 현금 계산과 DTO 변환을 재사용한다.
 
 | 계좌 | 포함 여부 |
 |---|---|
-| 본인 활성 일반·일반 AI 계좌 | 포함 |
-| 본인 활성 대결 사용자·대결 AI 계좌 | 포함 |
+| 본인 활성 일반 계좌 | 포함 |
+| 본인 활성 대결 사용자 계좌 | 포함 |
+| 일반 AI·대결 AI 계좌 | 제외 |
 | 비활성 계좌 | 제외 |
 | 다른 회원 계좌 | 제외 |
 
-대결 양측 계좌는 `is_duel_account=true`로 표시되며 현재 목록 DTO에는 별도의 AI 운용 여부 필드가 없다. 목록에 AI 계좌가 보이는 것과 사용자 직접 주문 허용은 별개다. AI 운용 대상 조회인 `findActiveAiManagedOn()`과 사용자/AI 주문 권한 검증은 기존 정책을 유지한다.
+목록에 포함된 대결 사용자 계좌는 `is_duel_account=true`로 표시되며 현재 목록 DTO에는 별도의 AI 운용 여부 필드가 없다. 이번 변경은 계좌 목록에만 적용한다. 상세 조회, AI 운용 대상 조회인 `findActiveAiManagedOn()`과 사용자/AI 주문 권한 검증은 기존 정책을 유지한다.
 
 코드: [AccountController](../src/main/java/com/stock_spoon/river_be/account/controller/AccountController.java), [AccountService](../src/main/java/com/stock_spoon/river_be/account/service/AccountService.java), [AccountRepository](../src/main/java/com/stock_spoon/river_be/account/repository/AccountRepository.java).
 

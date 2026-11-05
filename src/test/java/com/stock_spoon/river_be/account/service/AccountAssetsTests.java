@@ -27,8 +27,8 @@ import static org.mockito.Mockito.*;
 class AccountAssetsTests {
     @Test void listExcludesPendingBuyReservationsFromAvailableCash() {
         var user = users.save(new User("사용가능 현금"));
-        var first = accounts.save(new Account(user, "첫 계좌", 1000000));
-        var second = accounts.save(new Account(user, "둘째 계좌", 1000000));
+        var first = accounts.save(new Account(user, "첫 계좌", 1000000, false));
+        var second = accounts.save(new Account(user, "둘째 계좌", 1000000, false));
         var now = java.time.Instant.now();
         orders.save(Order.pendingLimit(first, "005930", Order.Side.BUY, 2, 100000,
                 Order.Source.USER, null, now));
@@ -50,8 +50,8 @@ class AccountAssetsTests {
 
     @Test void evaluatesEveryHoldingAndSeparatesAccounts() {
         var user = users.save(new User("평가 테스트"));
-        var first = accounts.save(new Account(user, "첫 계좌", 1000000));
-        var second = accounts.save(new Account(user, "둘째 계좌", 1000000));
+        var first = accounts.save(new Account(user, "첫 계좌", 1000000, false));
+        var second = accounts.save(new Account(user, "둘째 계좌", 1000000, false));
         first.changeCash(-300000);
         second.changeCash(-100000);
         holdings.save(new Holding(first, "005930", 2, new BigDecimal("200000")));
@@ -85,7 +85,7 @@ class AccountAssetsTests {
 
     @Test void unavailablePriceFailsInsteadOfReturningPartialAssets() {
         var user = users.save(new User("실패 계좌"));
-        var account = accounts.save(new Account(user, "계좌", 1000000));
+        var account = accounts.save(new Account(user, "계좌", 1000000, false));
         holdings.save(new Holding(account, "005930", 1, new BigDecimal("100000")));
         when(market.currentPrice("005930")).thenThrow(new IllegalStateException("unavailable"));
         assertThatThrownBy(() -> service.get(user.getId(), account.getId()))

@@ -353,9 +353,9 @@ class AccountControllerTests {
                 .andExpect(status().isUnauthorized());
     }
 
-    // [계좌 목록 수정 테스트] 본인 활성 계좌는 유형·대결 상태와 무관하게 포함하고, 타 회원·비활성 계좌는 제외한다.
+    // [계좌 목록 수정 테스트] 대결 상태와 무관하게 본인 활성 비AI 계좌만 포함한다.
     @Test
-    void accountListIncludesAllOwnedActiveAccountsIncludingDuelAi() throws Exception {
+    void accountListIncludesOnlyOwnedActiveNonAiAccountsRegardlessOfDuelState() throws Exception {
         var user = users.save(new User("전체 계좌 조회"));
         var other = users.save(new User("다른 회원"));
         var manual = accounts.save(new com.stock_spoon.river_be.account.entity.Account(user, "일반", 1000000, false));
@@ -389,19 +389,28 @@ class AccountControllerTests {
             em.clear();
             mvc.perform(get("/api/v1/users/me/accounts").cookie(authCookie(user)))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.length()").value(4))
+                    .andExpect(jsonPath("$.length()").value(2))
                     .andExpect(jsonPath("$[0].account_id").value(manual.getId()))
-                    .andExpect(jsonPath("$[1].account_id").value(ai.getId()))
-                    .andExpect(jsonPath("$[2].account_id").value(duelUser.getId()))
-                    .andExpect(jsonPath("$[3].account_id").value(duelAi.getId()))
-                    .andExpect(jsonPath("$[3].is_duel_account").value(true))
-                    .andExpect(jsonPath("$[3].total_assets").value(1000000));
+                    .andExpect(jsonPath("$[0].is_duel_account").value(false))
+                    .andExpect(jsonPath("$[1].account_id").value(duelUser.getId()))
+                    .andExpect(jsonPath("$[1].is_duel_account").value(true))
+                    .andExpect(jsonPath("$[1].total_assets").value(1000000));
         }
         em.createNativeQuery("update accounts set is_active=false where user_id=:userId")
                 .setParameter("userId", user.getId()).executeUpdate();
         em.clear();
         mvc.perform(get("/api/v1/users/me/accounts").cookie(authCookie(user)))
                 .andExpect(status().isOk()).andExpect(jsonPath("$").isEmpty());
+    }
+
+    @Test
+    void accountListIsEmptyWhenTheUserHasOnlyActiveAiAccounts() throws Exception {
+        var user = users.save(new User("AI 계좌만 보유"));
+        accounts.save(new com.stock_spoon.river_be.account.entity.Account(user, "AI", 1000000, true));
+
+        mvc.perform(get("/api/v1/users/me/accounts").cookie(authCookie(user)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isEmpty());
     }
 
     private org.springframework.test.web.servlet.ResultActions onboard(User user, long initialCapital)

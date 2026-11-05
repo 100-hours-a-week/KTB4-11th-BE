@@ -39,10 +39,10 @@ public interface AccountRepository extends JpaRepository<Account, Long> {
     // 과거 주문·매매 기록 조회는 활성 여부와 관계없이 소유권만 검사한다.
     Optional<Account> findByIdAndUserId(Long accountId, Long userId);
 
-    // [계좌 목록 수정] 대결 AI 계좌도 포함해 본인의 모든 활성 계좌를 생성 시각·ID 순으로 반환한다.
+    // [계좌 목록 수정] 일반·대결 AI 계좌를 제외하고 본인의 활성 비AI 계좌만 반환한다.
     @Query("select a from Account a where a.user.id = :userId and a.active = true "
-            + "order by a.createdAt, a.id")
-    List<Account> findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(Long userId);
+            + "and a.aiManaged = false order by a.createdAt, a.id")
+    List<Account> findAllByUserIdAndActiveTrueAndAiManagedFalseOrderByCreatedAtAscIdAsc(Long userId);
 
     // 일반 v1 AI 계좌는 유지한다. 대결 계좌는 진행 중이고 기간 안인 경우에만 운용 대상으로 공개한다.
     @Query("select a from Account a join fetch a.user where a.active = true and a.aiManaged = true "

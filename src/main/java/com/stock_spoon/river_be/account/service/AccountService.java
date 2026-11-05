@@ -125,7 +125,7 @@ public class AccountService {
     public List<AccountListResponse> list(long userId) {
         var availableCash = new HashMap<Long, Long>();
         var snapshot = read.execute(status -> {
-            var rows = accountRepository.findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(userId);
+            var rows = accountRepository.findAllByUserIdAndActiveTrueAndAiManagedFalseOrderByCreatedAtAscIdAsc(userId);
             for (var account : rows) {
                 availableCash.put(account.getId(), orderService.availableCash(account.getId()));
             }

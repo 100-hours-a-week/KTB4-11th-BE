@@ -33,6 +33,7 @@ public class CompetitionDetailResponse {
 
     @Getter
     @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.ALWAYS)
     public static class ParticipantItem {
         @JsonProperty("participant_id")
         private Long participantId;
@@ -42,7 +43,23 @@ public class CompetitionDetailResponse {
         private String participantType;
         @JsonProperty("display_name")
         private String displayName;
+        @JsonProperty("executed_trade_count")
+        private long executedTradeCount;
+        private Strategy strategy;
+        @JsonProperty("top_return_holding")
+        private TopReturnHolding topReturnHolding;
     }
+
+    public record Strategy(
+            @JsonProperty("risk_level") int riskLevel,
+            @JsonProperty("preferred_themes") List<String> preferredThemes,
+            @JsonProperty("excluded_themes") List<String> excludedThemes,
+            @JsonProperty("additional_request") String additionalRequest) {}
+
+    public record TopReturnHolding(
+            @JsonProperty("stock_code") String stockCode,
+            @JsonProperty("stock_name") String stockName,
+            @JsonProperty("return_percent") BigDecimal returnPercent) {}
 
     @Getter
     @AllArgsConstructor

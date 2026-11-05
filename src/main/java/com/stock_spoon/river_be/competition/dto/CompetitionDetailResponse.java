@@ -32,7 +32,6 @@ public class CompetitionDetailResponse {
     private List<DailyPerformanceItem> dailyPerformances;
 
     @Getter
-    @AllArgsConstructor
     @JsonInclude(JsonInclude.Include.ALWAYS)
     public static class ParticipantItem {
         @JsonProperty("participant_id")
@@ -48,6 +47,20 @@ public class CompetitionDetailResponse {
         private Strategy strategy;
         @JsonProperty("top_return_holding")
         private TopReturnHolding topReturnHolding;
+        @lombok.Setter @JsonProperty("total_assets")
+        private Long totalAssets;
+        @lombok.Setter @JsonProperty("cumulative_return_percent")
+        private BigDecimal cumulativeReturnPercent;
+        @lombok.Setter @JsonProperty("daily_performances")
+        private List<DailyPerformanceItem> dailyPerformances;
+        public ParticipantItem(Long participantId, Long accountId, String participantType, String displayName,
+                long executedTradeCount, Strategy strategy, TopReturnHolding topReturnHolding) {
+            this.participantId = participantId; this.accountId = accountId; this.participantType = participantType;
+            this.displayName = displayName; this.executedTradeCount = executedTradeCount;
+            this.strategy = strategy; this.topReturnHolding = topReturnHolding;
+        }
+
+
     }
 
     public record Strategy(

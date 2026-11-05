@@ -42,6 +42,7 @@ public class CompetitionService {
     private final CompetitionAgentCreationService agentCreation;
     private final jakarta.validation.Validator validator;
     private final CompetitionDetailService detailService;
+    private final com.stock_spoon.river_be.competition.repository.CompetitionAgentRepository agentSettings;
 
     @Transactional(readOnly = true) // 이름의 사용 가능 여부만 확인한다.
     public CompetitionNameAvailabilityResponse checkNameAvailability(Long userId, String competitionName) {
@@ -70,6 +71,8 @@ public class CompetitionService {
         if (competition.getState() != Competition.State.COMPLETED) {
             throw new CompetitionException(HttpStatus.CONFLICT, "COMPETITION_NOT_COMPLETED", "아직 완료되지 않은 대결입니다.");
         }
+
+        if (competition.getCompetitionType() == Competition.Type.AI_VS_AI) return aiResult(competition);
 
         // 2. 참가자 저장 순서와 관계없이 계좌의 AI 운용 여부로 사용자·AI를 구분한다.
         var links = participants.findAllByCompetitionIdOrderByIdAsc(competitionId);
@@ -103,6 +106,36 @@ public class CompetitionService {
                 competition.getStartDate(), competition.getEndDate(), null,
                 competition.getWinner().name().toLowerCase(Locale.ROOT), user.getFinalReturnPercent(),
                 ai.getFinalReturnPercent(), participantItems, history);
+    }
+
+    private CompetitionResultResponse aiResult(Competition competition) {
+        var links = participants.findAllByCompetitionIdOrderByIdAsc(competition.getId());
+        if (!CompetitionParticipants.valid(competition, links) || competition.getWinner() == null
+                || links.stream().anyMatch(p -> p.getFinalAssetValue() == null || p.getFinalReturnPercent() == null)) {
+            throw resultUnavailable();
+        }
+        var settings = agentSettings.findAllByParticipantCompetitionIdOrderByPositionAsc(competition.getId());
+        var positions = new java.util.HashMap<Long, Integer>();
+        for (var setting : settings) positions.put(setting.getParticipant().getId(), setting.getPosition());
+        if (!CompetitionParticipants.validStrategies(links, settings)) throw resultUnavailable();
+        var ordered = links.stream().sorted(java.util.Comparator.comparingInt(p -> positions.get(p.getId()))).toList();
+        var history = dailyPerformances.findAllByParticipantCompetitionId(competition.getId());
+        var items = ordered.stream().map(p -> {
+            var item = new CompetitionResultResponse.ParticipantItem(p.getId(), "ai", p.getAccount().getId(),
+                    "AI " + (positions.get(p.getId()) + 1));
+            item.setFinalAssetValue(p.getFinalAssetValue());
+            item.setFinalReturnPercent(p.getFinalReturnPercent());
+            item.setRank(CompetitionParticipants.rank(p, ordered));
+            item.setDailyPerformances(history.stream().filter(r -> r.getParticipant().getId().equals(p.getId()))
+                    .sorted(java.util.Comparator.comparing(com.stock_spoon.river_be.competition.entity.CompetitionDailyPerformance::getRecordDate))
+                    .map(r -> new CompetitionDetailResponse.DailyPerformanceItem(r.getRecordDate(), r.getCumulativeReturnPercent())).toList());
+            return item;
+        }).toList();
+        var response = new CompetitionResultResponse(competition.getId(), competition.getCompetitionName(), "ai_vs_ai", "completed",
+                competition.getStartDate(), competition.getEndDate(), null, competition.getWinner().name().toLowerCase(Locale.ROOT),
+                null, null, items, java.util.List.of());
+        response.setWinnerParticipantIds(items.stream().filter(p -> p.getRank() == 1).map(CompetitionResultResponse.ParticipantItem::getParticipantId).toList());
+        return response;
     }
 
     private CompetitionException resultUnavailable() {

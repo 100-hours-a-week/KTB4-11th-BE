@@ -23,6 +23,7 @@ public class CompetitionDailyPerformanceService {
     private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
     private final CompetitionRepository competitions;
     private final CompetitionParticipantRepository participants;
+    private final com.stock_spoon.river_be.competition.repository.CompetitionAgentRepository agents;
     private final CompetitionDailyPerformanceRepository performances;
     private final AccountRepository accounts;
     private final ExecutionRepository executions;
@@ -47,8 +48,10 @@ public class CompetitionDailyPerformanceService {
         }
 
         var links = participants.findAllByCompetitionIdOrderByIdAsc(competitionId);
-        if (links.size() != 2 || links.stream().filter(p -> p.getAccount().isAiManaged()).count() != 1) {
-            throw new IllegalStateException("사용자와 AI 참가자를 확인할 수 없습니다.");
+        CompetitionParticipants.requireValid(competition, links);
+        if (competition.getCompetitionType() == Competition.Type.AI_VS_AI
+                && !CompetitionParticipants.validStrategies(links, agents.findAllByParticipantCompetitionIdOrderByPositionAsc(competitionId))) {
+            throw new IllegalStateException("AI 참가자의 전략 연결을 확인할 수 없습니다.");
         }
         // {참가자 ID: 이미 저장된 날짜들}. 양쪽 모두 기록된 날짜는 다시 조회·평가하지 않는다.
         var recorded = new HashMap<Long, Set<LocalDate>>();

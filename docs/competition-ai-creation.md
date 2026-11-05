@@ -107,9 +107,9 @@ AI 간 대결이면 Service가 저장한 Competition과 요청의 agents를 내�
 | 409 | ONBOARDING_REQUIRED / DUPLICATE_ACCOUNT_NAME | 온보딩 미완료 / 기존 본인 계좌·대결명 중복 |
 | 401/403 | 기존 보안 오류 | 미인증 / CSRF 실패 |
 
-생성·전략 저장만 구현했다. AI 간 대결은 장중에도 READY를 유지하고 시작 스케줄러에서 제외하며 AI 운용 대상 계좌 조회에도 노출되지 않는다. Entity.start도 차단한다. 다수 AI의 운용·일별 기록·정산·결과를 구현한 뒤 시작 제한을 해제해야 한다.
+생성 시 AI 간 대결은 장중에도 READY를 유지하고 시작 스케줄러에서 제외하며 Entity.start도 차단한다. 새 전략 SQS 연동·실제 시작 활성화는 후속 범위다.
 
-상세 API는 AI_VS_AI 참가자별 전략·매매 요약을 지원한다([계약과 호출 흐름](competition-detail-summary.md)). 취소 API는 소유자의 AI_VS_AI 대결에 409 `COMPETITION_TYPE_NOT_SUPPORTED`를 반환한다. 기존 상세·취소의 사용자 대 AI 처리에는 적용하지 않는다. 결과 API는 완료 전이므로 기존 409 `COMPETITION_NOT_COMPLETED`다. AI 간 결과·대표 수익률·리포트 계약은 후속 범위다.
+상세의 참가자별 자산·수익률·그래프, 다수 AI 일별 성과·정산·결과·취소는 [운용 확장 계약](competition-ai-operation.md)을 참고한다. 생성 요청과 성공 응답은 그대로다. 결과는 완료 전 기존 409 `COMPETITION_NOT_COMPLETED`를 반환한다. 다수 AI 리포트 계약은 후속 범위다.
 
 ## FE 연동 변경
 

@@ -60,11 +60,7 @@ public class CompetitionCancellationService {
                         "COMPETITION_ALREADY_COMPLETED", "이미 완료된 대결은 취소할 수 없습니다.");
             }
             var links = participants.findAllByCompetitionIdOrderByIdAsc(competitionId);
-            if (competition.getCompetitionType() == Competition.Type.AI_VS_AI) {
-                throw new CompetitionException(HttpStatus.CONFLICT, "COMPETITION_TYPE_NOT_SUPPORTED",
-                        "AI 간 대결의 취소는 아직 지원하지 않습니다.");
-            }
-            if (links.size() != 2 || links.stream().filter(p -> p.getAccount().isAiManaged()).count() != 1) {
+            if (!CompetitionParticipants.valid(competition, links)) {
                 throw new CompetitionException(HttpStatus.INTERNAL_SERVER_ERROR,
                         "INVALID_COMPETITION_PARTICIPANTS", "대결 참가자 정보를 확인할 수 없습니다.");
             }

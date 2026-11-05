@@ -43,6 +43,10 @@ class CompetitionDetailTests {
     @Autowired JwtTokenProvider tokens;
     @Autowired WebApplicationContext context;
     @MockitoBean KiwoomMarketClient market;
+    @MockitoBean com.stock_spoon.river_be.market.RedisMarketPrice prices;
+    @Autowired com.stock_spoon.river_be.competition.repository.CompetitionAgentRepository agents;
+    @Autowired com.stock_spoon.river_be.holding.repository.HoldingRepository holdings;
+    @Autowired com.stock_spoon.river_be.order.repository.OrderRepository orders;
     @MockitoSpyBean CompetitionTradingHours hours;
     private MockMvc mvc;
     private Competition competition;
@@ -162,6 +166,118 @@ class CompetitionDetailTests {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("COMPETITION_NOT_FOUND"));
         verifyNoInteractions(market);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {2, 3, 4})
+    void aiReadyDetailReturnsStrategiesInSettingOrder(int count) throws Exception {
+        competition = competitions.save(new Competition(user, "AI 비교", Competition.Type.AI_VS_AI,
+                LocalDate.of(2026, 10, 16), LocalDate.of(2026, 10, 23), 3_000_000, count));
+        for (int position = count - 1; position >= 0; position--) {
+            var link = participants.save(new CompetitionParticipant(competition,
+                    accounts.save(new Account(user, "AI " + position, 3_000_000, true))));
+            agents.save(new com.stock_spoon.river_be.competition.entity.CompetitionAgent(link, position,
+                    position + 1, java.util.List.of("테마" + position), java.util.List.of(), "요청" + position));
+        }
+        var result = mvc.perform(get(path()).cookie(auth(user))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.state").value("ready"))
+                .andExpect(jsonPath("$.cumulative_return_percent").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.daily_performances").isEmpty())
+                .andExpect(jsonPath("$.participants.length()").value(count));
+        for (int i = 0; i < count; i++) {
+            result.andExpect(jsonPath("$.participants[" + i + "].display_name").value("AI " + (i + 1)))
+                    .andExpect(jsonPath("$.participants[" + i + "].strategy.risk_level").value(i + 1))
+                    .andExpect(jsonPath("$.participants[" + i + "].strategy.preferred_themes[0]").value("테마" + i))
+                    .andExpect(jsonPath("$.participants[" + i + "].strategy.additional_request").value("요청" + i))
+                    .andExpect(jsonPath("$.participants[" + i + "].executed_trade_count").value(0))
+                    .andExpect(jsonPath("$.participants[" + i + "].top_return_holding").value(org.hamcrest.Matchers.nullValue()));
+        }
+        verifyNoInteractions(market, prices);
+        var other = users.save(new User("다른" + UUID.randomUUID().toString().substring(0, 5)));
+        mvc.perform(get(path()).cookie(auth(other))).andExpect(status().isNotFound());
+        verifyNoInteractions(market, prices);
+    }
+
+    @Test
+    void countsCompletedOrdersAndChoosesBestHoldingPerAccountOutsideTransaction() throws Exception {
+        var account = aiParticipant.getAccount();
+        var now = java.time.Instant.parse("2026-10-16T01:00:00Z");
+        var executed = com.stock_spoon.river_be.order.entity.Order.pendingLimit(account, "000660",
+                com.stock_spoon.river_be.order.entity.Order.Side.BUY, 10, 100,
+                com.stock_spoon.river_be.order.entity.Order.Source.AI, null, now);
+        executed.execute(); orders.save(executed);
+        orders.save(com.stock_spoon.river_be.order.entity.Order.pendingLimit(account, "000660",
+                com.stock_spoon.river_be.order.entity.Order.Side.BUY, 10, 100,
+                com.stock_spoon.river_be.order.entity.Order.Source.AI, null, now));
+        var cancelled = com.stock_spoon.river_be.order.entity.Order.pendingLimit(account, "000660",
+                com.stock_spoon.river_be.order.entity.Order.Side.SELL, 10, 100,
+                com.stock_spoon.river_be.order.entity.Order.Source.AI, null, now);
+        cancelled.cancel(now); orders.save(cancelled);
+        holdings.save(new com.stock_spoon.river_be.holding.entity.Holding(account, "005930", 10, new java.math.BigDecimal("1000")));
+        holdings.save(new com.stock_spoon.river_be.holding.entity.Holding(account, "000660", 10, new java.math.BigDecimal("1000")));
+        holdings.save(new com.stock_spoon.river_be.holding.entity.Holding(userParticipant.getAccount(), "000660", 10, new java.math.BigDecimal("500")));
+        when(prices.currentPrice(anyString())).thenAnswer(call -> {
+            assertThat(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            return 90L;
+        });
+        when(market.stockDetails("000660")).thenReturn(new KiwoomMarketClient.StockDetails("000660", "SK하이닉스", "반도체"));
+        mvc.perform(get(path()).cookie(auth(user))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.participants[0].executed_trade_count").value(0))
+                .andExpect(jsonPath("$.participants[0].strategy").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.participants[0].top_return_holding.return_percent").value(80))
+                .andExpect(jsonPath("$.participants[1].executed_trade_count").value(1))
+                .andExpect(jsonPath("$.participants[1].top_return_holding.stock_code").value("000660"))
+                .andExpect(jsonPath("$.participants[1].top_return_holding.stock_name").value("SK하이닉스"))
+                .andExpect(jsonPath("$.participants[1].top_return_holding.return_percent").value(-10));
+        verify(prices, times(1)).currentPrice("000660");
+        verify(market, times(1)).stockDetails("000660");
+        verify(market, never()).stockDetails("005930");
+    }
+
+    @Test
+    void priceFailureIs503RatherThanEmptyHolding() throws Exception {
+        holdings.save(new com.stock_spoon.river_be.holding.entity.Holding(aiParticipant.getAccount(), "000660", 10,
+                new java.math.BigDecimal("1000")));
+        when(prices.currentPrice("000660")).thenThrow(new IllegalStateException("unavailable"));
+        mvc.perform(get(path()).cookie(auth(user))).andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("HOLDINGS_DATA_UNAVAILABLE"));
+        verifyNoInteractions(market);
+    }
+
+    @Test
+    void missingStockNameIs503RatherThanInventedName() throws Exception {
+        holdings.save(new com.stock_spoon.river_be.holding.entity.Holding(aiParticipant.getAccount(), "000660", 10,
+                new java.math.BigDecimal("1000")));
+        when(prices.currentPrice("000660")).thenReturn(110L);
+        when(market.stockDetails("000660")).thenThrow(new IllegalStateException("unavailable"));
+        mvc.perform(get(path()).cookie(auth(user))).andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("HOLDINGS_DATA_UNAVAILABLE"));
+    }
+
+    @Test
+    void ranksBeforeRoundingAndRejectsInvalidHoldingData() throws Exception {
+        var account = aiParticipant.getAccount();
+        var first = holdings.save(new com.stock_spoon.river_be.holding.entity.Holding(account, "000660", 1, new java.math.BigDecimal("1000000.00")));
+        holdings.save(new com.stock_spoon.river_be.holding.entity.Holding(account, "005930", 1, new java.math.BigDecimal("999999.99")));
+        when(prices.currentPrice(anyString())).thenReturn(1000000L);
+        when(market.stockDetails("005930")).thenReturn(new KiwoomMarketClient.StockDetails("005930", "삼성전자", "반도체"));
+        mvc.perform(get(path()).cookie(auth(user))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.participants[1].top_return_holding.stock_code").value("005930"));
+        org.springframework.test.util.ReflectionTestUtils.setField(first, "quantity", 0L);
+        holdings.save(first);
+        mvc.perform(get(path()).cookie(auth(user))).andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.code").value("INVALID_HOLDINGS_DATA"));
+    }
+
+    @Test
+    void rejectsAiCompetitionWithMissingStrategies() throws Exception {
+        competition = competitions.save(new Competition(user, "누락 설정", Competition.Type.AI_VS_AI,
+                LocalDate.of(2026, 10, 16), LocalDate.of(2026, 10, 23), 3_000_000, 2));
+        for (int i = 0; i < 2; i++) participants.save(new CompetitionParticipant(competition,
+                accounts.save(new Account(user, "누락 AI " + i, 3_000_000, true))));
+        mvc.perform(get(path()).cookie(auth(user))).andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.code").value("INVALID_COMPETITION_PARTICIPANTS"));
+        verifyNoInteractions(market, prices);
     }
 
     private String path() { return "/api/v2/users/me/competitions/" + competition.getId(); }

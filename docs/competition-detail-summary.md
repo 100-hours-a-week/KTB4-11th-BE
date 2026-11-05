@@ -18,12 +18,67 @@ AI 간 대결은 설정 순서대로 AI 1~AI N을 반환한다. 기존 사용자
 
 ## 호출 흐름
 
-CompetitionController.getCompetitionDetail(jwt, competitionId)
-→ CompetitionService.getCompetitionDetail(userId, competitionId)
-→ CompetitionDetailService.get(userId, competitionId)
-→ 짧은 읽기 트랜잭션: 소유권·참가자·설정 검증, 주문 일괄 집계, 보유분·사용자 일별 기록을 값 객체로 복사
-→ 트랜잭션 종료
-→ Redis 현재가 평가·최고 종목 선택·종목명 조회
-→ 참가자별 DTO와 기존 공통 필드 조립
+아래 패키지명은 `com.stock_spoon.river_be`를 기준으로 한다.
+
+```text
+GET /api/v2/users/me/competitions/{competitionId} (본문 없음)
+  → competition.controller.CompetitionController.getCompetitionDetail(jwt, competitionId)
+    → JWT subject를 Long userId로 변환
+  → competition.service.CompetitionService.getCompetitionDetail(userId, competitionId)
+  → competition.service.CompetitionDetailService.get(userId, competitionId)
+    → read.execute(...): 읽기 전용 트랜잭션 시작
+      → CompetitionDetailService.snapshot(userId, competitionId)
+        → competition.repository.CompetitionRepository.findByIdAndUserId(competitionId, userId)
+          → 없거나 타인 소유: 404 COMPETITION_NOT_FOUND
+        → competition.repository.CompetitionParticipantRepository
+            .findAllByCompetitionIdOrderByIdAsc(competitionId)
+        → competition.repository.CompetitionAgentRepository
+            .findAllByParticipantCompetitionIdOrderByPositionAsc(competitionId)
+        → 설정을 참가자 ID별 Strategy와 순서로 복사
+        → 대결 유형별 참가자 수·AI 여부·설정 순서 검증
+          → 잘못된 구성: 500 INVALID_COMPETITION_PARTICIPANTS
+          → AI 간 대결: 설정 순서로 참가자 정렬
+        → order.repository.OrderRepository.countByAccountsAndStatus(accountIds, EXECUTED)
+        → holding.repository.HoldingRepository.findAllByAccountIds(accountIds)
+        → 계좌별 횟수와 보유분을 Participant·Owned 값 객체로 복사
+        → 사용자 vs AI인 경우에만
+          → competition.repository.CompetitionDailyPerformanceRepository
+              .findAllByParticipantIdOrderByRecordDateAsc(userParticipantId)
+          → DailyPerformanceItem 목록과 마지막 확정 수익률 구성
+        → CompetitionTradingHours.now(): 종료·취소 여부와 한국 날짜로 d_day 계산
+        → Snapshot 반환
+    → 읽기 전용 트랜잭션 종료
+    → 참가자마다 CompetitionDetailService.topHolding(owned, priceCache, nameCache)
+      → 수량·취득원가 검증: 실패 시 500 INVALID_HOLDINGS_DATA
+      → market.RedisMarketPrice.currentPrice(stockCode): 요청 내 종목별 가격 재사용
+      → 보유분 평가 수익률 계산·최고 종목 선택
+        → 미보유: null
+      → market.kiwoom.KiwoomMarketClient.stockDetails(stockCode).stockName()
+        → 선택된 종목 이름도 요청 안에서 재사용
+      → TopReturnHolding 반환
+      → 시세·종목명 조회 실패: 503 HOLDINGS_DATA_UNAVAILABLE
+    → ParticipantItem 목록과 CompetitionDetailResponse 구성
+  → Controller가 HTTP 200과 JSON 반환
+
+CompetitionException 발생 시
+  → competition.exception.CompetitionExceptionHandler.handle(error)
+  → 예외의 HTTP 상태와 {code, message} 반환
+```
+
+## 자연어 설명
+
+대결 상세 GET 요청이 들어오면 `competition.controller` 패키지의 `CompetitionController.getCompetitionDetail(jwt, competitionId)`가 호출된다. 인증된 사용자의 JWT는 `jwt`, URL의 대결 ID는 `competitionId` 인자로 전달되며 요청 본문은 받지 않는다. 컨트롤러는 `jwt.getSubject()`를 `Long` 사용자 ID로 변환해 `CompetitionService.getCompetitionDetail(userId, competitionId)`에 넘긴다. 이 메서드는 같은 두 값을 `CompetitionDetailService.get(userId, competitionId)`로 전달한다.
+
+`CompetitionDetailService.get()`은 읽기 전용 `TransactionTemplate`인 `read.execute()` 안에서 `snapshot(userId, competitionId)`을 실행한다. `snapshot()`은 `CompetitionRepository.findByIdAndUserId(competitionId, userId)`로 본인 소유 대결부터 찾는다. 존재하지 않거나 타인 소유라면 404로 종료하므로 참가 계좌의 시세를 조회하지 않는다. 소유권이 확인되면 `CompetitionParticipantRepository.findAllByCompetitionIdOrderByIdAsc()`로 참가자와 연결 계좌를 읽고, `CompetitionAgentRepository.findAllByParticipantCompetitionIdOrderByPositionAsc()`로 저장된 전략을 읽는다. 투자 성향·관심 테마·제외 테마·추가 요청은 참가자 ID별 `Strategy`로 복사한다.
+
+이어서 대결 유형에 맞는 참가자 구성을 검사한다. 사용자 vs AI는 사용자 1명과 AI 1명이어야 한다. AI 간 대결은 설정한 AI 수와 실제 참가자 수가 일치하고, 전원이 AI이며, 각 참가자의 전략과 0부터 N-1까지의 설정 순서가 있어야 한다. 잘못된 구성은 `INVALID_COMPETITION_PARTICIPANTS`로 거절한다. 정상적인 AI 간 대결이면 설정 순서로 참가자를 정렬하고 화면 이름을 `AI 1`부터 부여한다.
+
+각 참가자의 계좌 ID를 모아 `OrderRepository.countByAccountsAndStatus(accountIds, Order.Status.EXECUTED)`에 전달하면 계좌별 체결 완료 주문 수를 한 번에 얻는다. `HoldingRepository.findAllByAccountIds(accountIds)`에서는 보유 종목코드·수량·총 취득원가를 읽는다. 이 결과를 계좌 ID로 묶어 참가자별 `Participant`와 보유분별 `Owned` 값 객체에 넣는다. 주문이 없는 계좌의 횟수는 0이며, 저장된 전략이 없는 참가자의 전략은 null이다.
+
+사용자 vs AI일 때는 사용자 참가자 ID로 `CompetitionDailyPerformanceRepository.findAllByParticipantIdOrderByRecordDateAsc()`를 호출해 기존 일별 그래프와 마지막 확정 수익률을 구성한다. AI 간 대결에서는 이 사용자 전용 조회를 생략하고 그래프는 빈 배열, 상단 대표 수익률은 null로 둔다. 종료·취소 대결의 `d_day`는 null이며, 나머지는 `CompetitionTradingHours.now()`의 한국 날짜와 종료일 차이로 계산한다. 이 공통 정보와 참가자 목록을 `Snapshot`으로 반환하면 DB 읽기 트랜잭션이 끝난다.
+
+그다음 `get()`은 참가자별 `topHolding(owned, priceCache, nameCache)`을 호출한다. 이 메서드는 보유 수량과 원가를 검사하고, `RedisMarketPrice.currentPrice(stockCode)`로 읽은 현재가를 이용해 각 종목의 평가 수익률을 계산한다. 반올림 전 수익률이 가장 높은 종목을 선택하며 동률이면 종목코드가 작은 쪽을 고른다. 보유분이 없으면 null을 반환한다. 선택된 종목만 `KiwoomMarketClient.stockDetails(stockCode)`로 이름을 확인하고 `TopReturnHolding`을 만든다. 가격과 종목명은 요청별 맵에 보관해 여러 참가자가 같은 종목을 보유해도 재사용한다. 이 조회는 DB 트랜잭션이 끝난 뒤 수행한다.
+
+마지막으로 `get()`은 기존 참가자 식별 정보에 횟수·전략·최고 수익률 종목을 붙인 `ParticipantItem` 목록을 만들고, 공통 대결 정보와 합쳐 `CompetitionDetailResponse`를 반환한다. 서비스와 컨트롤러를 거쳐 HTTP 200 JSON으로 전달된다. 중간에 발생한 `CompetitionException`은 `competition.exception` 패키지의 `CompetitionExceptionHandler.handle(error)`가 받아 지정된 HTTP 상태와 `code`, `message`로 반환한다. 시세·종목명 실패는 503으로 전달하므로 미보유를 뜻하는 null과 구분된다.
 
 생성 API, DB 스키마, AI 실행·자동 시작·취소·결과 API는 이 변경에 포함하지 않는다. FE·AI 저장소는 변경하지 않는다. 스윙·모멘텀 같은 신규 전략 분류는 생성하지 않는다.

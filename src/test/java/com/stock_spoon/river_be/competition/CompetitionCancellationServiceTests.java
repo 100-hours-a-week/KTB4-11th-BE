@@ -42,7 +42,7 @@ class CompetitionCancellationServiceTests {
         completion.completeCompetition(fixture.competition().getId());
         assertThat(accounts.findById(fixture.mine().getId()).orElseThrow().isActive()).isFalse();
         assertThat(accounts.findById(fixture.ai().getId()).orElseThrow().isActive()).isFalse();
-        assertThat(accounts.findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(fixture.owner().getId())).isEmpty();
+        assertThat(accounts.findAllByUserIdAndActiveTrueAndAiManagedFalseOrderByCreatedAtAscIdAsc(fixture.owner().getId())).isEmpty();
         var result = competitionService.getCompetitionResult(fixture.owner().getId(), fixture.competition().getId());
         assertThat(result.getState()).isEqualTo("completed");
         assertThat(result.getWinner()).isEqualTo("draw");
@@ -175,7 +175,7 @@ class CompetitionCancellationServiceTests {
         assertThat(accounts.findById(aiAccount.getId()).orElseThrow().isActive()).isFalse();
         assertThat(accounts.findById(userAccount.getId()).orElseThrow().getCashBalance()).isEqualTo(10000000);
         assertThat(orders.findById(order.getId()).orElseThrow().getStatus()).isEqualTo(Order.Status.CANCELLED);
-        assertThat(accounts.findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(owner.getId())).isEmpty();
+        assertThat(accounts.findAllByUserIdAndActiveTrueAndAiManagedFalseOrderByCreatedAtAscIdAsc(owner.getId())).isEmpty();
         verify(requests, atLeastOnce()).cleanupInactiveAccount(userAccount.getId());
     }
 

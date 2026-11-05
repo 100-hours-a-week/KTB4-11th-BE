@@ -6,7 +6,7 @@ import com.stock_spoon.river_be.competition.entity.CompetitionMarketAnalysis;
 import com.stock_spoon.river_be.competition.entity.CompetitionJudgmentSummary;
 import com.stock_spoon.river_be.competition.exception.CompetitionException;
 import com.stock_spoon.river_be.competition.repository.*;
-import java.util.Locale;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -38,6 +38,8 @@ public class CompetitionReportService {
         for (var thought : request.getThoughts()) {
             summaries.save(new CompetitionJudgmentSummary(competition, thought.getTitle(), thought.getText()));
         }
+        // 본문 교체와 같은 트랜잭션에서 기록하므로 저장 실패 시 완료 표시도 롤백된다.
+        competition.markReportReady();
     }
 
     @Transactional(readOnly = true) // 저장된 내용만 조회하며 AI 생성 요청이나 데이터 변경은 하지 않는다.
@@ -47,6 +49,10 @@ public class CompetitionReportService {
                 .filter(c -> c.getUser().getId().equals(userId))
                 .orElseThrow(() -> new CompetitionException(HttpStatus.NOT_FOUND,
                         "COMPETITION_NOT_FOUND", "대결을 찾을 수 없습니다."));
+        if (!competition.isReportReady()) {
+            return new CompetitionReportResponse(competition.getId(), competition.getCompetitionName(),
+                    competition.getStartDate(), competition.getEndDate(), "pending", List.of(), List.of());
+        }
         var marketItems = analyses.findAllByCompetitionIdOrderByDateDescIdDesc(competitionId).stream()
                 .map(a -> new CompetitionReportResponse.MarketAnalysisItem(a.getId(), a.getDate(), a.getTitle(), a.getContent()))
                 .toList();
@@ -54,7 +60,7 @@ public class CompetitionReportService {
                 .map(s -> new CompetitionReportResponse.JudgmentSummaryItem(s.getTitle(), s.getContent())).toList();
         // 본문을 함께 반환하므로 FE는 추가 요청 없이 접기·펼치기를 처리할 수 있다.
         return new CompetitionReportResponse(competition.getId(), competition.getCompetitionName(),
-                competition.getStartDate(), competition.getEndDate(), competition.getState().name().toLowerCase(Locale.ROOT),
+                competition.getStartDate(), competition.getEndDate(), "completed",
                 marketItems, summaryItems);
     }
 }

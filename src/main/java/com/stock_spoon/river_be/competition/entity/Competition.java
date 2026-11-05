@@ -29,6 +29,14 @@ public class Competition {
     @Column(name = "completed_at")
     private Instant completedAt;
 
+    // 배열이 비어 있어도 리포트 저장이 정상 완료된 경우를 구분한다.
+    @Column(name = "report_ready", nullable = false)
+    private boolean reportReady;
+
+    public void markReportReady() {
+        this.reportReady = true;
+    }
+
     // 완료 대결의 전체 일별 기록을 확인한 뒤에만 true로 만든다. 기존 대결은 false로 복구 검사를 시작한다.
     @Column(name = "daily_performance_complete", nullable = false)
     private boolean dailyPerformanceComplete;

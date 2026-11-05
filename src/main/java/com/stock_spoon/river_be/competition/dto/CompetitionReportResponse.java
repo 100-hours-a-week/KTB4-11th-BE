@@ -17,7 +17,8 @@ public class CompetitionReportResponse {
     private LocalDate startDate;
     @JsonProperty("end_date")
     private LocalDate endDate;
-    private String state;
+    @JsonProperty("report_state")
+    private String reportState;
     @JsonProperty("market_analyses")
     private List<MarketAnalysisItem> marketAnalyses;
     @JsonProperty("judgment_summaries")

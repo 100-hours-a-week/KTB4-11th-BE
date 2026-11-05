@@ -1,5 +1,8 @@
 package com.stock_spoon.river_be.account.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 import com.stock_spoon.river_be.config.DbReadRetryable;
 import com.stock_spoon.river_be.config.DbWriteReplayBusinessCommand;
 import static com.stock_spoon.river_be.config.DbWriteReplayBusinessCommand.Type.*;
@@ -27,6 +30,7 @@ import com.stock_spoon.river_be.account.service.AccountService;
 import com.stock_spoon.river_be.account.service.AccountHoldingsService;
 import com.stock_spoon.river_be.account.dto.AccountHoldingsResponse;
 
+@Tag(name = "계좌")
 @RestController
 @RequestMapping("/api/v1/users/me/accounts")
 public class AccountController {
@@ -45,6 +49,7 @@ public class AccountController {
 
     // [계좌 비활성화 추가] 회원 ID는 인증된 JWT에서만 얻고 커밋 후 기존 명세의 200 응답을 반환한다.
     @org.springframework.web.bind.annotation.DeleteMapping("/{accountId}")
+    @Operation(summary = "계좌 삭제")
     public java.util.Map<String,String> delete(@AuthenticationPrincipal Jwt jwt,@PathVariable long accountId) {
         deletion.delete(Long.parseLong(jwt.getSubject()),accountId);
         return java.util.Map.of("message","delete_success");
@@ -53,6 +58,7 @@ public class AccountController {
     @PostMapping
     @DbWriteReplayBusinessCommand(ACCOUNT_CREATE)
     @ResponseStatus(HttpStatus.CREATED)
+    @Operation(summary = "계좌 생성")
     public AccountCreateResponse create(@AuthenticationPrincipal Jwt jwt,
             @Valid @RequestBody AccountCreateRequest request) {
         var result = service.create(Long.parseLong(jwt.getSubject()), request);
@@ -62,6 +68,7 @@ public class AccountController {
 
     @PatchMapping("/{accountId}")
     @DbWriteReplayBusinessCommand(ACCOUNT_RENAME)
+    @Operation(summary = "계좌명 수정")
     public AccountResponse rename(@AuthenticationPrincipal Jwt jwt,
             @PathVariable long accountId,
             @RequestBody AccountNameUpdateRequest request) {
@@ -72,12 +79,14 @@ public class AccountController {
 
     @DbReadRetryable
     @GetMapping
+    @Operation(summary = "계좌 목록 조회")
     public List<AccountListResponse> list(@AuthenticationPrincipal Jwt jwt) {
         return service.list(Long.parseLong(jwt.getSubject()));
     }
 
     @DbReadRetryable
     @GetMapping("/{accountId}")
+    @Operation(summary = "계좌 상세 조회")
     public AccountDetailResponse get(@AuthenticationPrincipal Jwt jwt,
             @PathVariable long accountId) {
         return service.get(Long.parseLong(jwt.getSubject()), accountId);
@@ -86,6 +95,7 @@ public class AccountController {
     // 홈은 limit=3, 전체 페이지는 limit 없이 호출한다. 정렬·계산·접근 검증은 서비스에서 처리한다.
     @DbReadRetryable
     @GetMapping("/{accountId}/holdings")
+    @Operation(summary = "보유 종목 조회")
     public AccountHoldingsResponse holdings(@AuthenticationPrincipal Jwt jwt,
             @PathVariable long accountId,
             @RequestParam(required = false) String sort,

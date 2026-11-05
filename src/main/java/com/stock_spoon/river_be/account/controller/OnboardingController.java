@@ -1,5 +1,8 @@
 package com.stock_spoon.river_be.account.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 import com.stock_spoon.river_be.account.dto.AccountResponse;
 import com.stock_spoon.river_be.account.dto.OnboardingRequest;
 import com.stock_spoon.river_be.account.service.AccountService;
@@ -13,6 +16,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+@Tag(name = "계좌")
 @RestController
 @RequestMapping("/api/v1/users/me")
 public class OnboardingController {
@@ -25,6 +29,7 @@ public class OnboardingController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
+    @Operation(summary = "계좌 온보딩")
     public AccountResponse onboard(@AuthenticationPrincipal Jwt jwt,
             @Valid @RequestBody OnboardingRequest request) {
         var result = service.onboard(Long.parseLong(jwt.getSubject()), request);

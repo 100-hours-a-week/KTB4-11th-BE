@@ -43,5 +43,6 @@ public class CompetitionCreateRequest {
     private Integer aiParticipantCount=1;
 
     @Size(min = 2, max = 4)
+    @io.swagger.v3.oas.annotations.media.Schema(description = "ai_vs_ai 대결의 AI 전략 목록. 생성 요청에 통합되어 있으며 별도 ai-settings API는 없습니다.")
     private List<@NotNull @Valid CompetitionAgentRequest> agents;
 }

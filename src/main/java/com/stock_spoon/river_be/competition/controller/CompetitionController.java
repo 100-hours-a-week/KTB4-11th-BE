@@ -1,5 +1,8 @@
 package com.stock_spoon.river_be.competition.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 import com.stock_spoon.river_be.config.DbReadRetryable;
 import com.stock_spoon.river_be.config.DbWriteReplayBusinessCommand;
 import static com.stock_spoon.river_be.config.DbWriteReplayBusinessCommand.Type.COMPETITION_CREATE;
@@ -32,6 +35,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.ResponseStatus;
 
+@Tag(name = "대결")
 @RestController // 요청을 처리하는 컨트롤러로 등록하고 반환 객체를 JSON 응답으로 변환한다.
 @RequestMapping("/api/v2/users/me/competitions") // 이 컨트롤러의 공통 요청 경로를 지정한다.
 @RequiredArgsConstructor
@@ -41,6 +45,7 @@ public class CompetitionController {
     private final CompetitionCancellationService cancellationService;
 
     @PostMapping("/{competitionId}/cancel") // 요청 본문 없이 URL의 대결을 취소한다.
+    @Operation(summary = "대결 취소")
     public CompetitionCancelResponse cancelCompetition(
             @AuthenticationPrincipal Jwt jwt, @PathVariable Long competitionId) {
         // 사용자 ID는 요청 JSON이 아니라 인증된 JWT에서 읽는다.
@@ -49,6 +54,7 @@ public class CompetitionController {
 
     @DbReadRetryable
     @GetMapping("/{competitionId}/result") // 완료된 대결의 최종 성적과 양측 비교 그래프를 조회한다.
+    @Operation(summary = "대결 결과 조회")
     public CompetitionResultResponse getCompetitionResult(@AuthenticationPrincipal Jwt jwt,
             @PathVariable Long competitionId) {
         return competitionService.getCompetitionResult(Long.parseLong(jwt.getSubject()), competitionId);
@@ -56,6 +62,7 @@ public class CompetitionController {
 
     @DbReadRetryable
     @GetMapping("/{competitionId}") // 대결 ID는 URL에서, 조회할 사용자 ID는 인증된 JWT에서 받는다.
+    @Operation(summary = "대결 상세 조회")
     public CompetitionDetailResponse getCompetitionDetail(@AuthenticationPrincipal Jwt jwt,
             @PathVariable Long competitionId) {
         return competitionService.getCompetitionDetail(Long.parseLong(jwt.getSubject()), competitionId);
@@ -63,6 +70,7 @@ public class CompetitionController {
 
     @DbReadRetryable
     @GetMapping // JWT의 사용자 ID로 본인의 대결만 조회한다.
+    @Operation(summary = "대결 목록 조회")
     public CompetitionListResponse listCompetitions(@AuthenticationPrincipal Jwt jwt,
             @RequestParam(required = false) String cursor,
             @RequestParam(required = false) Integer limit,
@@ -74,6 +82,7 @@ public class CompetitionController {
     @PostMapping // 공통 경로로 들어오는 POST 요청을 처리한다.
     @ResponseStatus(HttpStatus.CREATED) // 정상 반환 시 HTTP 상태 코드를 201 Created로 지정한다.
     @DbWriteReplayBusinessCommand(COMPETITION_CREATE)
+    @Operation(summary = "대결 생성 및 AI 전략 설정")
     public CompetitionCreateResponse createCompetition(
             @AuthenticationPrincipal Jwt jwt, // 인증된 사용자의 JWT를 주입한다. subject에서 사용자 ID를 읽을 수 있다.
             @Valid @RequestBody CompetitionCreateRequest request) { // JSON 요청 본문을 DTO로 변환한다.

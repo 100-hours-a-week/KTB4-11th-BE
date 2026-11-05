@@ -1,5 +1,8 @@
 package com.stock_spoon.river_be.competition.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 import com.stock_spoon.river_be.config.DbReadRetryable;
 import com.stock_spoon.river_be.competition.dto.CompetitionTradeHistoryResponse;
 import com.stock_spoon.river_be.competition.service.CompetitionTradeHistoryService;
@@ -8,6 +11,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
+@Tag(name = "대결")
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/v2/accounts/{accountId}/executions")
@@ -16,6 +20,7 @@ public class CompetitionTradeHistoryController {
 
     @DbReadRetryable
     @GetMapping
+    @Operation(summary = "대결 매매 내역 조회")
     public CompetitionTradeHistoryResponse list(@AuthenticationPrincipal Jwt jwt, @PathVariable long accountId,
             @RequestParam(required = false) String cursor, @RequestParam(required = false) Integer limit,
             @RequestParam(name = "order_side", required = false) String orderSide) {

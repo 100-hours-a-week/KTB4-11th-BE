@@ -15,15 +15,21 @@ import jakarta.validation.constraints.Size;
 // @JsonProperty는 stock_code 같은 JSON 이름을 stockCode 같은 Java 이름에 연결한다.
 // record는 request.stockCode(), request.quantity()처럼 값을 읽는 접근자를 제공한다.
 public record OrderCreateRequest(
+        @io.swagger.v3.oas.annotations.media.Schema(example = "005930")
         @JsonProperty("stock_code") @NotBlank @Pattern(regexp = "[0-9]{6}") String stockCode,
+        @io.swagger.v3.oas.annotations.media.Schema(allowableValues = {"buy", "sell"}, example = "buy")
         @JsonProperty("order_side") @NotBlank String orderSide,
+        @io.swagger.v3.oas.annotations.media.Schema(allowableValues = {"market", "limit"}, example = "limit")
         @JsonProperty("order_type") @NotBlank String orderType,
+        @io.swagger.v3.oas.annotations.media.Schema(description = "지정가 주문 가격", example = "70000")
         @JsonProperty("limit_price") Long limitPrice,
         @NotNull @Min(1) Long quantity,
         @Size(max = 100000) String reason,
         @JsonProperty("stock_name") @Pattern(regexp = "(?s).*[^\\p{javaWhitespace}].*") @Size(max = 255) String stockName,
         java.util.List<@NotNull @jakarta.validation.Valid ReportReasoning> reasoning,
+        @io.swagger.v3.oas.annotations.media.Schema(description = "매수 시 필수, 0~100", example = "20")
         @JsonProperty("holding_weight_limit_percent") Double holdingWeightLimitPercent,
+        @io.swagger.v3.oas.annotations.media.Schema(description = "매도 시 필수", example = "false")
         @JsonProperty("is_lower_triggered")
         @tools.jackson.databind.annotation.JsonDeserialize(using = StrictBoolean.class) Boolean isLowerTriggered,
         // AI 판단 근거의 원본 ID다. @Pattern은 null을 허용하고 전달된 값의 UUID 형식만 검사한다.

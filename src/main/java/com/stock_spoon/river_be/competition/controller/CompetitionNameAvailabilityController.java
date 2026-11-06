@@ -1,5 +1,8 @@
 package com.stock_spoon.river_be.competition.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 import com.stock_spoon.river_be.competition.dto.CompetitionNameAvailabilityResponse;
 import com.stock_spoon.river_be.competition.service.CompetitionService;
 import com.stock_spoon.river_be.config.DbReadRetryable;
@@ -10,6 +13,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+@Tag(name = "대결")
 @RestController // 반환 객체를 JSON 응답으로 변환한다.
 @RequiredArgsConstructor // final 필드인 서비스를 생성자로 주입받는다.
 public class CompetitionNameAvailabilityController {
@@ -17,6 +21,7 @@ public class CompetitionNameAvailabilityController {
 
     @DbReadRetryable
     @GetMapping("/api/v3/users/me/competitions/name-availability")
+    @Operation(summary = "대결명 사용 가능 여부 확인")
     public CompetitionNameAvailabilityResponse checkNameAvailability(
             @AuthenticationPrincipal Jwt jwt,
             @RequestParam("competition_name") String competitionName) {

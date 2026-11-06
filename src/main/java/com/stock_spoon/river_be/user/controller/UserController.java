@@ -1,5 +1,8 @@
 package com.stock_spoon.river_be.user.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 import com.stock_spoon.river_be.config.DbReadRetryable;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -9,6 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.stock_spoon.river_be.user.dto.UserMeResponse;
 import com.stock_spoon.river_be.user.service.UserService;
 
+@Tag(name = "사용자")
 @RestController
 @RequestMapping("/api/v1/users")
 public class UserController {
@@ -29,6 +33,7 @@ public class UserController {
     // [회원 탈퇴 추가] 본문의 회원 ID 대신 인증된 JWT subject를 사용하며, 삭제 성공 후에만 쿠키를 만료하고 204를 반환한다.
     @org.springframework.web.bind.annotation.DeleteMapping("/me")
     @org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.NO_CONTENT)
+    @Operation(summary = "회원 탈퇴")
     public void deleteMe(@AuthenticationPrincipal Jwt jwt, jakarta.servlet.http.HttpServletResponse response) {
         withdrawal.withdraw(Long.parseLong(jwt.getSubject()));
         cookies.clear(response);
@@ -36,6 +41,7 @@ public class UserController {
 
     @DbReadRetryable
     @GetMapping("/me")
+    @Operation(summary = "내 정보 조회")
     public UserMeResponse getMe(@AuthenticationPrincipal Jwt jwt) {
         return service.getMe(Long.parseLong(jwt.getSubject()));
     }

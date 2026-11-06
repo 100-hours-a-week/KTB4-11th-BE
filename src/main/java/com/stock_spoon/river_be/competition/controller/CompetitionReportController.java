@@ -1,5 +1,8 @@
 package com.stock_spoon.river_be.competition.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 import com.stock_spoon.river_be.config.DbReadRetryable;
 import com.stock_spoon.river_be.competition.dto.CompetitionReportResponse;
 import com.stock_spoon.river_be.competition.service.CompetitionReportService;
@@ -8,6 +11,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
+@Tag(name = "대결")
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/v2/users/me/competitions/{competitionId}/report")
@@ -16,6 +20,7 @@ public class CompetitionReportController {
 
     @DbReadRetryable
     @GetMapping
+    @Operation(summary = "대결 AI 리포트 조회")
     public CompetitionReportResponse get(@AuthenticationPrincipal Jwt jwt, @PathVariable long competitionId) {
         return reports.get(Long.parseLong(jwt.getSubject()), competitionId);
     }

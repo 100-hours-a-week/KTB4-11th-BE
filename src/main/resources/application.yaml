@@ -101,3 +101,17 @@ server:
   tomcat:
     mbeanregistry:
       enabled: true
+
+# Disable both endpoints in environments where API documentation is private.
+springdoc:
+  api-docs:
+    enabled: ${SWAGGER_ENABLED:true}
+  paths-to-match: /api/**
+  swagger-ui:
+    enabled: ${SWAGGER_ENABLED:true}
+    with-credentials: true
+    csrf:
+      enabled: true
+    disable-swagger-default-url: true
+    operations-sorter: alpha
+    tags-sorter: alpha

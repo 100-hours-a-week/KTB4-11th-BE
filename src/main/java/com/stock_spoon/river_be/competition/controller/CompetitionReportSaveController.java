@@ -1,5 +1,8 @@
 package com.stock_spoon.river_be.competition.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 import com.stock_spoon.river_be.competition.dto.CompetitionReportSaveRequest;
 import com.stock_spoon.river_be.competition.dto.CompetitionReportSaveResponse;
 import com.stock_spoon.river_be.competition.service.CompetitionReportService;
@@ -13,6 +16,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+@Tag(name = "AI 서버 전용")
 @RestController // 반환한 응답 객체를 JSON으로 변환한다.
 @RequestMapping("/api/v1/competitions")
 @RequiredArgsConstructor // 리포트 서비스를 생성자로 주입받는다.
@@ -20,6 +24,7 @@ public class CompetitionReportSaveController {
     private final CompetitionReportService reports;
 
     @PostMapping("/{competitionId}/report")
+    @Operation(summary = "대결 AI 리포트 저장", description = "AI 서버 전용 API입니다. 일반 사용자 토큰으로 호출할 수 없습니다.")
     public CompetitionReportSaveResponse save(@AuthenticationPrincipal Jwt jwt,
             @PathVariable long competitionId, @Valid @RequestBody CompetitionReportSaveRequest request) {
         // JWT의 사용자 ID와 URL의 대결 ID, 검증된 요청을 저장 서비스에 전달한다.

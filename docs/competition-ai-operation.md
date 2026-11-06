@@ -13,7 +13,7 @@ GET /api/v2/users/me/competitions/{competition_id}
 기존 participants 항목에 다음을 추가한다.
 
 - total_assets: 현재 현금 + 보유분 현재 평가액, 원 단위 정수
-- cumulative_return_percent: 초기금 대비 현재 수익률, 소수점 4자리 반올림
+- cumulative_return_percent: 초기금 대비 현재 수익률, 소수점 한 자리 HALF_UP 반올림
 - daily_performances: 해당 참가자의 날짜별 종가 기준 확정 수익률 배열
 
 예시 참가자:
@@ -33,11 +33,11 @@ GET /api/v2/users/me/competitions/{competition_id}
 }
 ```
 
-최상위 cumulative_return_percent와 daily_performances는 기존 사용자 기준이다. AI 간 대결에서는 각각 null, []를 유지하고 participants 내부 성적을 사용한다. 상세의 현재 평가액은 종료 후에도 시세에 따라 달라질 수 있으며 종료 확정 결과는 아래 result에서 조회한다.
+두 유형 모두 최상위 cumulative_return_percent와 daily_performances는 제거했다. 참가자 내부 성적과 그래프를 사용한다. 상세의 현재 평가액은 종료 후에도 시세에 따라 달라질 수 있으며 종료 확정 결과는 아래 result에서 조회한다.
 
 GET /api/v2/users/me/competitions/{competition_id}/result
 
-AI 간 대결에 winner_participant_ids를 추가하고 participants 각 항목에 final_asset_value, final_return_percent, rank, daily_performances를 제공한다. AI 표시는 생성 시 전략 순서를 유지한다. 공동 순위는 1,1,3 방식이다. 순위는 반올림된 수익률 대신 정확한 자산/초기금 비율로 비교한다. 기존 user_vs_ai의 필드와 의미는 유지한다. 기존 1:1 전용 user_final_return_percent, ai_final_return_percent는 AI 간 대결에서 null이고 최상위 daily_performances는 []다. AI 간 winner 문자열 ai/draw만으로 참가자를 식별하지 말고 winner_participant_ids를 사용한다.
+두 유형 모두 winner는 우승 참가자의 display_name 문자열이고, 공동 우승이면 "AI 1, AI 2" 또는 "나, AI"처럼 연결한다. winner_participant_ids에는 모든 우승 ID를 반환한다. participants 각 항목은 확정 자산·수익률·순위·일별 기록에 전략과 매매 횟수를 포함한다. 기존 user_final_return_percent, ai_final_return_percent, 최상위 daily_performances는 제거했다. 저장 전략이 없는 사용자 vs AI 참가자는 strategy=null이다. 현재·최종·일별·종목 수익률은 모두 응답에서 한 자리 HALF_UP이다. 순위는 정확한 자산/초기금 비율로 계산하고 공동 순위는 1,1,3을 유지한다. 상세·결과 예시와 전환 안내는 [통일 계약](competition-response-unification.md)을 참고한다.
 
 POST /api/v2/users/me/competitions/{competition_id}/cancel
 

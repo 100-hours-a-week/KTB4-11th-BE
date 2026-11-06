@@ -45,11 +45,11 @@ class CompetitionCancellationServiceTests {
         assertThat(accounts.findAllByUserIdAndActiveTrueAndAiManagedFalseOrderByCreatedAtAscIdAsc(fixture.owner().getId())).isEmpty();
         var result = competitionService.getCompetitionResult(fixture.owner().getId(), fixture.competition().getId());
         assertThat(result.getState()).isEqualTo("completed");
-        assertThat(result.getWinner()).isEqualTo("draw");
+        assertThat(result.getWinner()).isEqualTo("나, AI");
         assertThat(result.getParticipants()).hasSize(2);
-        assertThat(result.getDailyPerformances()).hasSize(1);
-        assertThat(result.getUserFinalReturnPercent()).isEqualByComparingTo(java.math.BigDecimal.ZERO);
-        assertThat(result.getAiFinalReturnPercent()).isEqualByComparingTo(java.math.BigDecimal.ZERO);
+        assertThat(result.getParticipants()).allSatisfy(p -> assertThat(p.getDailyPerformances()).hasSize(1));
+        assertThat(result.getParticipants().get(0).getFinalReturnPercent()).isEqualByComparingTo(java.math.BigDecimal.ZERO);
+        assertThat(result.getParticipants().get(1).getFinalReturnPercent()).isEqualByComparingTo(java.math.BigDecimal.ZERO);
     }
 
     @org.junit.jupiter.params.ParameterizedTest

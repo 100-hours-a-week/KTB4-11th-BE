@@ -84,7 +84,7 @@ class CompetitionDetailTests {
                 .andExpect(jsonPath("$.start_date").value("2026-10-12"))
                 .andExpect(jsonPath("$.end_date").value("2026-10-23"))
                 .andExpect(jsonPath("$.d_day").value(7))
-                .andExpect(jsonPath("$.cumulative_return_percent").value(2.0))
+                .andExpect(jsonPath("$.cumulative_return_percent").doesNotHaveJsonPath())
                 .andExpect(jsonPath("$.participants.length()").value(2))
                 .andExpect(jsonPath("$.participants[0].participant_id").value(userParticipant.getId().intValue()))
                 .andExpect(jsonPath("$.participants[0].account_id").value(userParticipant.getAccount().getId().intValue()))
@@ -94,11 +94,11 @@ class CompetitionDetailTests {
                 .andExpect(jsonPath("$.participants[1].participant_type").value("ai"))
                 .andExpect(jsonPath("$.participants[1].display_name").value("AI"))
                 .andExpect(jsonPath("$.participants[1].cumulative_return_percent").value(0.0))
-                .andExpect(jsonPath("$.daily_performances.length()").value(2))
-                .andExpect(jsonPath("$.daily_performances[0].date").value("2026-10-14"))
-                .andExpect(jsonPath("$.daily_performances[0].cumulative_return_percent").value(1.2))
-                .andExpect(jsonPath("$.daily_performances[1].date").value("2026-10-15"))
-                .andExpect(jsonPath("$.daily_performances[1].cumulative_return_percent").value(2.0));
+                .andExpect(jsonPath("$.participants[0].daily_performances.length()").value(2))
+                .andExpect(jsonPath("$.participants[0].daily_performances[0].date").value("2026-10-14"))
+                .andExpect(jsonPath("$.participants[0].daily_performances[0].cumulative_return_percent").value(1.2))
+                .andExpect(jsonPath("$.participants[0].daily_performances[1].date").value("2026-10-15"))
+                .andExpect(jsonPath("$.participants[0].daily_performances[1].cumulative_return_percent").value(2.0));
         assertThat(performances.count()).isEqualTo(count);
         verifyNoInteractions(market);
     }
@@ -109,15 +109,15 @@ class CompetitionDetailTests {
         doReturn(ZonedDateTime.parse("2026-10-16T15:35:00+09:00[Asia/Seoul]")).when(hours).now();
         mvc.perform(get(path()).cookie(auth(user)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.cumulative_return_percent").value(2.0))
-                .andExpect(jsonPath("$.daily_performances.length()").value(1));
+                .andExpect(jsonPath("$.cumulative_return_percent").doesNotHaveJsonPath())
+                .andExpect(jsonPath("$.participants[0].daily_performances.length()").value(1));
         performances.save(new CompetitionDailyPerformance(userParticipant, LocalDate.of(2026, 10, 16), 10_290_000));
         doReturn(ZonedDateTime.parse("2026-10-17T12:00:00+09:00[Asia/Seoul]")).when(hours).now();
         mvc.perform(get(path()).cookie(auth(user)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.cumulative_return_percent").value(2.9))
-                .andExpect(jsonPath("$.daily_performances.length()").value(2))
-                .andExpect(jsonPath("$.daily_performances[1].date").value("2026-10-16"));
+                .andExpect(jsonPath("$.cumulative_return_percent").doesNotHaveJsonPath())
+                .andExpect(jsonPath("$.participants[0].daily_performances.length()").value(2))
+                .andExpect(jsonPath("$.participants[0].daily_performances[1].date").value("2026-10-16"));
         verifyNoInteractions(market);
     }
 
@@ -125,8 +125,8 @@ class CompetitionDetailTests {
     void firstRecordNotYetAvailableReturnsZeroAndEmptyHistory() throws Exception {
         mvc.perform(get(path()).cookie(auth(user)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.cumulative_return_percent").value(0))
-                .andExpect(jsonPath("$.daily_performances").isEmpty());
+                .andExpect(jsonPath("$.cumulative_return_percent").doesNotHaveJsonPath())
+                .andExpect(jsonPath("$.participants[0].daily_performances").isEmpty());
     }
 
     @Test
@@ -137,8 +137,8 @@ class CompetitionDetailTests {
         mvc.perform(get(path()).cookie(auth(user)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.state").value("ready"))
-                .andExpect(jsonPath("$.cumulative_return_percent").value(0))
-                .andExpect(jsonPath("$.daily_performances").isEmpty());
+                .andExpect(jsonPath("$.cumulative_return_percent").doesNotHaveJsonPath())
+                .andExpect(jsonPath("$.participants[0].daily_performances").isEmpty());
         verifyNoInteractions(market);
     }
 
@@ -150,9 +150,10 @@ class CompetitionDetailTests {
         performances.save(new CompetitionDailyPerformance(userParticipant, LocalDate.of(2026, 10, 23), 10_820_000));
         mvc.perform(get(path()).cookie(auth(user)))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.participants[0].daily_performances[0].cumulative_return_percent").value(8.2))
                 .andExpect(jsonPath("$.state").value("completed"))
                 .andExpect(jsonPath("$.d_day").value(org.hamcrest.Matchers.nullValue()))
-                .andExpect(jsonPath("$.cumulative_return_percent").value(8.2));
+                .andExpect(jsonPath("$.cumulative_return_percent").doesNotHaveJsonPath());
         verifyNoInteractions(market);
     }
 
@@ -181,8 +182,8 @@ class CompetitionDetailTests {
         }
         var result = mvc.perform(get(path()).cookie(auth(user))).andExpect(status().isOk())
                 .andExpect(jsonPath("$.state").value("ready"))
-                .andExpect(jsonPath("$.cumulative_return_percent").value(org.hamcrest.Matchers.nullValue()))
-                .andExpect(jsonPath("$.daily_performances").isEmpty())
+                .andExpect(jsonPath("$.cumulative_return_percent").doesNotHaveJsonPath())
+                .andExpect(jsonPath("$.participants[0].daily_performances").isEmpty())
                 .andExpect(jsonPath("$.participants.length()").value(count));
         for (int i = 0; i < count; i++) {
             result.andExpect(jsonPath("$.participants[" + i + "].display_name").value("AI " + (i + 1)))

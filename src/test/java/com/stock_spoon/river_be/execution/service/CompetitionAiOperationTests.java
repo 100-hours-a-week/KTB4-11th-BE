@@ -139,7 +139,7 @@ class CompetitionAiOperationTests {
         assertThat(body.get("participants").get(1).get("rank").asInt()).isEqualTo(1);
         assertThat(body.get("participants").get(2).get("rank").asInt()).isEqualTo(3);
         assertThat(body.get("participants").get(0).get("final_asset_value").asLong()).isEqualTo(1_040_000);
-        assertThat(body.get("user_final_return_percent").isNull()).isTrue();
+        assertThat(body.has("user_final_return_percent")).isFalse();
     }
     @ParameterizedTest @ValueSource(ints = {2, 4})
     void settlesEveryAiWithOneWinnerAndKeepsOtherCompetitionUntouched(int n) {

@@ -9,13 +9,13 @@ import static org.springframework.security.test.web.servlet.setup.SecurityMockMv
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest(properties = {"springdoc.api-docs.enabled=false", "springdoc.swagger-ui.enabled=false"})
+@SpringBootTest(properties = {"springdoc.api-docs.enabled=false", "springdoc.api-docs.path=/api/v3/api-docs", "springdoc.swagger-ui.path=/api/swagger-ui.html", "springdoc.swagger-ui.enabled=false"})
 class OpenApiDisabledTests {
     @Autowired WebApplicationContext context;
 
     @Test void documentationCanBeDisabled() throws Exception {
         var mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
-        mvc.perform(get("/v3/api-docs")).andExpect(status().isNotFound());
-        mvc.perform(get("/swagger-ui/index.html")).andExpect(status().isNotFound());
+        mvc.perform(get("/api/v3/api-docs")).andExpect(status().isNotFound());
+        mvc.perform(get("/api/swagger-ui/index.html")).andExpect(status().isNotFound());
     }
 }

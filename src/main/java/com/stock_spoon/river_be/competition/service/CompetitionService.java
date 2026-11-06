@@ -43,6 +43,7 @@ public class CompetitionService {
     private final jakarta.validation.Validator validator;
     private final CompetitionDetailService detailService;
     private final com.stock_spoon.river_be.competition.repository.CompetitionAgentRepository agentSettings;
+    private final com.stock_spoon.river_be.order.repository.OrderRepository orders;
 
     @Transactional(readOnly = true) // 이름의 사용 가능 여부만 확인한다.
     public CompetitionNameAvailabilityResponse checkNameAvailability(Long userId, String competitionName) {
@@ -72,70 +73,53 @@ public class CompetitionService {
             throw new CompetitionException(HttpStatus.CONFLICT, "COMPETITION_NOT_COMPLETED", "아직 완료되지 않은 대결입니다.");
         }
 
-        if (competition.getCompetitionType() == Competition.Type.AI_VS_AI) return aiResult(competition);
-
-        // 2. 참가자 저장 순서와 관계없이 계좌의 AI 운용 여부로 사용자·AI를 구분한다.
         var links = participants.findAllByCompetitionIdOrderByIdAsc(competitionId);
-        if (links.size() != 2 || links.stream().filter(p -> p.getAccount().isAiManaged()).count() != 1) {
-            throw resultUnavailable();
-        }
-        var user = links.stream().filter(p -> !p.getAccount().isAiManaged()).findFirst().orElseThrow();
-        var ai = links.stream().filter(p -> p.getAccount().isAiManaged()).findFirst().orElseThrow();
-        if (competition.getWinner() == null || user.getFinalReturnPercent() == null || ai.getFinalReturnPercent() == null) {
-            throw resultUnavailable();
-        }
-
-        // 3. {날짜: {참가자 ID: 수익률}}로 묶는다. TreeMap은 날짜가 빠른 순서로 정렬해 준다.
-        // 없는 쪽의 값은 Map.get()이 null을 반환한다. 기록을 만들어 넣거나 현재가로 계산하지 않는다.
-        var byDate = new java.util.TreeMap<java.time.LocalDate, java.util.Map<Long, BigDecimal>>();
-        for (var record : dailyPerformances.findAllByParticipantCompetitionId(competitionId)) {
-            byDate.computeIfAbsent(record.getRecordDate(), date -> new java.util.HashMap<>())
-                    .put(record.getParticipant().getId(), record.getCumulativeReturnPercent());
-        }
-        var history = byDate.entrySet().stream().map(day -> new CompetitionResultResponse.DailyPerformanceItem(
-                day.getKey(), day.getValue().get(user.getId()), day.getValue().get(ai.getId()))).toList();
-
-        // 4. account_id는 결과 화면 하단에서 참가 계좌의 매매 내역을 조회할 때 사용한다.
-        var participantItems = links.stream().map(link -> {
-            boolean isAi = link.getAccount().isAiManaged();
-            return new CompetitionResultResponse.ParticipantItem(link.getId(), isAi ? "ai" : "user",
-                    link.getAccount().getId(), isAi ? "AI" : "나");
-        }).toList();
-        return new CompetitionResultResponse(competition.getId(), competition.getCompetitionName(),
-                competition.getCompetitionType().name().toLowerCase(Locale.ROOT), "completed",
-                competition.getStartDate(), competition.getEndDate(), null,
-                competition.getWinner().name().toLowerCase(Locale.ROOT), user.getFinalReturnPercent(),
-                ai.getFinalReturnPercent(), participantItems, history);
-    }
-
-    private CompetitionResultResponse aiResult(Competition competition) {
-        var links = participants.findAllByCompetitionIdOrderByIdAsc(competition.getId());
         if (!CompetitionParticipants.valid(competition, links) || competition.getWinner() == null
                 || links.stream().anyMatch(p -> p.getFinalAssetValue() == null || p.getFinalReturnPercent() == null)) {
             throw resultUnavailable();
         }
-        var settings = agentSettings.findAllByParticipantCompetitionIdOrderByPositionAsc(competition.getId());
+        boolean aiOnly = competition.getCompetitionType() == Competition.Type.AI_VS_AI;
         var positions = new java.util.HashMap<Long, Integer>();
-        for (var setting : settings) positions.put(setting.getParticipant().getId(), setting.getPosition());
-        if (!CompetitionParticipants.validStrategies(links, settings)) throw resultUnavailable();
-        var ordered = links.stream().sorted(java.util.Comparator.comparingInt(p -> positions.get(p.getId()))).toList();
-        var history = dailyPerformances.findAllByParticipantCompetitionId(competition.getId());
+        var strategies = new java.util.HashMap<Long, CompetitionDetailResponse.Strategy>();
+        if (aiOnly) {
+            var settings = agentSettings.findAllByParticipantCompetitionIdOrderByPositionAsc(competitionId);
+            if (!CompetitionParticipants.validStrategies(links, settings)) throw resultUnavailable();
+            for (var agent : settings) {
+                long participantId = agent.getParticipant().getId();
+                positions.put(participantId, agent.getPosition());
+                strategies.put(participantId, new CompetitionDetailResponse.Strategy(agent.getRiskLevel(),
+                        java.util.List.copyOf(agent.getPreferredThemes()), java.util.List.copyOf(agent.getExcludedThemes()),
+                        agent.getAdditionalRequest()));
+            }
+            links = links.stream().sorted(java.util.Comparator.comparingInt(p -> positions.get(p.getId()))).toList();
+        }
+        var ordered = links;
+        var accountIds = ordered.stream().map(p -> p.getAccount().getId()).toList();
+        var counts = new java.util.HashMap<Long, Long>();
+        for (var count : orders.countByAccountsAndStatus(accountIds, com.stock_spoon.river_be.order.entity.Order.Status.EXECUTED)) {
+            counts.put(count.getAccountId(), count.getTradeCount());
+        }
+        var byParticipant = dailyPerformances.findAllByParticipantCompetitionId(competitionId).stream()
+                .collect(java.util.stream.Collectors.groupingBy(r -> r.getParticipant().getId()));
         var items = ordered.stream().map(p -> {
-            var item = new CompetitionResultResponse.ParticipantItem(p.getId(), "ai", p.getAccount().getId(),
-                    "AI " + (positions.get(p.getId()) + 1));
-            item.setFinalAssetValue(p.getFinalAssetValue());
-            item.setFinalReturnPercent(p.getFinalReturnPercent());
-            item.setRank(CompetitionParticipants.rank(p, ordered));
-            item.setDailyPerformances(history.stream().filter(r -> r.getParticipant().getId().equals(p.getId()))
+            String name = aiOnly ? "AI " + (positions.get(p.getId()) + 1) : p.getAccount().isAiManaged() ? "AI" : "나";
+            var history = byParticipant.getOrDefault(p.getId(), java.util.List.of()).stream()
                     .sorted(java.util.Comparator.comparing(com.stock_spoon.river_be.competition.entity.CompetitionDailyPerformance::getRecordDate))
-                    .map(r -> new CompetitionDetailResponse.DailyPerformanceItem(r.getRecordDate(), r.getCumulativeReturnPercent())).toList());
-            return item;
+                    .map(r -> new CompetitionDetailResponse.DailyPerformanceItem(r.getRecordDate(),
+                            com.stock_spoon.river_be.competition.dto.CompetitionReturnPercent.fromAssets(r.getAssetValue(), p.getAccount().getInitialCapital()))).toList();
+            return new CompetitionResultResponse.ParticipantItem(p.getId(), p.getAccount().isAiManaged() ? "ai" : "user",
+                    p.getAccount().getId(), name, p.getFinalAssetValue(),
+                    com.stock_spoon.river_be.competition.dto.CompetitionReturnPercent.fromAssets(p.getFinalAssetValue(), p.getAccount().getInitialCapital()),
+                    CompetitionParticipants.rank(p, ordered), counts.getOrDefault(p.getAccount().getId(), 0L),
+                    strategies.get(p.getId()), history);
         }).toList();
-        var response = new CompetitionResultResponse(competition.getId(), competition.getCompetitionName(), "ai_vs_ai", "completed",
-                competition.getStartDate(), competition.getEndDate(), null, competition.getWinner().name().toLowerCase(Locale.ROOT),
-                null, null, items, java.util.List.of());
-        response.setWinnerParticipantIds(items.stream().filter(p -> p.getRank() == 1).map(CompetitionResultResponse.ParticipantItem::getParticipantId).toList());
-        return response;
+        // 표시 수익률 대신 확정 자산 비율로 계산한 순위에서 공동 우승자까지 선택한다.
+        var winners = items.stream().filter(p -> p.getRank() == 1).toList();
+        return new CompetitionResultResponse(competition.getId(), competition.getCompetitionName(),
+                competition.getCompetitionType().name().toLowerCase(Locale.ROOT), "completed", competition.getStartDate(),
+                competition.getEndDate(), null, winners.stream().map(CompetitionResultResponse.ParticipantItem::getDisplayName)
+                        .collect(java.util.stream.Collectors.joining(", ")),
+                winners.stream().map(CompetitionResultResponse.ParticipantItem::getParticipantId).toList(), items);
     }
 
     private CompetitionException resultUnavailable() {

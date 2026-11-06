@@ -65,7 +65,7 @@ class CompetitionHttpScenarioTests {
         assertThat((String) JsonPath.read(list.body(), "$.competitions[0].state")).isEqualTo("ready");
         call("POST", BASE, body, cookie, 409);
         var detail = call("GET", path, null, cookie, 200);
-        assertThat((java.util.List<?>) JsonPath.read(detail.body(), "$.daily_performances")).isEmpty();
+        assertThat((java.util.List<?>) JsonPath.read(detail.body(), "$.participants[0].daily_performances")).isEmpty();
         call("GET", path + "/result", null, cookie, 409);
         var other = users.save(new User("HTTP타인"));
         call("GET", path, null, "access_token=" + tokens.issue(other.getId()).accessToken(), 404);
@@ -82,15 +82,15 @@ class CompetitionHttpScenarioTests {
         job.completeExpiredCompetitions();
         at("2026-10-20T12:00:00+09:00");
         detail = call("GET", path, null, cookie, 200);
-        assertThat((String) JsonPath.read(detail.body(), "$.daily_performances[0].date")).isEqualTo("2026-10-19");
-        assertThat((java.util.List<?>) JsonPath.read(detail.body(), "$.daily_performances")).hasSize(1);
+        assertThat((String) JsonPath.read(detail.body(), "$.participants[0].daily_performances[0].date")).isEqualTo("2026-10-19");
+        assertThat((java.util.List<?>) JsonPath.read(detail.body(), "$.participants[0].daily_performances")).hasSize(1);
 
         at("2026-10-20T16:00:00+09:00");
         job.completeExpiredCompetitions();
         var result = call("GET", path + "/result", null, cookie, 200);
         assertThat((String) JsonPath.read(result.body(), "$.state")).isEqualTo("completed");
-        assertThat((String) JsonPath.read(result.body(), "$.winner")).isEqualTo("draw");
-        assertThat((java.util.List<?>) JsonPath.read(result.body(), "$.daily_performances")).hasSize(2);
+        assertThat((String) JsonPath.read(result.body(), "$.winner")).isEqualTo("나, AI");
+        assertThat((java.util.List<?>) JsonPath.read(result.body(), "$.participants[0].daily_performances")).hasSize(2);
         list = call("GET", BASE, null, cookie, 200);
         assertThat((Number) JsonPath.read(list.body(), "$.ongoing_competition_count")).isEqualTo(0);
         long count = performances.count();

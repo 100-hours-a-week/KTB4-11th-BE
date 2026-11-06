@@ -25,11 +25,7 @@ public class CompetitionDetailResponse {
     private LocalDate endDate;
     @JsonProperty("d_day")
     private Integer remainingDays;
-    @JsonProperty("cumulative_return_percent")
-    private BigDecimal cumulativeReturnPercent;
     private List<ParticipantItem> participants;
-    @JsonProperty("daily_performances")
-    private List<DailyPerformanceItem> dailyPerformances;
 
     @Getter
     @JsonInclude(JsonInclude.Include.ALWAYS)
@@ -72,13 +68,18 @@ public class CompetitionDetailResponse {
     public record TopReturnHolding(
             @JsonProperty("stock_code") String stockCode,
             @JsonProperty("stock_name") String stockName,
-            @JsonProperty("return_percent") BigDecimal returnPercent) {}
+            @JsonProperty("return_percent") BigDecimal returnPercent) {
+        public TopReturnHolding { returnPercent = returnPercent.setScale(1, java.math.RoundingMode.HALF_UP); }
+    }
 
     @Getter
-    @AllArgsConstructor
     public static class DailyPerformanceItem {
         private LocalDate date;
         @JsonProperty("cumulative_return_percent")
         private BigDecimal cumulativeReturnPercent;
+        public DailyPerformanceItem(LocalDate date, BigDecimal cumulativeReturnPercent) {
+            this.date = date;
+            this.cumulativeReturnPercent = cumulativeReturnPercent.setScale(1, java.math.RoundingMode.HALF_UP);
+        }
     }
 }

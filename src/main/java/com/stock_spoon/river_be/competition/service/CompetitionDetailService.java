@@ -1,6 +1,7 @@
 package com.stock_spoon.river_be.competition.service;
 
 import com.stock_spoon.river_be.competition.dto.CompetitionDetailResponse;
+import com.stock_spoon.river_be.competition.dto.CompetitionReturnPercent;
 import com.stock_spoon.river_be.competition.dto.CompetitionDetailResponse.*;
 import com.stock_spoon.river_be.competition.entity.Competition;
 import com.stock_spoon.river_be.competition.exception.CompetitionException;
@@ -61,13 +62,12 @@ public class CompetitionDetailService {
             for (var holding : p.holdings()) assets = Math.addExact(assets,
                     Math.multiplyExact(priceCache.get(holding.code()), holding.quantity()));
             item.setTotalAssets(assets);
-            item.setCumulativeReturnPercent(BigDecimal.valueOf(assets).subtract(BigDecimal.valueOf(p.initial()))
-                    .multiply(BigDecimal.valueOf(100)).divide(BigDecimal.valueOf(p.initial()), 4, RoundingMode.HALF_UP));
+            item.setCumulativeReturnPercent(CompetitionReturnPercent.fromAssets(assets, p.initial()));
             item.setDailyPerformances(p.history());
             return item;
         }).toList();
         return new CompetitionDetailResponse(snapshot.id(), snapshot.name(), snapshot.type(), snapshot.state(),
-                snapshot.start(), snapshot.end(), snapshot.dDay(), snapshot.returnPercent(), items, snapshot.history());
+                snapshot.start(), snapshot.end(), snapshot.dDay(), items);
     }
 
     private Snapshot snapshot(long userId, long competitionId) {
@@ -121,23 +121,14 @@ public class CompetitionDetailService {
                 p.getAccount().getCashBalance(), p.getAccount().getInitialCapital(),
                 historyByParticipant.getOrDefault(p.getId(), List.of()).stream()
                     .sorted(Comparator.comparing(com.stock_spoon.river_be.competition.entity.CompetitionDailyPerformance::getRecordDate))
-                    .map(r -> new DailyPerformanceItem(r.getRecordDate(), r.getCumulativeReturnPercent())).toList())).toList();
-        List<DailyPerformanceItem> history = List.of();
-        BigDecimal latest = null;
-        // 기존 단일 그래프는 사용자 기록이다. AI 간 대결에 임의의 대표 AI를 끼워 넣지 않는다.
-        if (!aiOnly) {
-            var user = links.stream().filter(p -> !p.getAccount().isAiManaged()).findFirst().orElseThrow();
-            var records = performances.findAllByParticipantIdOrderByRecordDateAsc(user.getId());
-            history = records.stream().map(r -> new DailyPerformanceItem(r.getRecordDate(), r.getCumulativeReturnPercent())).toList();
-            latest = records.isEmpty() ? BigDecimal.ZERO : records.getLast().getCumulativeReturnPercent();
-        }
+                    .map(r -> new DailyPerformanceItem(r.getRecordDate(), CompetitionReturnPercent.fromAssets(r.getAssetValue(), p.getAccount().getInitialCapital()))).toList())).toList();
         boolean closed = competition.getState() == Competition.State.COMPLETED || competition.getState() == Competition.State.CANCELLED;
         Integer dDay = closed ? null : Math.toIntExact(Math.max(0,
                 ChronoUnit.DAYS.between(hours.now().toLocalDate(), competition.getEndDate())));
         return new Snapshot(competition.getId(), competition.getCompetitionName(),
                 competition.getCompetitionType().name().toLowerCase(Locale.ROOT),
                 competition.getState().name().toLowerCase(Locale.ROOT), competition.getStartDate(),
-                competition.getEndDate(), dDay, latest, items, history);
+                competition.getEndDate(), dDay, items);
     }
 
     private TopReturnHolding topHolding(List<Owned> owned, Map<String, Long> priceCache, Map<String, String> nameCache) {
@@ -171,7 +162,7 @@ public class CompetitionDetailService {
             throw unavailable();
         }
         if (name == null || name.isBlank()) throw unavailable();
-        return new TopReturnHolding(best.code(), name, bestRate.setScale(4, RoundingMode.HALF_UP));
+        return new TopReturnHolding(best.code(), name, bestRate);
     }
 
     private CompetitionException unavailable() {
@@ -183,6 +174,5 @@ public class CompetitionDetailService {
     private record Participant(long id, long accountId, boolean ai, String name, long count,
             Strategy strategy, List<Owned> holdings, long cash, long initial, List<DailyPerformanceItem> history) {}
     private record Snapshot(long id, String name, String type, String state, java.time.LocalDate start,
-            java.time.LocalDate end, Integer dDay, BigDecimal returnPercent, List<Participant> participants,
-            List<DailyPerformanceItem> history) {}
+            java.time.LocalDate end, Integer dDay, List<Participant> participants) {}
 }

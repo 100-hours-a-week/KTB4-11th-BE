@@ -10,7 +10,7 @@ class CompetitionNameAvailabilityTests {
     private final AccountRepository accounts = mock(AccountRepository.class);
     private final com.stock_spoon.river_be.competition.repository.CompetitionRepository competitions =
             mock(com.stock_spoon.river_be.competition.repository.CompetitionRepository.class);
-    private final CompetitionService service = new CompetitionService(null, accounts, competitions, null, null, null, null, null, null, null);
+    private final CompetitionService service = new CompetitionService(null, accounts, competitions, null, null, null, null, null, null, null, null);
 
     @Test void unconfiguredCompetitionAlsoReservesItsName() {
         when(competitions.existsByUserIdAndCompetitionNameIgnoreCase(1L, "예약 이름")).thenReturn(true);

@@ -54,9 +54,18 @@ public class CompetitionDetailService {
         Snapshot snapshot = Objects.requireNonNull(read.execute(status -> snapshot(userId, competitionId)));
         var priceCache = new HashMap<String, Long>();
         var nameCache = new HashMap<String, String>();
-        var items = snapshot.participants().stream().map(p -> new ParticipantItem(
-                p.id(), p.accountId(), p.ai() ? "ai" : "user", p.name(), p.count(), p.strategy(),
-                topHolding(p.holdings(), priceCache, nameCache))).toList();
+        var items = snapshot.participants().stream().map(p -> {
+            var item = new ParticipantItem(p.id(), p.accountId(), p.ai() ? "ai" : "user", p.name(), p.count(), p.strategy(),
+                    topHolding(p.holdings(), priceCache, nameCache));
+            long assets = p.cash();
+            for (var holding : p.holdings()) assets = Math.addExact(assets,
+                    Math.multiplyExact(priceCache.get(holding.code()), holding.quantity()));
+            item.setTotalAssets(assets);
+            item.setCumulativeReturnPercent(BigDecimal.valueOf(assets).subtract(BigDecimal.valueOf(p.initial()))
+                    .multiply(BigDecimal.valueOf(100)).divide(BigDecimal.valueOf(p.initial()), 4, RoundingMode.HALF_UP));
+            item.setDailyPerformances(p.history());
+            return item;
+        }).toList();
         return new CompetitionDetailResponse(snapshot.id(), snapshot.name(), snapshot.type(), snapshot.state(),
                 snapshot.start(), snapshot.end(), snapshot.dDay(), snapshot.returnPercent(), items, snapshot.history());
     }
@@ -102,11 +111,17 @@ public class CompetitionDetailService {
             owned.computeIfAbsent(holding.getAccountId(), key -> new ArrayList<>()).add(
                     new Owned(holding.getStockCode(), holding.getQuantity(), holding.getTotalCost()));
         }
+        var historyByParticipant = performances.findAllByParticipantCompetitionId(competitionId).stream()
+                .collect(java.util.stream.Collectors.groupingBy(r -> r.getParticipant().getId()));
         var items = links.stream().map(p -> new Participant(p.getId(), p.getAccount().getId(),
                 p.getAccount().isAiManaged(), aiOnly ? "AI " + (positions.get(p.getId()) + 1)
                         : p.getAccount().isAiManaged() ? "AI" : "나",
                 counts.getOrDefault(p.getAccount().getId(), 0L), strategies.get(p.getId()),
-                List.copyOf(owned.getOrDefault(p.getAccount().getId(), List.of())))).toList();
+                List.copyOf(owned.getOrDefault(p.getAccount().getId(), List.of())),
+                p.getAccount().getCashBalance(), p.getAccount().getInitialCapital(),
+                historyByParticipant.getOrDefault(p.getId(), List.of()).stream()
+                    .sorted(Comparator.comparing(com.stock_spoon.river_be.competition.entity.CompetitionDailyPerformance::getRecordDate))
+                    .map(r -> new DailyPerformanceItem(r.getRecordDate(), r.getCumulativeReturnPercent())).toList())).toList();
         List<DailyPerformanceItem> history = List.of();
         BigDecimal latest = null;
         // 기존 단일 그래프는 사용자 기록이다. AI 간 대결에 임의의 대표 AI를 끼워 넣지 않는다.
@@ -166,7 +181,7 @@ public class CompetitionDetailService {
 
     private record Owned(String code, long quantity, BigDecimal cost) {}
     private record Participant(long id, long accountId, boolean ai, String name, long count,
-            Strategy strategy, List<Owned> holdings) {}
+            Strategy strategy, List<Owned> holdings, long cash, long initial, List<DailyPerformanceItem> history) {}
     private record Snapshot(long id, String name, String type, String state, java.time.LocalDate start,
             java.time.LocalDate end, Integer dDay, BigDecimal returnPercent, List<Participant> participants,
             List<DailyPerformanceItem> history) {}

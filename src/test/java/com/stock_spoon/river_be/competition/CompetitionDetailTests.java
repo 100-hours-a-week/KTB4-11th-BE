@@ -93,7 +93,7 @@ class CompetitionDetailTests {
                 .andExpect(jsonPath("$.participants[1].account_id").value(aiParticipant.getAccount().getId().intValue()))
                 .andExpect(jsonPath("$.participants[1].participant_type").value("ai"))
                 .andExpect(jsonPath("$.participants[1].display_name").value("AI"))
-                .andExpect(jsonPath("$.participants[1].cumulative_return_percent").doesNotExist())
+                .andExpect(jsonPath("$.participants[1].cumulative_return_percent").value(0.0))
                 .andExpect(jsonPath("$.daily_performances.length()").value(2))
                 .andExpect(jsonPath("$.daily_performances[0].date").value("2026-10-14"))
                 .andExpect(jsonPath("$.daily_performances[0].cumulative_return_percent").value(1.2))

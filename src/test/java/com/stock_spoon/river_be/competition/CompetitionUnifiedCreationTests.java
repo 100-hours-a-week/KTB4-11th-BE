@@ -158,11 +158,12 @@ class CompetitionUnifiedCreationTests {
         assertCode(() -> service.createCompetition(owner.getId(), missingDate), "INVALID_REQUEST");
     }
 
-    @Test void detailSupportsAiCompetitionButCancellationStillReturnsConflict() {
+    @Test void detailAndCancellationSupportCreatedAiCompetition() {
         var response = service.createCompetition(owner.getId(), request("후속 기능", 2));
         assertThat(service.getCompetitionDetail(owner.getId(), response.getCompetitionId()).getParticipants()).hasSize(2);
-        assertThatThrownBy(() -> cancellation.cancel(owner.getId(), response.getCompetitionId()))
-                .isInstanceOfSatisfying(CompetitionException.class, e -> assertThat(e.getStatus().value()).isEqualTo(409));
+        cancellation.cancel(owner.getId(), response.getCompetitionId());
+        assertThat(competitions.findById(response.getCompetitionId()).orElseThrow().getState())
+                .isEqualTo(Competition.State.CANCELLED);
     }
 
     CompetitionCreateRequest request(String name, int count) {

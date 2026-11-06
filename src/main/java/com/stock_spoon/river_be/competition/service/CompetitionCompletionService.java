@@ -21,6 +21,7 @@ public class CompetitionCompletionService {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CompetitionCompletionService.class);
     private final CompetitionRepository competitions;
     private final CompetitionParticipantRepository participants;
+    private final com.stock_spoon.river_be.competition.repository.CompetitionAgentRepository agents;
     private final AccountRepository accounts;
     private final HoldingRepository holdings;
     private final OrderRepository orders;
@@ -42,8 +43,10 @@ public class CompetitionCompletionService {
                 || now.toInstant().isBefore(competition.tradingEndsAt())) return;
 
         var links = participants.findAllByCompetitionIdOrderByIdAsc(competitionId);
-        if (links.size() != 2 || links.stream().filter(p -> p.getAccount().isAiManaged()).count() != 1) {
-            throw new IllegalStateException("사용자와 AI 참가자를 확인할 수 없습니다.");
+        CompetitionParticipants.requireValid(competition, links);
+        if (competition.getCompetitionType() == Competition.Type.AI_VS_AI
+                && !CompetitionParticipants.validStrategies(links, agents.findAllByParticipantCompetitionIdOrderByPositionAsc(competitionId))) {
+            throw new IllegalStateException("AI 참가자의 전략 연결을 확인할 수 없습니다.");
         }
         // 주문 체결과 같은 계좌 잠금을 잡아 평가 중 자산이 바뀌지 않게 한다. 잠금 순서는 ID 순이다.
         var accountIds = links.stream().map(p -> p.getAccount().getId()).sorted().toList();
@@ -61,29 +64,32 @@ public class CompetitionCompletionService {
             if (price <= 0 || holding.getQuantity() <= 0) throw new IllegalStateException("종가와 보유 수량을 확인하세요.");
             values.merge(holding.getAccountId(), Math.multiplyExact(price, holding.getQuantity()), Math::addExact);
         }
-        var user = links.stream().filter(p -> !p.getAccount().isAiManaged()).findFirst().orElseThrow();
-        var ai = links.stream().filter(p -> p.getAccount().isAiManaged()).findFirst().orElseThrow();
         for (var link : links) link.recordFinalAssets(values.get(link.getAccount().getId()));
-        // 반올림된 표시 수익률로 비교하지 않는다. 자산/초기자금 비율을 교차 곱해 비교한다.
-        var userRatio = java.math.BigDecimal.valueOf(user.getFinalAssetValue())
-                .multiply(java.math.BigDecimal.valueOf(ai.getAccount().getInitialCapital()));
-        var aiRatio = java.math.BigDecimal.valueOf(ai.getFinalAssetValue())
-                .multiply(java.math.BigDecimal.valueOf(user.getAccount().getInitialCapital()));
-        int comparison = userRatio.compareTo(aiRatio);
-        var winner = comparison > 0 ? Competition.Winner.USER : comparison < 0 ? Competition.Winner.AI : Competition.Winner.DRAW;
+        Competition.Winner winner;
+        if (competition.getCompetitionType() == Competition.Type.AI_VS_AI) {
+            long leaders = links.stream().filter(p -> CompetitionParticipants.rank(p, links) == 1).count();
+            winner = leaders == 1 ? Competition.Winner.AI : Competition.Winner.DRAW;
+        } else {
+            var user = links.stream().filter(p -> !p.getAccount().isAiManaged()).findFirst().orElseThrow();
+            var ai = links.stream().filter(p -> p.getAccount().isAiManaged()).findFirst().orElseThrow();
+            int comparison = CompetitionParticipants.compare(user, ai);
+            winner = comparison > 0 ? Competition.Winner.USER : comparison < 0 ? Competition.Winner.AI : Competition.Winner.DRAW;
+        }
         for (var pending : orders.findAllByAccountIdsAndStatus(accountIds, Order.Status.PENDING)) {
             pending.cancel(now.toInstant());
         }
         competition.complete(winner, now.toInstant());
         dailyPerformances.recordFinalPerformances(competitionId);
         // 완료와 전송 대기 기록을 함께 커밋한다. 저장 실패를 삼키지 않아 정산도 함께 롤백된다.
-        String requestId = java.util.UUID.randomUUID().toString();
-        try {
-            reportOutboxes.saveAndFlush(new CompetitionReportOutbox(competition, requestId));
-        } catch (RuntimeException error) {
-            log.error("event=competition_report_outbox_creation_failed stage=outbox_save competitionId={} requestId={} causeType={}",
-                    competitionId, requestId, error.getClass().getSimpleName(), error);
-            throw error;
+        if (competition.getCompetitionType() == Competition.Type.USER_VS_AI) {
+            String requestId = java.util.UUID.randomUUID().toString();
+            try {
+                reportOutboxes.saveAndFlush(new CompetitionReportOutbox(competition, requestId));
+            } catch (RuntimeException error) {
+                log.error("event=competition_report_outbox_creation_failed stage=outbox_save competitionId={} requestId={} causeType={}",
+                        competitionId, requestId, error.getClass().getSimpleName(), error);
+                throw error;
+            }
         }
         // 최종 결과와 기록은 보존하고 양측 계좌를 일반 계좌 목록·거래 대상에서 제외한다.
         // 정산과 같은 트랜잭션이므로 커밋 실패 시 비활성화도 함께 롤백된다.

@@ -105,9 +105,11 @@ server:
 # Disable both endpoints in environments where API documentation is private.
 springdoc:
   api-docs:
+    path: /api/v3/api-docs
     enabled: ${SWAGGER_ENABLED:true}
   paths-to-match: /api/**
   swagger-ui:
+    path: /api/swagger-ui.html
     enabled: ${SWAGGER_ENABLED:true}
     with-credentials: true
     csrf:

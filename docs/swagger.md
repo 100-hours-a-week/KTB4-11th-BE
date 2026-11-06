@@ -2,9 +2,9 @@
 
 ## 실행
 
-기존 방식으로 백엔드를 실행한 뒤 `/swagger-ui/index.html`에 접속한다.
-기본 로컬 주소는 `http://localhost:8080/swagger-ui/index.html`이다.
-JSON 명세는 `/v3/api-docs`, YAML 명세는 `/v3/api-docs.yaml`에서 확인한다.
+기존 방식으로 백엔드를 실행한 뒤 `/api/swagger-ui/index.html`에 접속한다.
+기본 로컬 주소는 `http://localhost:8080/api/swagger-ui/index.html`이다.
+JSON 명세는 `/api/v3/api-docs`, YAML 명세는 `/api/v3/api-docs.yaml`에서 확인한다.
 DB·Redis 등 서버 실행에 필요한 설정은 기존과 동일하다.
 
 `SWAGGER_ENABLED=false`이면 UI와 명세 엔드포인트를 모두 비활성화한다.
@@ -48,3 +48,10 @@ node --test src/test/js/swagger-csrf.test.cjs
 ```
 
 실제 카카오 계정 로그인과 운영 데이터 변경은 자동 테스트에서 실행하지 않는다.
+
+## 공개 서버 경로
+
+`https://stock-spoon.com/api/swagger-ui.html` 또는 `/api/swagger-ui/index.html`로 접속한다.
+UI 리소스와 JSON/YAML 명세를 모두 `/api` 아래에 등록하여 백엔드 라우팅 경로와 일치시킨다.
+문서 경로의 GET만 공개하며 `/api/**` 전체를 허용하지 않는다.
+`/api`는 문서 URL의 접두 경로이지 servlet context path가 아니므로 CSRF 주소는 `/api/v1/auth/csrf`다.

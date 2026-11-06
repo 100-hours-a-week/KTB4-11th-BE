@@ -8,8 +8,8 @@ function interceptor(fetch) {
   return vm.runInNewContext('(' + source + ')', {
     URL, fetch,
     window: { location: { origin: 'http://localhost:8080',
-      href: 'http://localhost:8080/app/swagger-ui/index.html',
-      pathname: '/app/swagger-ui/index.html' } }
+      href: 'http://localhost:8080/app/api/swagger-ui/index.html',
+      pathname: '/app/api/swagger-ui/index.html' } }
   });
 }
 
@@ -37,4 +37,18 @@ test('reads do not fetch CSRF and external targets are rejected', async () => {
 test('failed CSRF fetch prevents a write', async () => {
   const apply = interceptor(async () => ({ ok: false }));
   await assert.rejects(apply({ url: '/app/api/v1/auth/logout', method: 'POST' }), /CSRF/);
+});
+
+test('deployed root path fetches /api/v1/auth/csrf, without a duplicate /api', async () => {
+  const calls = [];
+  const apply = vm.runInNewContext('(' + source + ')', {
+    URL, window: { location: { origin: 'https://stock-spoon.com',
+      href: 'https://stock-spoon.com/api/swagger-ui/index.html',
+      pathname: '/api/swagger-ui/index.html' } },
+    fetch: async url => { calls.push(url); return { ok: true,
+      json: async () => ({ token: 'masked-token', header_name: 'X-XSRF-TOKEN' }) }; }
+  });
+  const request = await apply({ url: '/api/v1/auth/login', method: 'POST', headers: {} });
+  assert.deepEqual(calls, ['/api/v1/auth/csrf']);
+  assert.equal(request.headers['X-XSRF-TOKEN'], 'masked-token');
 });

@@ -98,8 +98,8 @@ public class SecurityConfig {
                 .logout(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(org.springframework.http.HttpMethod.GET,
-                                "/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs",
-                                "/v3/api-docs/**", "/v3/api-docs.yaml").permitAll()
+                                "/api/swagger-ui.html", "/api/swagger-ui/**", "/api/v3/api-docs",
+                                "/api/v3/api-docs/**", "/api/v3/api-docs.yaml").permitAll()
                         .requestMatchers(HttpMethod.GET, "/actuator/prometheus").permitAll()
                         .requestMatchers(SecurityConfig::isInternalErrorEndpointDispatch).permitAll()
                         .requestMatchers(HttpMethod.GET, "/actuator/health").permitAll()

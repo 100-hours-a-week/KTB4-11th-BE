@@ -5,7 +5,7 @@ async function (request) {
     throw new Error('Swagger 요청은 현재 서버에서만 실행할 수 있습니다.');
   }
   request.credentials = 'same-origin';
-  const marker = window.location.pathname.indexOf('/swagger-ui');
+  const marker = window.location.pathname.indexOf('/api/swagger-ui');
   const contextPath = marker < 0 ? '' : window.location.pathname.slice(0, marker);
   const apiPath = target.pathname.slice(contextPath.length);
   if (apiPath.startsWith('/api/') &&

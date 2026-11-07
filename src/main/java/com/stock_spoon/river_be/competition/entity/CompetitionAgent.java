@@ -40,7 +40,7 @@ public class CompetitionAgent {
     private List<String> excludedThemes = new ArrayList<>();
 
     @Lob
-    @Column(name = "additional_request", nullable = false)
+    @Column(name = "additional_request", nullable = false, columnDefinition = "LONGTEXT")
     private String additionalRequest;
 
     public CompetitionAgent(CompetitionParticipant participant, int position, int riskLevel,

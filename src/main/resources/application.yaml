@@ -27,6 +27,15 @@ spring:
 competition:
   completion:
     close-cron: "${COMPETITION_COMPLETION_CLOSE_CRON:0 30,35 15 * * MON-FRI}"
+  ai-setup:
+    queue:
+      enabled: ${AI_SETUP_QUEUE_ENABLED:false}
+      url: ${AI_SETUP_QUEUE_URL:}
+      region: ${AWS_REGION:ap-northeast-2}
+    dispatch:
+      enabled: ${AI_SETUP_DISPATCH_ENABLED:true}
+      interval-ms: ${AI_SETUP_DISPATCH_INTERVAL_MS:60000}
+      batch-size: ${AI_SETUP_DISPATCH_BATCH_SIZE:20}
   report:
     dispatch:
       enabled: ${REPORT_DISPATCH_ENABLED:true}

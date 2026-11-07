@@ -53,7 +53,8 @@ final class ElastiCacheIamCredentials implements RedisCredentialsProvider {
     public boolean supportsStreaming() { return true; }
 
     public Flux<RedisCredentials> credentials() {
-        return Flux.concat(refresh(), Flux.interval(Duration.ofMinutes(10)).concatMap(tick -> refresh()));
+        // 최초 인증은 resolveCredentials()가 담당하며, 짧은 토폴로지 조회 연결에는 추가 AUTH를 보내지 않는다.
+        return Flux.interval(Duration.ofMinutes(10)).concatMap(tick -> refresh());
     }
 
     private Mono<RedisCredentials> refresh() {

@@ -33,7 +33,7 @@ competition:
       interval-ms: ${REPORT_DISPATCH_INTERVAL_MS:60000}
       batch-size: ${REPORT_DISPATCH_BATCH_SIZE:20}
     queue:
-      enabled: ${REPORT_QUEUE_ENABLED:false}
+      enabled: ${REPORT_QUEUE_ENABLED:true}
       url: ${REPORT_QUEUE_URL:}
       region: ${AWS_REGION:ap-northeast-2}
 
@@ -43,6 +43,7 @@ order:
     consumer-enabled: ${ORDER_QUEUE_CONSUMER_ENABLED:true}
     url: ${ORDER_QUEUE_URL:}
     region: ${AWS_REGION:ap-northeast-2}
+
 
 kakao:
   # [회원 탈퇴 추가] 서버 전용 연결 해제 키. 미설정이면 앱 기동은 유지하고 unlink 요청 시 503을 반환한다.

@@ -28,7 +28,7 @@ ELASTICACHE_CACHE_NAME=stockspoon-v2-dev-valkey
 
 고정 AWS 액세스 키나 Valkey 비밀번호를 요구하지 않는다. AWS SDK 기본 자격 체인이 인스턴스 역할의 자격을 사용한다. 해당 체인은 환경변수·시스템 설정·프로필 등도 확인하므로 배포 환경의 자격 설정이 의도한 인스턴스 역할을 사용하도록 인프라에서 관리한다. 실제 비밀값은 문서·Git·로그에 기록하지 않는다.
 
-서명 대상은 호스트 엔드포인트가 아닌 **캐시 이름**이며 `Action=connect`, `User`, `ResourceType=ServerlessCache`, `elasticache` 서비스와 리전으로 서명한다. 토큰 유효 기간은 15분이다. 새 연결·재연결 시 토큰을 생성하고, 장시간 연결은 Lettuce streaming credentials와 `ON_NEW_CREDENTIALS`를 사용해 10분마다 새 토큰으로 재인증한다. 인스턴스 자격 조회는 Netty 이벤트 루프 밖에서 실행한다. 주기 갱신 실패는 예외 종류만 기록하고 다음 주기에 재시도한다. 최초 자격 확보 실패는 연결 실패다.
+서명 대상은 호스트 엔드포인트가 아닌 **캐시 이름**이며 `Action=connect`, `User`, `ResourceType=ServerlessCache`, `elasticache` 서비스와 리전으로 서명한다. 토큰 유효 기간은 15분이다. 새 연결·재연결 시 토큰을 생성하고, 장시간 연결은 Lettuce streaming credentials와 `ON_NEW_CREDENTIALS`를 사용해 연결 활성화 10분 뒤부터 10분마다 새 토큰으로 재인증한다. 최초 인증은 `resolveCredentials()`가 담당하며, 스트림 구독 직후 중복 토큰을 전달하지 않아 짧은 토폴로지 조회 연결의 종료와 추가 AUTH가 겹치는 경로를 피한다. 인스턴스 자격 조회는 Netty 이벤트 루프 밖에서 실행한다. 주기 갱신 실패는 예외 종류만 기록하고 다음 주기에 재시도한다. 최초 자격 확보 실패는 연결 실패다.
 
 AWS는 IAM 연결을 12시간 후 종료하며 새 토큰으로 재인증하면 연결을 연장할 수 있다고 안내한다. 위 주기 재인증은 일반 명령 연결과 Pub/Sub 연결에 제공한다. 실제 배포 연결이 장시간 유지되는지는 인프라 환경에서 검증한다. [AWS IAM 인증 안내](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/auth-iam.html)
 

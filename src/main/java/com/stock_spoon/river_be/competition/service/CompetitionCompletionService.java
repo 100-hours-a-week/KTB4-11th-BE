@@ -80,14 +80,15 @@ public class CompetitionCompletionService {
         }
         competition.complete(winner, now.toInstant());
         dailyPerformances.recordFinalPerformances(competitionId);
-        // 완료와 전송 대기 기록을 함께 커밋한다. 저장 실패를 삼키지 않아 정산도 함께 롤백된다.
-        if (competition.getCompetitionType() == Competition.Type.USER_VS_AI) {
+        // AI마다 요청을 만든다. 하나라도 저장에 실패하면 대결 완료와 모든 요청을 함께 롤백한다.
+        for (var participant : links) {
+            if (!participant.getAccount().isAiManaged()) continue;
             String requestId = java.util.UUID.randomUUID().toString();
             try {
-                reportOutboxes.saveAndFlush(new CompetitionReportOutbox(competition, requestId));
+                reportOutboxes.saveAndFlush(new CompetitionReportOutbox(competition, participant, requestId));
             } catch (RuntimeException error) {
-                log.error("event=competition_report_outbox_creation_failed stage=outbox_save competitionId={} requestId={} causeType={}",
-                        competitionId, requestId, error.getClass().getSimpleName(), error);
+                log.error("event=competition_report_outbox_creation_failed stage=outbox_save competitionId={} participantId={} requestId={} causeType={}",
+                        competitionId, participant.getId(), requestId, error.getClass().getSimpleName(), error);
                 throw error;
             }
         }

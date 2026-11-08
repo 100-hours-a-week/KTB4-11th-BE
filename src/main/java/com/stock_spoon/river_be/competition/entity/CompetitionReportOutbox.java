@@ -11,7 +11,7 @@ import org.hibernate.annotations.CreationTimestamp;
 @Table(name = "competition_report_outbox", indexes = {
         @Index(name = "idx_report_outbox_status_id", columnList = "status,outbox_id")
 }, uniqueConstraints = {
-        @UniqueConstraint(name = "uk_report_outbox_competition", columnNames = "competition_id"),
+        @UniqueConstraint(name = "uk_report_outbox_competition_participant", columnNames = {"competition_id", "participant_id"}),
         @UniqueConstraint(name = "uk_report_outbox_request", columnNames = "request_id")
 })
 @Getter
@@ -28,6 +28,11 @@ public class CompetitionReportOutbox {
     @JoinColumn(name = "competition_id", nullable = false, updatable = false)
     private Competition competition;
 
+    // 대결 전체가 아니라 이 AI 참가자의 보고서를 요청하는 전송 기록이다.
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "participant_id", nullable = false, updatable = false)
+    private CompetitionParticipant participant;
+
     // 동일 요청을 재전송해도 식별자가 바뀌지 않도록 저장한다.
     @Column(name = "request_id", nullable = false, updatable = false, length = 36)
     private String requestId;
@@ -40,8 +45,13 @@ public class CompetitionReportOutbox {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
-    public CompetitionReportOutbox(Competition competition, String requestId) {
+    public CompetitionReportOutbox(Competition competition, CompetitionParticipant participant, String requestId) {
         this.competition = java.util.Objects.requireNonNull(competition);
+        this.participant = java.util.Objects.requireNonNull(participant);
+        if (competition.getId() == null || !competition.getId().equals(participant.getCompetition().getId())
+                || !participant.getAccount().isAiManaged()) {
+            throw new IllegalArgumentException("해당 대결의 AI 참가자만 리포트를 요청할 수 있습니다.");
+        }
         if (requestId == null || requestId.isBlank() || requestId.length() > 36) {
             throw new IllegalArgumentException("요청 식별자를 확인해주세요.");
         }

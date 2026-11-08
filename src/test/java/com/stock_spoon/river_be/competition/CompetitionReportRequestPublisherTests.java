@@ -30,7 +30,7 @@ class CompetitionReportRequestPublisherTests {
         var request = captor.getValue();
         assertThat(request.queueUrl()).isEqualTo(URL);
         assertThat(json.readTree(request.messageBody())).isEqualTo(json.readTree("""
-                {"competition_id":123,"participant_id":456,"user_id":789,
+                {"competition_id":123,"participant_id":456,
                  "portfolio_reason_ids":["550e8400-e29b-41d4-a716-446655440000"]}
                 """));
         assertThat(request.messageAttributes().get("eventId").stringValue()).isEqualTo(EVENT);
@@ -58,13 +58,13 @@ class CompetitionReportRequestPublisherTests {
     }
 
     @Test void rejectsInvalidIdentityAndReasonIdsBeforeSending() {
-        assertThatThrownBy(() -> new CompetitionReportRequest(0, 456, 789, List.of())).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new CompetitionReportRequest(123, 456, 789, List.of("invalid"))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CompetitionReportRequest(0, 456, List.of())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new CompetitionReportRequest(123, 456, List.of("invalid"))).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> publisher.publish("", payload())).isInstanceOf(IllegalArgumentException.class);
         verifyNoInteractions(sqs);
     }
 
     private CompetitionReportRequest payload() {
-        return new CompetitionReportRequest(123, 456, 789, List.of("550e8400-e29b-41d4-a716-446655440000"));
+        return new CompetitionReportRequest(123, 456, List.of("550e8400-e29b-41d4-a716-446655440000"));
     }
 }

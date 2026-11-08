@@ -90,7 +90,7 @@ class UserWithdrawalTests {
                 LocalDate.now(), LocalDate.now().plusDays(1), 100000, 1); em.persist(competition);
         var participant = new CompetitionParticipant(competition, ai); em.persist(participant);
         em.persist(new CompetitionAgent(participant, 0, 1, List.of("반도체"), List.of("게임"), "장기 성장"));
-        em.persist(new CompetitionReportOutbox(competition, java.util.UUID.randomUUID().toString()));
+        em.persist(new CompetitionReportOutbox(competition, participant, java.util.UUID.randomUUID().toString()));
         em.persist(new CompetitionDailyPerformance(participant, LocalDate.now(), 100000));
         em.persist(new CompetitionMarketAnalysis(competition, LocalDate.now(), "분석", "내용"));
         em.persist(new CompetitionJudgmentSummary(competition, "판정", "내용"));

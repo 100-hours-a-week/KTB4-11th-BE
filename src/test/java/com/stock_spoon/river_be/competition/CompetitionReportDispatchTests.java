@@ -53,7 +53,7 @@ class CompetitionReportDispatchTests {
         var body = json.readTree(captor.getValue().messageBody());
         assertThat(body.path("competition_id").asLong()).isEqualTo(fixture.competitionId());
         assertThat(body.path("participant_id").asLong()).isEqualTo(fixture.aiParticipantId());
-        assertThat(body.path("user_id").asLong()).isEqualTo(fixture.userId());
+        assertThat(body.has("user_id")).isFalse();
         assertThat(body.path("portfolio_reason_ids")).isEqualTo(json.readTree("[\"" + REASON + "\"]"));
         assertThat(state(fixture)).isEqualTo("SENT");
         assertThat(service.dispatch(fixture.outboxId())).isNull();
@@ -129,6 +129,81 @@ class CompetitionReportDispatchTests {
         assertThat(state(fixture)).isEqualTo("SENT");
     }
 
+    @Test void allAiRequestsUseTheirOwnReasonsAndFailedAiRetriesIndependently() {
+        var fixtures = multiAiFixture();
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        when(sqs.sendMessage(any(SendMessageRequest.class))).thenAnswer(call ->
+                calls.incrementAndGet() == 2
+                        ? CompletableFuture.failedFuture(new IllegalStateException("AI2 send failed")) : success());
+
+        new CompetitionReportDispatchScheduler(outboxes, service, 1, true).dispatchPendingReports();
+        assertThat(fixtures).extracting(this::state).containsExactly("SENT", "PENDING", "SENT", "SENT");
+        var captor = ArgumentCaptor.forClass(SendMessageRequest.class);
+        verify(sqs, times(4)).sendMessage(captor.capture());
+        for (int i = 0; i < fixtures.size(); i++) {
+            var fixture = fixtures.get(i);
+            var request = captor.getAllValues().get(i);
+            var body = json.readTree(request.messageBody());
+            assertThat(body.path("competition_id").asLong()).isEqualTo(fixture.competitionId());
+            assertThat(body.path("participant_id").asLong()).isEqualTo(fixture.aiParticipantId());
+            assertThat(body.path("portfolio_reason_ids")).isEqualTo(json.readTree("[\"" + reason(i) + "\"]"));
+            assertThat(body.has("user_id")).isFalse();
+            assertThat(request.messageAttributes().get("eventId").stringValue()).isEqualTo(fixture.requestId());
+        }
+        new CompetitionReportDispatchScheduler(outboxes, service, 1, true).dispatchPendingReports();
+        assertThat(fixtures).extracting(this::state).containsOnly("SENT");
+        var retry = ArgumentCaptor.forClass(SendMessageRequest.class);
+        verify(sqs, times(5)).sendMessage(retry.capture());
+        assertThat(retry.getAllValues().getLast().messageAttributes().get("eventId").stringValue())
+                .isEqualTo(fixtures.get(1).requestId());
+    }
+
+    @Test void outboxPointingToHumanParticipantIsNotPublished() {
+        var fixture = fixture(true);
+        jdbc.update("update competition_report_outbox set participant_id=(select p.participant_id from competition_participants p join accounts a on a.account_id=p.account_id where p.competition_id=? and a.is_ai_managed=false) where outbox_id=?",
+                fixture.competitionId(), fixture.outboxId());
+        assertThatThrownBy(() -> service.dispatch(fixture.outboxId())).isInstanceOf(IllegalStateException.class);
+        assertThat(state(fixture)).isEqualTo("PENDING");
+        verifyNoInteractions(sqs);
+    }
+
+    @Test void outboxPointingToAnotherCompetitionAiIsNotPublished() {
+        var fixture = fixture(true);
+        var other = fixture(true);
+        jdbc.update("update competition_report_outbox set participant_id=? where outbox_id=?", other.aiParticipantId(), fixture.outboxId());
+        assertThatThrownBy(() -> service.dispatch(fixture.outboxId())).isInstanceOf(IllegalStateException.class);
+        assertThat(state(fixture)).isEqualTo("PENDING");
+        verifyNoInteractions(sqs);
+    }
+
+    private String reason(int index) {
+        return "550e8400-e29b-41d4-a716-" + String.format("%012d", index);
+    }
+
+    private List<Fixture> multiAiFixture() {
+        return new TransactionTemplate(manager).execute(tx -> {
+            var user = new User("다중AI" + UUID.randomUUID().toString().substring(0, 5)); em.persist(user);
+            var competition = new Competition(user, "AI 리포트", Competition.Type.AI_VS_AI,
+                    LocalDate.of(2026, 10, 1), LocalDate.of(2026, 10, 5), 100000, 4); em.persist(competition);
+            var fixtures = new ArrayList<Fixture>();
+            for (int i = 0; i < 4; i++) {
+                var account = new Account(user, "AI" + i, 100000, true); em.persist(account);
+                var participant = new CompetitionParticipant(competition, account); em.persist(participant);
+                for (int duplicate = 0; duplicate < 2; duplicate++) {
+                    var executed = aiOrder(account, reason(i)); executed.execute(); em.persist(executed);
+                }
+                em.persist(aiOrder(account, UUID.randomUUID().toString()));
+                var outbox = new CompetitionReportOutbox(competition, participant, UUID.randomUUID().toString()); em.persist(outbox);
+                fixtures.add(new Fixture(outbox.getId(), outbox.getRequestId(), competition.getId(), participant.getId(), user.getId(), account.getId()));
+            }
+            // 자동 시작 정책 대신 완료 상태의 전송 입력을 직접 준비한다.
+            em.flush();
+            em.createNativeQuery("update competitions set state='COMPLETED' where competition_id=:id")
+                    .setParameter("id", competition.getId()).executeUpdate();
+            return fixtures;
+        });
+    }
+
     private String state(Fixture fixture) {
         return jdbc.queryForObject("select status from competition_report_outbox where outbox_id=?", String.class, fixture.outboxId());
     }
@@ -159,7 +234,7 @@ class CompetitionReportDispatchTests {
             var external = aiOrder(outsider, UUID.randomUUID().toString()); external.execute(); em.persist(external);
             var manual = Order.pendingLimit(human, "005930", Order.Side.BUY, 1, 1000, Order.Source.USER, null, Instant.parse("2026-10-01T01:00:00Z"));
             manual.execute(); em.persist(manual);
-            var outbox = new CompetitionReportOutbox(competition, UUID.randomUUID().toString()); em.persist(outbox);
+            var outbox = new CompetitionReportOutbox(competition, participant, UUID.randomUUID().toString()); em.persist(outbox);
             em.flush();
             return new Fixture(outbox.getId(), outbox.getRequestId(), competition.getId(), participant.getId(), user.getId(), ai.getId());
         });

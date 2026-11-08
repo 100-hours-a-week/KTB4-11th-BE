@@ -10,14 +10,12 @@ public class CompetitionReportRequest {
     private final long competitionId;
     @JsonProperty("participant_id")
     private final long participantId;
-    @JsonProperty("user_id")
-    private final long userId;
     @JsonProperty("portfolio_reason_ids")
     private final List<String> portfolioReasonIds;
 
-    public CompetitionReportRequest(long competitionId, long participantId, long userId, List<String> portfolioReasonIds) {
-        if (competitionId <= 0 || participantId <= 0 || userId <= 0 || portfolioReasonIds == null) {
-            throw new IllegalArgumentException("리포트 요청의 대결·참가자·사용자 ID와 판단 근거 목록을 확인하세요.");
+    public CompetitionReportRequest(long competitionId, long participantId, List<String> portfolioReasonIds) {
+        if (competitionId <= 0 || participantId <= 0 || portfolioReasonIds == null) {
+            throw new IllegalArgumentException("리포트 요청의 대결·참가자 ID와 판단 근거 목록을 확인하세요.");
         }
         for (String id : portfolioReasonIds) {
             if (id == null || !id.matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")) {
@@ -26,7 +24,6 @@ public class CompetitionReportRequest {
         }
         this.competitionId = competitionId;
         this.participantId = participantId;
-        this.userId = userId;
         this.portfolioReasonIds = List.copyOf(portfolioReasonIds);
     }
 }

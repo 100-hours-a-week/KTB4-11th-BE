@@ -7,11 +7,22 @@
 | 대상 | 변경 | SQL |
 |---|---|---|
 | ai_order_reports | reason_id VARCHAR(36) NULL 추가 | [ai_report_reason_id.sql](../db/ai_report_reason_id.sql) |
-| competition_report_outbox | 대결별 전송 대기·성공 기록 테이블, 유일 제약·FK·조회 인덱스 생성 | [competition-report-outbox.sql](../db/competition-report-outbox.sql) |
+| competition_report_outbox (신규 설치) | AI 참가자별 전송 기록 테이블, 참가자 FK·복합 유일 제약·조회 인덱스 생성 | [competition-report-outbox.sql](../db/competition-report-outbox.sql) |
+| competition_report_outbox (기존 테이블) | participant_id 추가·기존 단일 AI 연결·대결 단독 유일 제약을 대결/참가자 복합 제약으로 교체 | [competition-report-outbox-participant.sql](../db/competition-report-outbox-participant.sql) |
 | competitions | daily_performance_complete BOOLEAN NOT NULL DEFAULT FALSE 및 후보 조회 인덱스 추가 | [competition-daily-performance-complete.sql](../db/competition-daily-performance-complete.sql) |
 | competitions | report_ready BOOLEAN NOT NULL DEFAULT FALSE 추가 및 기존 리포트 완료 표시 보정 | [competition-report-ready.sql](../db/competition-report-ready.sql) |
 
 실제 대상 DB에서 먼저 기존 테이블·컬럼·인덱스 존재 여부를 확인한다. SQL은 중복 실행용이 아니므로 존재한다면 정의를 대조하고 필요한 변경만 반영한다. 과거 주문의 reason_id는 NULL로 유지하며 임의 생성하지 않는다. 기존 report_id 및 주문 테이블 속성은 변경하지 않는다.
+
+### AI 참가자별 Outbox 이관 (#262)
+
+신규 설치 SQL과 기존 테이블 이관 SQL 중 하나만 선택한다. 기존 테이블은 모든 BE 인스턴스의 관련 쓰기(종료 정산·전송·회원 탈퇴)를 중지하고 백업한 뒤 이관한다. REPORT_DISPATCH_ENABLED=false만으로 종료 서비스의 Outbox 저장까지 중지되지는 않는다. MySQL DDL은 암묵적으로 커밋되므로 단계별 확인이 필요하다.
+
+먼저 nullable participant_id를 추가하고, AI가 정확히 한 명인 대결의 기존 행에 그 참가자를 연결한다. 미연결·소속 불일치 조회 결과가 0건인지 확인한 뒤 NOT NULL·참가자 FK·(competition_id, participant_id) UNIQUE를 적용하고 기존 competition_id 단독 UNIQUE를 제거한다. 모호한 행은 수동 확인하며 request_id·PENDING/SENT 상태를 보존한다. 회원 탈퇴 시 Outbox를 참가자보다 먼저 삭제하도록 코드도 변경했다.
+
+이관 후에는 participant_id를 쓰지 않는 구버전 앱이 동작하지 않으므로 구·신버전 동시 쓰기를 허용하지 않는다. 앱 롤백은 추가 컬럼을 남기는 것만으로 충분하지 않다. 다중 AI 행이 생성된 뒤에는 기존 대결 단독 UNIQUE도 그대로 복원할 수 없으므로 별도 롤백 계획이 필요하다. 기존 완료 AI 대결에 요청을 소급 생성하지는 않는다.
+
+SQS 본문은 competition_id, participant_id, portfolio_reason_ids 세 필드이며 user_id를 제거했다. AI 서버와 이 계약을 맞춘다. 이번 변경은 요청 전송까지다. **리포트 저장 API는 아직 대결 단위이므로 다중 AI의 실제 콜백 수신을 활성화하기 전에 참가자별 저장·조회 확장을 배포해야 한다.** 현재 브랜치의 AI 자동 시작 제한은 변경하지 않았다.
 
 report_ready 컬럼의 ALTER는 배포 전에 한 번 적용한다. 기존 시장 분석·판단 요약이 있는 대결을 true로 보정하는 UPDATE는 멱등이므로 적용 시 실행하고 구버전 앱의 저장이 끝난 배포 완료 후에도 재실행한다. 내용이 모두 비어 있던 과거 리포트는 수신 완료 여부를 알 수 없으므로 재전달이나 확인된 데이터의 별도 보정이 필요하다. 기존 조회 JSON state는 report_state로 바뀌며 pending/completed를 반환한다. 이는 대결 완료 상태와 별개다.
 
@@ -23,7 +34,7 @@ report_ready 컬럼의 ALTER는 배포 전에 한 번 적용한다. 기존 시�
 
 - REPORT_QUEUE_URL: https://sqs.ap-northeast-2.amazonaws.com/250832562715/stockspoon-v2-dev-report-request
 - AWS_REGION: ap-northeast-2
-- REPORT_QUEUE_ENABLED: 기본 false. true로 설정하면 Report Queue 클라이언트·서비스·스케줄러를 생성한다.
+- REPORT_QUEUE_ENABLED: 현재 application.yaml 기본 true. true이면 Report Queue 클라이언트·서비스·스케줄러를 생성한다. 실제 배포 환경변수는 별도 확인한다.
 - REPORT_DISPATCH_ENABLED: 기본 true. 첫 기동 때 전송을 유예하려면 false로 지정한다.
 - REPORT_DISPATCH_INTERVAL_MS: 기본 60000, REPORT_DISPATCH_BATCH_SIZE: 기본 20.
 - COMPETITION_COMPLETION_CLOSE_CRON: 기본 `0 30,35 15 * * MON-FRI`. 한국 시간 평일 15:30·15:35 정산을 시도하며 기존 1시간 fixedDelay 복구도 유지한다.

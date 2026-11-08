@@ -22,3 +22,10 @@
 - `gradlew.bat test --offline --tests 'com.stock_spoon.river_be.competition.*' --tests '*UserWithdrawalTests' --tests '*AccountDeletionTests'`: 253개 중 248개 통과, 5개 건너뜀, 실패·오류 0건.
 - `git diff --check` 통과. 운영 MySQL 이관·실제 AI 콜백·AWS 연동은 미검증이다.
 - 현재 계약·호출 흐름은 docs/competition-participant-reports.md, DB 적용은 docs/competition-report-deployment.md와 db/competition-reports-participant.sql에 정리했다.
+
+## PR #263 CI 후속 수정
+
+- 전체 CI에서 SecurityJwtTests의 저장 요청 2건과 execution.service.CompetitionAiOperationTests의 종료 기대값 1건이 이전 계약을 사용해 실패했다. 앞선 대결 패키지 중심 검사에는 이 클래스들이 포함되지 않았다.
+- 동일한 3개 실패를 로컬에서 재현했다. 보안 테스트에는 필수 participant_id와 실제 AI 참가자를 준비하고, 잘못된 제목 검증과 저장 대상 참가자 확인을 유지했다.
+- AI 간 대결 종료 테스트는 기존의 Outbox 없음 대신 참가자별 PENDING 요청 1건, 고유 requestId, 반복 완료 시 중복 없음까지 검증한다.
+- 서비스·CI 설정·DB SQL은 변경하지 않았다. 로컬 `gradlew.bat test --offline` 전체 실행: 748개 중 724개 통과, 24개 건너뜀, 실패·오류 0건. `git diff --check` 통과.

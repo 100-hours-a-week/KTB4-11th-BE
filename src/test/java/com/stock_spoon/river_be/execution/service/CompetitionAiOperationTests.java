@@ -122,7 +122,7 @@ class CompetitionAiOperationTests {
         assertThatThrownBy(() -> daily.recordMissingDays(f.competition().getId())).isInstanceOf(IllegalStateException.class).hasMessage("시세 없음");
         assertThat(records.findAllByParticipantCompetitionId(f.competition().getId())).isEmpty();
     }
-    @Test void settlesAllParticipantsAndReturnsTiedWinnersWithoutLegacyReport() {
+    @Test void settlesAllParticipantsAndReturnsTiedWinnersWithReportRequestPerAi() {
         var f = fixture(3, true);
         buy(f, 0, 2); buy(f, 1, 2); buy(f, 2, 1);
         when(market.closingPrice("005930", monday.plusDays(4))).thenReturn(120_000L);
@@ -130,7 +130,14 @@ class CompetitionAiOperationTests {
         completion.completeCompetition(f.competition().getId());
         completion.completeCompetition(f.competition().getId());
         assertThat(competitions.findById(f.competition().getId()).orElseThrow().getState()).isEqualTo(Competition.State.COMPLETED);
-        assertThat(outboxes.findAll()).noneMatch(o -> o.getCompetition().getId().equals(f.competition().getId()));
+        // 완료를 두 번 호출해도 각 AI에 대한 전송 대기 기록은 한 건씩만 생성된다.
+        var requests = outboxes.findAll().stream()
+                .filter(o -> o.getCompetition().getId().equals(f.competition().getId())).toList();
+        assertThat(requests).hasSize(f.links().size());
+        assertThat(requests).extracting(o -> o.getParticipant().getId())
+                .containsExactlyInAnyOrderElementsOf(f.links().stream().map(CompetitionParticipant::getId).toList());
+        assertThat(requests).extracting(CompetitionReportOutbox::getRequestId).doesNotHaveDuplicates();
+        assertThat(requests).allSatisfy(o -> assertThat(o.getStatus()).isEqualTo(CompetitionReportOutbox.Status.PENDING));
         assertThat(records.findAllByParticipantCompetitionId(f.competition().getId())).hasSize(3);
         for (var p : f.links()) assertThat(accounts.findById(p.getAccount().getId()).orElseThrow().isActive()).isFalse();
         var body = json.readTree(json.writeValueAsString(service.getCompetitionResult(f.user().getId(), f.competition().getId())));

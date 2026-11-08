@@ -40,6 +40,7 @@ public class CompetitionService {
     private final AccountService accountService;
     private final CompetitionDailyPerformanceRepository dailyPerformances;
     private final CompetitionAgentCreationService agentCreation;
+    private final CompetitionAiSetupReservationService aiSetupReservation;
     private final jakarta.validation.Validator validator;
     private final CompetitionDetailService detailService;
     private final com.stock_spoon.river_be.competition.repository.CompetitionAgentRepository agentSettings;
@@ -286,6 +287,7 @@ public class CompetitionService {
         CompetitionCreationLog.competitionId(competition.getId());
         if (aiVsAi) {
             agentCreation.createParticipants(competition, request.getAgents());
+            aiSetupReservation.reserve(competition);
             CompetitionCreationLog.stage("transaction_commit");
             return new CompetitionCreateResponse("success", competition.getId(), "ready");
         }

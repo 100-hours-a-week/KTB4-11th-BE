@@ -27,6 +27,7 @@ import static org.mockito.ArgumentMatchers.any;
 @SpringBootTest
 class CompetitionUnifiedCreationTests {
     @Autowired CompetitionService service;
+    @MockitoSpyBean CompetitionAiSetupOutboxRepository setupOutboxes;
     @Autowired CompetitionRepository competitions;
     @MockitoSpyBean CompetitionParticipantRepository participants;
     @Autowired CompetitionAgentRepository agents;
@@ -53,11 +54,20 @@ class CompetitionUnifiedCreationTests {
             assertThat(c.getCompetitionType()).isEqualTo(Competition.Type.AI_VS_AI);
             assertThat(c.getAiParticipantCount()).isEqualTo(count);
             assertThat(c.getStartedAt()).isNull();
+            var reservations = setupOutboxes.findAll().stream().filter(o -> o.getCompetition().getId().equals(c.getId())).toList();
+            assertThat(reservations).hasSize(1);
+            var reservation = reservations.getFirst();
+            var payload = tools.jackson.databind.json.JsonMapper.builder().build().readTree(reservation.getPayload());
+            assertThat(payload.get("event_id").asText()).isEqualTo(reservation.getEventId());
+            assertThat(payload.get("agents").size()).isEqualTo(count);
             var stored = agents.findAllByParticipantCompetitionIdOrderByPositionAsc(c.getId());
             assertThat(stored).hasSize(count);
             assertThat(participants.findAllByCompetitionIdOrderByIdAsc(c.getId())).hasSize(count);
             for (int i = 0; i < count; i++) {
                 var strategy = stored.get(i);
+                assertThat(payload.get("agents").get(i).get("participant_id").asLong()).isEqualTo(strategy.getParticipant().getId());
+                assertThat(payload.get("agents").get(i).get("account_id").asLong()).isEqualTo(strategy.getParticipant().getAccount().getId());
+                assertThat(payload.get("agents").get(i).get("risk_level").asInt()).isEqualTo(strategy.getRiskLevel());
                 assertThat(strategy.getPosition()).isEqualTo(i);
                 assertThat(strategy.getRiskLevel()).isEqualTo(i + 1);
                 assertThat(strategy.getPreferredThemes()).containsExactly("반도체");
@@ -84,6 +94,7 @@ class CompetitionUnifiedCreationTests {
         ReflectionTestUtils.setField(request, "agents", null);
         var response = service.createCompetition(owner.getId(), request);
         assertThat(response.getState()).isEqualTo("in_progress");
+        assertThat(setupOutboxes.findAll().stream().filter(o -> o.getCompetition().getId().equals(response.getCompetitionId()))).isEmpty();
         assertThat(participants.findAllByCompetitionIdOrderByIdAsc(response.getCompetitionId()))
                 .extracting(p -> p.getAccount().isAiManaged()).containsExactly(false, true);
         assertThat(agents.findAllByParticipantCompetitionIdOrderByPositionAsc(response.getCompetitionId())).isEmpty();
@@ -111,6 +122,19 @@ class CompetitionUnifiedCreationTests {
         long[] before = counts();
         assertCode(() -> service.createCompetition(owner.getId(), request), "INVALID_AGENT_THEMES");
         assertThat(counts()).containsExactly(before);
+    }
+
+    @Test void reservationFailureRollsBackCompetitionAccountsAndStrategies() {
+        long[] before = counts();
+        long reservationsBefore = setupOutboxes.count();
+        doThrow(new IllegalStateException("reservation failed")).when(setupOutboxes)
+                .save(any(CompetitionAiSetupOutbox.class));
+        try {
+            assertThatThrownBy(() -> service.createCompetition(owner.getId(), request("예약 실패", 2)))
+                    .isInstanceOf(IllegalStateException.class);
+        } finally { reset(setupOutboxes); }
+        assertThat(counts()).containsExactly(before);
+        assertThat(setupOutboxes.count()).isEqualTo(reservationsBefore);
     }
 
     @Test void finalParticipantFailureRollsBackTheCompetitionToo() {

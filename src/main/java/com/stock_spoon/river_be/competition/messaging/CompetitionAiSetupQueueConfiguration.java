@@ -26,7 +26,7 @@ public class CompetitionAiSetupQueueConfiguration {
     SqsAsyncClient competitionAiSetupSqsClient(@Value("${competition.ai-setup.queue.region:ap-northeast-2}") String region,
             @Value("${competition.ai-setup.queue.url}") String url) {
         if (!url.startsWith("https://sqs." + region + ".amazonaws.com/") || url.endsWith(".fifo")) {
-            throw new IllegalStateException("AI_SETUP_QUEUE_URL은 해당 리전의 SQS Standard Queue URL이어야 합니다.");
+            throw new IllegalStateException("AI_REQUEST_QUEUE_URL은 해당 리전의 SQS Standard Queue URL이어야 합니다.");
         }
         // 기본 자격 증명 체인으로 EC2 IAM Role을 사용한다. Access/Secret Key를 코드에 넣지 않는다.
         return SqsAsyncClient.builder().region(Region.of(region))

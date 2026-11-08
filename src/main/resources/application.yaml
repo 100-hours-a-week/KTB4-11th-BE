@@ -29,8 +29,8 @@ competition:
     close-cron: "${COMPETITION_COMPLETION_CLOSE_CRON:0 30,35 15 * * MON-FRI}"
   ai-setup:
     queue:
-      enabled: ${AI_SETUP_QUEUE_ENABLED:false}
-      url: ${AI_SETUP_QUEUE_URL:}
+      enabled: ${AI_REQUEST_QUEUE_ENABLED:false}
+      url: ${AI_REQUEST_QUEUE_URL:}
       region: ${AWS_REGION:ap-northeast-2}
     dispatch:
       enabled: ${AI_SETUP_DISPATCH_ENABLED:true}

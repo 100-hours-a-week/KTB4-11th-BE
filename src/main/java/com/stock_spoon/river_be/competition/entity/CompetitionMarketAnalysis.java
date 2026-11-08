@@ -7,7 +7,10 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 @Entity
-@Table(name = "competition_market_analyses", indexes = @Index(name = "ix_competition_analysis_date", columnList = "competition_id,analysis_date"))
+@Table(name = "competition_market_analyses", indexes = {
+        @Index(name = "ix_competition_analysis_date", columnList = "competition_id,analysis_date"),
+        @Index(name = "ix_competition_analysis_participant", columnList = "competition_id,participant_id,analysis_date")
+})
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class CompetitionMarketAnalysis {
@@ -18,6 +21,9 @@ public class CompetitionMarketAnalysis {
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "competition_id", nullable = false)
     private Competition competition;
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "participant_id", nullable = false)
+    private CompetitionParticipant participant;
     // AI 서버가 뉴스 날짜를 보내지 않으면 알 수 없는 날짜로 저장한다.
     @Column(name = "analysis_date")
     private LocalDate date;
@@ -26,8 +32,9 @@ public class CompetitionMarketAnalysis {
     @Column(nullable = false, columnDefinition = "TEXT")
     private String content;
 
-    public CompetitionMarketAnalysis(Competition competition, LocalDate date, String title, String content) {
-        this.competition = competition;
+    public CompetitionMarketAnalysis(CompetitionParticipant participant, LocalDate date, String title, String content) {
+        this.participant = participant;
+        this.competition = participant.getCompetition();
         this.date = date;
         this.title = title;
         this.content = content;

@@ -29,7 +29,7 @@ public class Competition {
     @Column(name = "completed_at")
     private Instant completedAt;
 
-    // 배열이 비어 있어도 리포트 저장이 정상 완료된 경우를 구분한다.
+    // 구버전 수신 상태를 이관하기 위해 보존한다. 새 저장·조회는 참가자의 reportReady를 사용한다.
     @Column(name = "report_ready", nullable = false)
     private boolean reportReady;
 

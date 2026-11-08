@@ -20,7 +20,7 @@ public class CompetitionReportController {
 
     @DbReadRetryable
     @GetMapping
-    @Operation(summary = "대결 AI 리포트 조회")
+    @Operation(summary = "대결 AI 리포트 조회", description = "AI 참가자별 보고서를 reports 배열로 반환합니다. 미수신 보고서는 pending과 빈 목록을 반환합니다.")
     public CompetitionReportResponse get(@AuthenticationPrincipal Jwt jwt, @PathVariable long competitionId) {
         return reports.get(Long.parseLong(jwt.getSubject()), competitionId);
     }

@@ -4,6 +4,8 @@ import java.util.List;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -12,6 +14,12 @@ import lombok.NoArgsConstructor;
 @Getter
 @NoArgsConstructor
 public class CompetitionReportSaveRequest {
+    // SQS 요청의 participant_id를 그대로 받아 보고서의 대상 AI를 구분한다.
+    @JsonProperty("participant_id")
+    @NotNull
+    @Positive
+    private Long participantId;
+
     // JSON의 news와 thoughts 배열을 각각 목록으로 받는다.
     @NotNull // 배열은 필수지만 빈 배열은 허용한다.
     @Valid // 배열 안에 있는 News 객체의 검증 조건도 검사한다.

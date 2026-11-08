@@ -33,11 +33,12 @@ public class UserDeletionRepository {
         delete("competition_agent_excluded_themes", "agent_id in (" + agents + ")", userId);
         delete("competition_agents", "participant_id in (" + participants + ")", userId);
         delete("competition_daily_performances", "participant_id in (select participant_id from competition_participants where competition_id in (" + competitions + "))", userId);
-        delete("competition_participants", "competition_id in (" + competitions + ")", userId);
+        // Outbox가 참가자도 참조하므로 참가자 삭제 전에 전송 기록을 정리한다.
+        delete("competition_report_outbox", "competition_id in (" + competitions + ")", userId);
         delete("competition_market_analyses", "competition_id in (" + competitions + ")", userId);
         delete("competition_judgment_summaries", "competition_id in (" + competitions + ")", userId);
-        // 전송 대기·완료 기록도 대결보다 먼저 삭제해 Outbox의 FK를 해제한다.
-        delete("competition_report_outbox", "competition_id in (" + competitions + ")", userId);
+        // 리포트 본문도 참가자를 참조하므로 본문을 먼저 삭제한다.
+        delete("competition_participants", "competition_id in (" + competitions + ")", userId);
         delete("competitions", "user_id=:userId", userId);
         // 4. 관심 등록과 모든 기기의 Refresh Token을 삭제한다. 공용 stocks 행은 유지한다.
         delete("watchlist_stocks", "user_id=:userId", userId);

@@ -211,7 +211,7 @@ class SecurityJwtTests {
                 .andExpect(status().isForbidden());
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
                         .with(csrf()).cookie(new Cookie("access_token", aiToken("1", "access", "AI")))
-                        .contentType("application/json").content("{\"news\":[],\"thoughts\":[]}"))
+                        .contentType("application/json").content("{\"participant_id\":456,\"news\":[],\"thoughts\":[]}"))
                 .andExpect(status().isNotFound());
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
                         .cookie(new Cookie("access_token", aiToken("1", "access", "AI"))))
@@ -225,22 +225,28 @@ class SecurityJwtTests {
         var competition = competitions.save(new com.stock_spoon.river_be.competition.entity.Competition(
                 owner, "테스트 대결", com.stock_spoon.river_be.competition.entity.Competition.Type.USER_VS_AI,
                 java.time.LocalDate.of(2026, 10, 1), java.time.LocalDate.of(2026, 10, 10), 10000000, 1));
+        // 저장 서비스가 대상 AI를 확인할 수 있도록 실제 계좌와 참가자를 준비한다.
+        var accounts = context.getBean(com.stock_spoon.river_be.account.repository.AccountRepository.class);
+        var participants = context.getBean(com.stock_spoon.river_be.competition.repository.CompetitionParticipantRepository.class);
+        var account = accounts.save(new com.stock_spoon.river_be.account.entity.Account(owner, "리포트 AI", 10000000, true));
+        var participant = participants.save(new com.stock_spoon.river_be.competition.entity.CompetitionParticipant(competition, account));
         String path = "/api/v1/competitions/" + competition.getId() + "/report";
         var cookie = new Cookie("access_token", aiToken(owner.getId().toString(), "access", "AI"));
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
                         .with(csrf()).cookie(cookie).contentType("application/json")
-                        .content("{\"news\":[{\"title\":\"뉴스\",\"summary\":\"요약\"}],\"thoughts\":[]}"))
+                        .content("{\"participant_id\":" + participant.getId() + ",\"news\":[{\"title\":\"뉴스\",\"summary\":\"요약\"}],\"thoughts\":[]}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.competition_id").value(competition.getId()))
                 .andExpect(jsonPath("$.message").value("success"));
         mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
                         .with(csrf()).cookie(cookie).contentType("application/json")
-                        .content("{\"news\":[{\"title\":\"\",\"summary\":\"요약\"}],\"thoughts\":[]}"))
+                        .content("{\"participant_id\":" + participant.getId() + ",\"news\":[{\"title\":\"\",\"summary\":\"요약\"}],\"thoughts\":[]}"))
                 .andExpect(status().isBadRequest());
         var saved = context.getBean(com.stock_spoon.river_be.competition.repository.CompetitionMarketAnalysisRepository.class)
                 .findAllByCompetitionIdOrderByDateDescIdDesc(competition.getId());
         org.assertj.core.api.Assertions.assertThat(saved).hasSize(1);
         org.assertj.core.api.Assertions.assertThat(saved.get(0).getTitle()).isEqualTo("뉴스");
+        org.assertj.core.api.Assertions.assertThat(saved.get(0).getParticipant().getId()).isEqualTo(participant.getId());
     }
 
     @ParameterizedTest

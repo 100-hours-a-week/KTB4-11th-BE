@@ -11,6 +11,15 @@ import lombok.NoArgsConstructor;
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class CompetitionParticipant {
+    // 내용이 빈 배열이어도 해당 AI의 보고서를 정상 수신했는지 구분한다.
+    @Column(name = "report_ready", nullable = false)
+    private boolean reportReady;
+
+    public void markReportReady() {
+        if (!account.isAiManaged()) throw new IllegalStateException("AI 참가자의 리포트만 저장할 수 있습니다.");
+        this.reportReady = true;
+    }
+
     @Column(name = "final_asset_value")
     private Long finalAssetValue;
 

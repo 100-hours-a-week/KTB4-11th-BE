@@ -4,7 +4,6 @@ import com.stock_spoon.river_be.competition.entity.Competition;
 import com.stock_spoon.river_be.competition.entity.CompetitionReportOutbox;
 import com.stock_spoon.river_be.competition.messaging.CompetitionReportRequest;
 import com.stock_spoon.river_be.competition.messaging.CompetitionReportRequestPublisher;
-import com.stock_spoon.river_be.competition.repository.CompetitionParticipantRepository;
 import com.stock_spoon.river_be.competition.repository.CompetitionReportOutboxRepository;
 import java.util.Objects;
 import lombok.RequiredArgsConstructor;
@@ -21,7 +20,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class CompetitionReportDispatchService {
     private static final Logger log = LoggerFactory.getLogger(CompetitionReportDispatchService.class);
     private final CompetitionReportOutboxRepository outboxes;
-    private final CompetitionParticipantRepository participants;
     private final CompetitionReportRequestPublisher publisher;
 
     // 같은 Outbox의 동시 전송을 막는다. 전송 실패 시 PENDING으로 롤백하고 다음 주기에 재시도한다.
@@ -30,15 +28,17 @@ public class CompetitionReportDispatchService {
         var outbox = outboxes.findLockedById(outboxId).orElse(null);
         if (outbox == null || outbox.getStatus() != CompetitionReportOutbox.Status.PENDING) return null;
         var competition = outbox.getCompetition();
+        var ai = outbox.getParticipant();
         String stage = "message_build";
         try {
             if (competition.getState() != Competition.State.COMPLETED) {
                 throw new IllegalStateException("완료된 대결만 리포트를 요청할 수 있습니다.");
             }
-            var aiParticipants = participants.findAllByCompetitionIdOrderByIdAsc(competition.getId()).stream()
-                    .filter(p -> p.getAccount().isAiManaged()).toList();
-            if (aiParticipants.size() != 1) throw new IllegalStateException("리포트를 요청할 AI 참가자 한 명을 확인할 수 없습니다.");
-            var ai = aiParticipants.getFirst();
+            // 다른 AI의 주문이 섞이지 않도록 Outbox에 지정된 참가자의 계좌만 사용한다.
+            if (!competition.getId().equals(ai.getCompetition().getId()) || !ai.getAccount().isAiManaged()
+                    || !ai.getAccount().belongsTo(competition.getUser().getId())) {
+                throw new IllegalStateException("해당 대결의 AI 참가자 계좌를 확인할 수 없습니다.");
+            }
             var originalIds = outboxes.findExecutedAiReasonIds(ai.getAccount().getId());
             long missingCount = originalIds.stream().filter(Objects::isNull).count();
             if (missingCount > 0) {
@@ -47,7 +47,7 @@ public class CompetitionReportDispatchService {
             }
             // 과거 UUID를 임의 생성하지 않는다. 사용 가능한 원본 ID만 주문 순서대로 중복 제거한다.
             var reasonIds = originalIds.stream().filter(Objects::nonNull).distinct().toList();
-            var payload = new CompetitionReportRequest(competition.getId(), ai.getId(), competition.getUser().getId(), reasonIds);
+            var payload = new CompetitionReportRequest(competition.getId(), ai.getId(), reasonIds);
             stage = "sqs_send";
             publisher.publish(outbox.getRequestId(), payload);
             stage = "sent_save";
@@ -55,8 +55,8 @@ public class CompetitionReportDispatchService {
             outboxes.flush();
             return outbox.getRequestId();
         } catch (RuntimeException error) {
-            log.error("event=competition_report_dispatch_failed stage={} outboxId={} competitionId={} requestId={} causeType={}",
-                    stage, outboxId, competition.getId(), outbox.getRequestId(), error.getClass().getSimpleName(), error);
+            log.error("event=competition_report_dispatch_failed stage={} outboxId={} competitionId={} participantId={} requestId={} causeType={}",
+                    stage, outboxId, competition.getId(), ai.getId(), outbox.getRequestId(), error.getClass().getSimpleName(), error);
             throw error;
         }
     }

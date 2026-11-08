@@ -1,5 +1,7 @@
 # 대결 기능: 브랜치별 호출 흐름
 
+`feat/262-competition/ai-report-sqs`의 최신 리포트 흐름은 [AI 참가자별 SQS 요청](competition-report-outbox.md)과 [참가자별 저장·조회](competition-participant-reports.md)를 참고한다. AI마다 요청을 보내고 POST 본문의 participant_id로 보고서를 저장하며 GET은 reports 배열을 반환한다. 아래 단일 보고서·대결 report_ready 기준의 설명은 이전 브랜치 기록이다.
+
 `feat/232-competition/cancel`의 최신 변경은 [대결 취소와 종료 계좌 비활성화](competition-cancellation-design.md)를 참고한다. 취소 API와 정상 종료 시 양측 계좌 비활성화를 추가했으며, 비활성 일반 계좌도 본인의 과거 주문·매매 내역과 AI 판단 근거를 조회할 수 있다. 취소 대결의 AI 기록 비공개는 유지한다. 아래 과거 브랜치의 설명보다 이 정책을 우선 적용한다.
 
 각 기능은 **호출 흐름 → 전달값 표 → 계산·정책 예시 → 예외 처리** 순서로 읽는다.
@@ -640,6 +642,8 @@ Controller는 JWT 사용자 ID와 경로의 대결 ID를 Service에 넘긴다. S
 코드: [상세 서비스](../src/main/java/com/stock_spoon/river_be/competition/service/CompetitionDetailService.java) · [결과 서비스](../src/main/java/com/stock_spoon/river_be/competition/service/CompetitionService.java) · [결과 DTO](../src/main/java/com/stock_spoon/river_be/competition/dto/CompetitionResultResponse.java)
 
 ## 대결 AI 리포트 조회
+
+> 아래는 단일 보고서 구조의 구현 기록이다. 현재 참가자별 reports 응답과 저장 흐름은 [최신 문서](competition-participant-reports.md)를 따른다.
 
 ```text
 GET /api/v2/users/me/competitions/{competition_id}/report

@@ -24,7 +24,7 @@ public class CompetitionReportSaveController {
     private final CompetitionReportService reports;
 
     @PostMapping("/{competitionId}/report")
-    @Operation(summary = "대결 AI 리포트 저장", description = "AI 서버 전용 API입니다. 일반 사용자 토큰으로 호출할 수 없습니다.")
+    @Operation(summary = "대결 AI 리포트 저장", description = "AI 서버 전용 API입니다. 본문의 participant_id로 대상 AI를 지정합니다. 일반 사용자 토큰으로 호출할 수 없습니다.")
     public CompetitionReportSaveResponse save(@AuthenticationPrincipal Jwt jwt,
             @PathVariable long competitionId, @Valid @RequestBody CompetitionReportSaveRequest request) {
         // JWT의 사용자 ID와 URL의 대결 ID, 검증된 요청을 저장 서비스에 전달한다.

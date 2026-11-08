@@ -25,6 +25,18 @@ class CompetitionReportSaveRequestTests {
     }
 
     private CompetitionReportSaveRequest read(String body) {
-        return json.readValue(body, CompetitionReportSaveRequest.class);
+        return json.readValue("{\"participant_id\":456," + body.strip().substring(1), CompetitionReportSaveRequest.class);
+    }
+
+    @Test void requiresPositiveParticipantId() {
+        try (var factory = Validation.buildDefaultValidatorFactory()) {
+            var validator = factory.getValidator();
+            for (String id : new String[]{"null", "0", "-1"}) {
+                var request = json.readValue("{\"participant_id\":" + id + ",\"news\":[],\"thoughts\":[]}", CompetitionReportSaveRequest.class);
+                assertThat(validator.validate(request)).anyMatch(v -> v.getPropertyPath().toString().equals("participantId"));
+            }
+            var missing = json.readValue("{\"news\":[],\"thoughts\":[]}", CompetitionReportSaveRequest.class);
+            assertThat(validator.validate(missing)).anyMatch(v -> v.getPropertyPath().toString().equals("participantId"));
+        }
     }
 }

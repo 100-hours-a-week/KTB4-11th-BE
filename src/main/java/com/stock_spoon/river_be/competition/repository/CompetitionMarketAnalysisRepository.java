@@ -6,4 +6,5 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface CompetitionMarketAnalysisRepository extends JpaRepository<CompetitionMarketAnalysis, Long> {
     List<CompetitionMarketAnalysis> findAllByCompetitionIdOrderByDateDescIdDesc(Long competitionId);
+    List<CompetitionMarketAnalysis> findAllByCompetitionIdAndParticipantIdOrderByDateDescIdDesc(Long competitionId, Long participantId);
 }

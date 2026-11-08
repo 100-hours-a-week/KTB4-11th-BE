@@ -92,8 +92,8 @@ class UserWithdrawalTests {
         em.persist(new CompetitionAgent(participant, 0, 1, List.of("반도체"), List.of("게임"), "장기 성장"));
         em.persist(new CompetitionReportOutbox(competition, participant, java.util.UUID.randomUUID().toString()));
         em.persist(new CompetitionDailyPerformance(participant, LocalDate.now(), 100000));
-        em.persist(new CompetitionMarketAnalysis(competition, LocalDate.now(), "분석", "내용"));
-        em.persist(new CompetitionJudgmentSummary(competition, "판정", "내용"));
+        em.persist(new CompetitionMarketAnalysis(participant, LocalDate.now(), "분석", "내용"));
+        em.persist(new CompetitionJudgmentSummary(participant, "판정", "내용"));
         em.persist(new RefreshToken(user, "hash-" + user.getId(), now.plusSeconds(3600)));
         em.persist(new RefreshToken(user, "second-" + user.getId(), now.plusSeconds(3600)));
         var stock = new Stock("T" + user.getId(), "종목", "KOSPI", null); em.persist(stock);

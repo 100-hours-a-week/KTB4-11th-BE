@@ -17,12 +17,22 @@ public class CompetitionReportResponse {
     private LocalDate startDate;
     @JsonProperty("end_date")
     private LocalDate endDate;
-    @JsonProperty("report_state")
-    private String reportState;
-    @JsonProperty("market_analyses")
-    private List<MarketAnalysisItem> marketAnalyses;
-    @JsonProperty("judgment_summaries")
-    private List<JudgmentSummaryItem> judgmentSummaries;
+    private List<ReportItem> reports;
+
+    @Getter
+    @AllArgsConstructor
+    public static class ReportItem {
+        @JsonProperty("participant_id")
+        private Long participantId;
+        @JsonProperty("display_name")
+        private String displayName;
+        @JsonProperty("report_state")
+        private String reportState;
+        @JsonProperty("market_analyses")
+        private List<MarketAnalysisItem> marketAnalyses;
+        @JsonProperty("judgment_summaries")
+        private List<JudgmentSummaryItem> judgmentSummaries;
+    }
 
     @Getter
     @AllArgsConstructor

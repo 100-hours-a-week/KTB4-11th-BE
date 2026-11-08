@@ -1,6 +1,6 @@
 # 대결 종료 후 AI 리포트 요청 기록
 
-사용자 vs AI와 AI 간 대결 모두 **AI 참가자당 요청 1건**을 생성한다. 이번 확장은 요청 전송까지이며, 참가자별 보고서 저장·조회는 후속 작업이다. 현재 `Competition.start()`의 AI 간 대결 자동 시작 제한은 변경하지 않았다. 저장 API가 아직 대결 단위이므로 다중 AI의 실제 콜백 연동은 참가자별 저장 확장 이후 활성화한다.
+사용자 vs AI와 AI 간 대결 모두 **AI 참가자당 요청 1건**을 생성한다. 참가자별 저장·조회도 확장했으며 [저장·조회 문서](competition-participant-reports.md)를 따른다. 현재 `Competition.start()`의 AI 간 대결 자동 시작 제한은 변경하지 않았다. 실제 연동은 AI 서버의 participant_id 추가·FE의 reports 배열 대응 및 운영 DB 이관 후 활성화한다.
 
 ## 대결 종료와 Outbox 저장
 

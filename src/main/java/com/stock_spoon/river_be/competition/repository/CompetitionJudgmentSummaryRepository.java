@@ -6,4 +6,5 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface CompetitionJudgmentSummaryRepository extends JpaRepository<CompetitionJudgmentSummary, Long> {
     List<CompetitionJudgmentSummary> findAllByCompetitionIdOrderByIdAsc(Long competitionId);
+    List<CompetitionJudgmentSummary> findAllByCompetitionIdAndParticipantIdOrderByIdAsc(Long competitionId, Long participantId);
 }

@@ -69,6 +69,12 @@ jwt:
   access-expiration: ${JWT_ACCESS_EXPIRATION:15m}
   refresh-expiration: ${JWT_REFRESH_EXPIRATION:14d}
 
+security:
+  user-rate-limit:
+    enabled: ${RATE_LIMIT_ENABLED:false}
+    max-requests: ${RATE_LIMIT_MAX_REQUESTS:0}
+    window: ${RATE_LIMIT_WINDOW:60s}
+
 market:
   http:
     base-url: ${MARKET_HTTP_BASE_URL:https://stock-spoon.com/market}

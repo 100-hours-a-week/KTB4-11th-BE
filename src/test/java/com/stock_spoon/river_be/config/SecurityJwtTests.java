@@ -52,6 +52,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @Import(SecurityJwtTests.ProtectedController.class)
 @Transactional
 class SecurityJwtTests {
+    @Test
+    void allowsProfileUploadAndPatchPreflightWithCookies() throws Exception {
+        for (String[] route : new String[][] {{"POST", "/api/v1/users/me/profile-image/presigned-url"},
+                {"PATCH", "/api/v1/users/me"}}) {
+            mvc.perform(options(route[1]).header("Origin", "http://localhost:3001")
+                            .header("Access-Control-Request-Method", route[0])
+                            .header("Access-Control-Request-Headers", "content-type,x-xsrf-token"))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Access-Control-Allow-Credentials", "true"));
+        }
+    }
     @Autowired WebApplicationContext context;
     @Autowired AuthService authService;
     @Autowired JwtEncoder jwtEncoder;

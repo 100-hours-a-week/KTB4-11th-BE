@@ -29,7 +29,7 @@ class KakaoAuthPersistenceTests {
     @MockitoBean KakaoClient kakao;
 
     @Test
-    void firstLoginCreatesOneUserAndLaterLoginSynchronizesProfile() {
+    void firstLoginCreatesOneUserAndLaterLoginsPreserveProfile() {
         when(kakao.verifyUser("first"))
                 .thenReturn(new KakaoUserInfo(
                         123L, "첫닉네임", "https://example.com/first.jpg"));
@@ -40,8 +40,13 @@ class KakaoAuthPersistenceTests {
         var oauth = oauthUsers.findByProviderAndProviderUserId(OAuthProvider.KAKAO, 123L)
                 .orElseThrow();
         assertThat(oauth.getUser().getNickname()).isEqualTo("첫닉네임");
-        assertThat(oauth.getUser().getProfileImageUrl())
+        assertThat(oauth.getUser().getProfileImageRef())
                 .isEqualTo("https://example.com/first.jpg");
+
+        oauth.getUser().updateNickname("직접수정한닉네임");
+        oauth.getUser().replaceProfileImage("profile-images/final/123/custom.png");
+        users.flush();
+        entityManager.clear();
 
         when(kakao.verifyUser("again"))
                 .thenReturn(new KakaoUserInfo(
@@ -54,9 +59,13 @@ class KakaoAuthPersistenceTests {
         assertThat(oauthUsers.count()).isEqualTo(1);
         var updated = oauthUsers.findByProviderAndProviderUserId(OAuthProvider.KAKAO, 123L)
                 .orElseThrow();
-        assertThat(updated.getUser().getNickname()).isEqualTo("변경된닉네임");
-        assertThat(updated.getUser().getProfileImageUrl())
-                .isEqualTo("https://example.com/changed.jpg");
+        assertThat(updated.getUser().getNickname()).isEqualTo("직접수정한닉네임");
+        assertThat(updated.getUser().getProfileImageRef())
+                .isEqualTo("profile-images/final/123/custom.png");
+
+        updated.getUser().clearProfileImage();
+        users.flush();
+        entityManager.clear();
 
         when(kakao.verifyUser("without-image"))
                 .thenReturn(new KakaoUserInfo(123L, "이미지없는닉네임", null));
@@ -66,8 +75,8 @@ class KakaoAuthPersistenceTests {
 
         var withoutImage = oauthUsers.findByProviderAndProviderUserId(OAuthProvider.KAKAO, 123L)
                 .orElseThrow();
-        assertThat(withoutImage.getUser().getNickname()).isEqualTo("이미지없는닉네임");
-        assertThat(withoutImage.getUser().getProfileImageUrl()).isNull();
+        assertThat(withoutImage.getUser().getNickname()).isEqualTo("직접수정한닉네임");
+        assertThat(withoutImage.getUser().getProfileImageRef()).isNull();
     }
 
     @Test

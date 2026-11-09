@@ -46,6 +46,15 @@ competition:
       url: ${REPORT_QUEUE_URL:}
       region: ${AWS_REGION:ap-northeast-2}
 
+profile-image:
+  bucket: ${PROFILE_IMAGE_S3_BUCKET:}
+  key-prefix: ${PROFILE_IMAGE_S3_KEY_PREFIX:profile-images/}
+  public-base-url: ${PROFILE_IMAGE_S3_PUBLIC_BASE_URL:}
+  region: ${AWS_REGION:ap-northeast-2}
+  max-bytes: ${PROFILE_IMAGE_MAX_BYTES:5242880}
+  upload-ttl-seconds: ${PROFILE_IMAGE_UPLOAD_TTL_SECONDS:300}
+  max-pixels: ${PROFILE_IMAGE_MAX_PIXELS:20000000}
+
 order:
   queue:
     enabled: ${ORDER_QUEUE_ENABLED:false}

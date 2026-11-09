@@ -47,7 +47,7 @@ public class KakaoAuthService {
             User user = userRepository.findLockedById(oauth.get().getUser().getId())
                     .orElseThrow(() -> new AuthException(HttpStatus.UNAUTHORIZED,
                             "UNAUTHORIZED", "다시 로그인해주세요."));
-            user.synchronizeProfile(kakaoUser.nickname(), kakaoUser.profileImageUrl());
+            // 카카오 프로필은 가입 초기값으로만 사용하고, 서비스에 저장된 프로필은 유지한다.
             return user;
         }
 

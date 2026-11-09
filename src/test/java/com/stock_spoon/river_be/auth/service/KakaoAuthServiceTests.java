@@ -77,22 +77,21 @@ class KakaoAuthServiceTests {
         User user = service.verify("code");
 
         assertThat(user.getNickname()).isEqualTo("첫닉네임");
-        assertThat(user.getProfileImageUrl()).isEqualTo("https://example.com/first.jpg");
+        assertThat(user.getProfileImageRef()).isEqualTo("https://example.com/first.jpg");
         verify(client).verifyUser("code");
         verify(users).save(any(User.class));
         verify(oauthUsers).save(any(UserOAuth.class));
     }
 
     @Test
-    void synchronizesNicknameForExistingUser() {
+    void preservesSavedNicknameAndImageForExistingUser() {
         var client = mock(KakaoClient.class);
         var users = mock(UserRepository.class);
         var oauthUsers = mock(UserOAuthRepository.class);
         var service = new KakaoAuthService(client,
                 new KakaoProperties("app", "", "http://localhost:3000/callback", "", false, "test-admin"),
                 users, oauthUsers);
-        User existingUser = new User("이전닉네임");
-        // [회원 탈퇴 테스트 수정] 프로필 동기화가 잠금 재조회한 회원에게 적용되는지 검증한다.
+        User existingUser = new User("수정한닉네임", "profile-images/final/123/custom.png");
         when(users.findLockedById(existingUser.getId())).thenReturn(Optional.of(existingUser));
         when(client.verifyUser("code")).thenReturn(new KakaoUserInfo(
                 123L, "새닉네임", "https://example.com/new.jpg"));
@@ -102,8 +101,8 @@ class KakaoAuthServiceTests {
         User user = service.verify("code");
 
         assertThat(user).isSameAs(existingUser);
-        assertThat(user.getNickname()).isEqualTo("새닉네임");
-        assertThat(user.getProfileImageUrl()).isEqualTo("https://example.com/new.jpg");
+        assertThat(user.getNickname()).isEqualTo("수정한닉네임");
+        assertThat(user.getProfileImageRef()).isEqualTo("profile-images/final/123/custom.png");
         verify(users, never()).save(any());
         verify(oauthUsers, never()).save(any());
     }

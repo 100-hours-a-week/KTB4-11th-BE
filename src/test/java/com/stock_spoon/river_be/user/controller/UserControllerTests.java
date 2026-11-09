@@ -14,6 +14,9 @@ import com.stock_spoon.river_be.user.entity.User;
 import com.stock_spoon.river_be.user.repository.UserRepository;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -41,7 +44,8 @@ class UserControllerTests {
         var me = users.save(new User("이전 닉네임", null));
         var cookie = accessCookie(me.getId());
         var other = users.save(new User("다른 사용자", "https://example.com/other.jpg"));
-        me.synchronizeProfile("현재 닉네임", "https://example.com/me.jpg");
+        me.updateNickname("현재 닉네임");
+        me.replaceProfileImage("https://example.com/me.jpg");
         users.flush();
 
         mvc.perform(get("/api/v1/users/me").cookie(cookie)
@@ -91,5 +95,64 @@ class UserControllerTests {
 
     private Cookie accessCookie(long userId) {
         return new Cookie("access_token", tokens.issue(userId).accessToken());
+    }
+
+    @Test
+    void patchNicknameKeepsImageAndOtherUsers() throws Exception {
+        var me = users.save(new User("기존", "https://example.com/me.png"));
+        var other = users.save(new User("다른 사용자"));
+        mvc.perform(patch("/api/v1/users/me").cookie(accessCookie(me.getId())).with(csrf())
+                        .contentType("application/json").content("{\"nickname\":\" 변경 \"}"))
+                .andExpect(status().isOk()).andExpect(content().json("{\"message\":\"success\"}"));
+        users.flush();
+        org.assertj.core.api.Assertions.assertThat(me.getNickname()).isEqualTo("변경");
+        org.assertj.core.api.Assertions.assertThat(me.getProfileImageRef()).isEqualTo("https://example.com/me.png");
+        org.assertj.core.api.Assertions.assertThat(other.getNickname()).isEqualTo("다른 사용자");
+    }
+
+    @Test
+    void explicitNullClearsImageButKeepsNickname() throws Exception {
+        var me = users.save(new User("기존", "https://example.com/me.png"));
+        mvc.perform(patch("/api/v1/users/me").cookie(accessCookie(me.getId())).with(csrf())
+                        .contentType("application/json").content("{\"profile_image_key\":null}"))
+                .andExpect(status().isOk());
+        org.assertj.core.api.Assertions.assertThat(me.getProfileImageRef()).isNull();
+        org.assertj.core.api.Assertions.assertThat(me.getNickname()).isEqualTo("기존");
+    }
+
+    @Test
+    void rejectsInvalidPatchWithoutChangingNickname() throws Exception {
+        var me = users.save(new User("기존"));
+        for (String body : java.util.List.of("{}", "null", "[]", "{\"nickname\":null}",
+                "{\"nickname\":123}", "{\"nickname\":\" \"}", "{\"unknown\":1}",
+                "{\"nickname\":\"" + "a".repeat(51) + "\"}", "{\"profile_image_key\":123}",
+                "{\"nickname\":\"변경\",\"profile_image_key\":\"profiles/999/not-issued.png\"}")) {
+            mvc.perform(patch("/api/v1/users/me").cookie(accessCookie(me.getId())).with(csrf())
+                            .contentType("application/json").content(body))
+                    .andExpect(status().isBadRequest());
+            org.assertj.core.api.Assertions.assertThat(me.getNickname()).isEqualTo("기존");
+        }
+    }
+
+    @Test
+    void newEndpointsRequireCookieAndCsrf() throws Exception {
+        var me = users.save(new User("기존"));
+        mvc.perform(patch("/api/v1/users/me").with(csrf())
+                        .contentType("application/json").content("{\"nickname\":\"변경\"}"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(patch("/api/v1/users/me").cookie(accessCookie(me.getId()))
+                        .contentType("application/json").content("{\"nickname\":\"변경\"}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(post("/api/v1/users/me/profile-image/presigned-url").cookie(accessCookie(me.getId()))
+                        .contentType("application/json").content("{\"content_type\":\"image/png\",\"content_length\":100}"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test void unconfiguredImageStorageDoesNotBreakNicknameEdits() throws Exception {
+        var me = users.save(new User("기존"));
+        mvc.perform(post("/api/v1/users/me/profile-image/presigned-url").cookie(accessCookie(me.getId())).with(csrf())
+                        .contentType("application/json").content("{\"content_type\":\"image/png\",\"content_length\":100}"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("PROFILE_IMAGE_UNAVAILABLE"));
     }
 }

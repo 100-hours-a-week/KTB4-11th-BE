@@ -2,6 +2,13 @@
 
 이 문서는 작업 마무리 시 다시 확인할 운영 적용 목록이다. 이번 개발에서는 운영 DB·AWS·배포 설정을 변경하지 않았다.
 
+## 전달·적용 상태 (2026-11-09 사용자 확인)
+
+- 사용자가 competition-report-outbox-participant.sql과 competition-reports-participant.sql을 인프라 담당자에게 전달했다. SQL 전달은 완료됐으며 운영 DB 적용 완료는 아직 확인되지 않았다. 적용 사실이 확인되면 이 상태를 갱신한다.
+- 대상은 db/competition-report-outbox-participant.sql과 db/competition-reports-participant.sql이다. 새 코드 배포 후 DB 관련 오류가 발생하면 실제 대상 DB에 해당 변경이 반영됐는지 우선 확인한다.
+- Unknown column의 participant_id/report_ready, 스키마 검증 실패, 기존 uk_report_outbox_competition 중복 오류가 단서다. 코드 버전·실제 컬럼/제약과 로그의 SQL 원인을 대조하며 모든 500 오류를 스키마 문제로 단정하지 않는다.
+- PR #263의 기존 CI 실패는 운영 DB와 무관한 이전 테스트 계약 문제였고 e0c4e80에서 수정했다. [수정 후 CI](https://github.com/100-hours-a-week/KTB4-11th-BE/actions/runs/42485462204)는 통과했다. CI는 별도 H2 DB를 자동 생성하므로 CI 통과가 운영 SQL 반영을 의미하지 않는다.
+
 ## 1. 운영 DB 변경 (앱 배포 전에 적용)
 
 | 대상 | 변경 | SQL |

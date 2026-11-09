@@ -29,3 +29,5 @@
 - 동일한 3개 실패를 로컬에서 재현했다. 보안 테스트에는 필수 participant_id와 실제 AI 참가자를 준비하고, 잘못된 제목 검증과 저장 대상 참가자 확인을 유지했다.
 - AI 간 대결 종료 테스트는 기존의 Outbox 없음 대신 참가자별 PENDING 요청 1건, 고유 requestId, 반복 완료 시 중복 없음까지 검증한다.
 - 서비스·CI 설정·DB SQL은 변경하지 않았다. 로컬 `gradlew.bat test --offline` 전체 실행: 748개 중 724개 통과, 24개 건너뜀, 실패·오류 0건. `git diff --check` 통과.
+- 수정 커밋 e0c4e80을 동일 브랜치에 푸시했고 [Backend Dev CI](https://github.com/100-hours-a-week/KTB4-11th-BE/actions/runs/42485462204) 통과를 확인했다.
+- 사용자 확인: 2026-11-09 두 이관 SQL을 인프라 담당자에게 전달 완료했다. 운영 DB 적용 완료는 아직 확인되지 않았다. 배포 후 DB 오류 조사 시 docs/competition-report-deployment.md의 상태와 실제 스키마를 확인한다.

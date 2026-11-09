@@ -72,6 +72,7 @@ jwt:
 security:
   user-rate-limit:
     enabled: ${RATE_LIMIT_ENABLED:false}
+    mode: ${RATE_LIMIT_MODE:observe}
     max-requests: ${RATE_LIMIT_MAX_REQUESTS:0}
     window: ${RATE_LIMIT_WINDOW:60s}
 

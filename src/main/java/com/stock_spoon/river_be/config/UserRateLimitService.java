@@ -25,15 +25,22 @@ public final class UserRateLimitService {
     private final StringRedisTemplate redis;
     private final int maxRequests;
     private final long windowMillis;
-    private final Counter rejectedRequests;
+    private final Mode mode;
+    private final Counter exceededRequests;
+    private final Counter blockedRequests;
     private final Counter redisErrors;
 
-    UserRateLimitService(StringRedisTemplate redis, int maxRequests, Duration window, MeterRegistry meterRegistry) {
+    UserRateLimitService(StringRedisTemplate redis, int maxRequests, Duration window, Mode mode,
+            MeterRegistry meterRegistry) {
         this.redis = redis;
         this.maxRequests = maxRequests;
         this.windowMillis = window.toMillis();
-        this.rejectedRequests = Counter.builder("security.user_rate_limit.rejected")
-                .description("Authenticated API requests rejected by the per-user rate limiter")
+        this.mode = mode;
+        this.exceededRequests = Counter.builder("security.user_rate_limit.exceeded")
+                .description("Authenticated API requests over the configured per-user rate limit")
+                .register(meterRegistry);
+        this.blockedRequests = Counter.builder("security.user_rate_limit.blocked")
+                .description("Authenticated API requests blocked by the per-user rate limiter")
                 .register(meterRegistry);
         this.redisErrors = Counter.builder("security.user_rate_limit.redis_errors")
                 .description("Per-user rate-limit checks that failed to reach Valkey")
@@ -53,8 +60,11 @@ public final class UserRateLimitService {
             long retryAfterSeconds = ttlMillis > 0 ? Math.max(1, (ttlMillis + 999) / 1000)
                     : Math.max(1, (windowMillis + 999) / 1000);
             boolean allowed = count <= maxRequests;
-            if (!allowed) rejectedRequests.increment();
-            return new Decision(allowed, retryAfterSeconds);
+            if (!allowed) {
+                exceededRequests.increment();
+                if (mode == Mode.BLOCK) blockedRequests.increment();
+            }
+            return new Decision(allowed, mode == Mode.OBSERVE, retryAfterSeconds);
         } catch (RuntimeException error) {
             redisErrors.increment();
             throw error;
@@ -67,5 +77,18 @@ public final class UserRateLimitService {
         return Long.parseLong(String.valueOf(value));
     }
 
-    record Decision(boolean allowed, long retryAfterSeconds) {}
+    enum Mode {
+        OBSERVE,
+        BLOCK;
+
+        static Mode from(String value) {
+            try {
+                return valueOf(value.trim().toUpperCase(java.util.Locale.ROOT));
+            } catch (RuntimeException invalid) {
+                throw new IllegalStateException("RATE_LIMIT_MODE는 observe 또는 block이어야 합니다.", invalid);
+            }
+        }
+    }
+
+    record Decision(boolean allowed, boolean observeOnly, long retryAfterSeconds) {}
 }

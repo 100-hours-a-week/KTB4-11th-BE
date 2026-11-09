@@ -10,6 +10,7 @@ import org.springframework.web.client.RestClient;
 
 @Configuration
 public class KiwoomConfig {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(KiwoomConfig.class);
     @Bean
     @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "kiwoom.legacy.enabled", havingValue = "true")
     KiwoomTokenProvider sharedKiwoomTokenProvider(
@@ -41,6 +42,7 @@ public class KiwoomConfig {
             if (!("http".equals(uri.getScheme()) || "https".equals(uri.getScheme()))
                     || uri.getHost() == null || uri.getUserInfo() != null || uri.getQuery() != null
                     || uri.getFragment() != null || !(uri.getPath().isEmpty() || "/".equals(uri.getPath()))) {
+                log.error("event=kiwoom_configuration_failed stage=collector_client code=COLLECTOR_URL_INVALID");
                 throw new IllegalStateException("수집 담당 서버 주소 형식을 확인하세요.");
             }
             var http = java.net.http.HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3))

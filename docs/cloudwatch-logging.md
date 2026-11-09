@@ -103,3 +103,24 @@ fields @timestamp, @message
 `stage=quote_acquisition code=MARKET_STREAM_UNAVAILABLE`는 체결 전 호가 확보 실패다.
 `order_subscription_refresh_failed`만 있고 market_order_completed가 있으면 구독 정리 오류가
 거래 결과를 되돌렸다는 의미가 아니다. DB의 커밋된 주문·체결 결과를 기준으로 확인한다.
+
+
+## 최신 대결·시세 연결부 점검 (2026-11-09)
+
+- 상세 조회는 `CompetitionDetailService`에서 참가자 구성, 보유 데이터, 현재가, 종목정보 실패를 구분한다. `competitionId`, `participantId`, `accountId`, `stockCode`로 실패 대상을 추적한다.
+- 결과·일별 성과·정산·리포트 조회는 `competitionType`, 실제 참가자 수, 예상 AI 수 또는 전략 수를 기록한다. AI 간 대결은 2~4명의 AI이며 사용자 참가자가 없는 정상 구성을 오류로 해석하지 않는다.
+- 결과 조회의 `participant_validation`, `final_result_validation`, `strategy_validation`을 구분한다. 응답의 참가자별 결과·공동 우승자 목록·전략 원문을 로그로 복사하지 않는다.
+- 참가자별 리포트 저장 완료는 서비스 트랜잭션 반환 후 `competition_report_saved`로 기록한다. `participantId`, 뉴스·판단 개수만 남기며 원문은 남기지 않는다. `pending`은 정상 미수신 상태이므로 오류 로그를 남기지 않는다.
+- AI 설정 전송은 `eventId`가 메시지 식별자다. `competition_ai_setup_published`는 SQS 수락, `competition_ai_setup_outbox_sent`는 DB 커밋 후 상태 저장 완료다. SQS 수락 뒤 DB 저장이 실패하면 재전송될 수 있다. 실패 단계는 `sqs_send`와 `sent_save`로 구분한다. HTTP MDC의 `requestId`와 메시지 `eventId`를 구분한다.
+- 시세 HTTP 연결은 `market_http_failed`의 `stage`로 종가/종목정보 HTTP 실패와 응답 형식 오류, 해당 날짜 종가 미확보를 구분한다. HTTP 실패는 상태·소요 시간을 기록하고 본문·URL·커서는 기록하지 않는다. `httpStatus=0`은 HTTP 응답 상태를 확보하지 못한 실패다.
+
+실제 AWS 전송·AI 콜백·CloudWatch 수집은 로컬 회귀 테스트로 검증되지 않는다.
+
+
+AI 설정 예약 중 생성 실패는 기존 `competition_creation_failed` 이벤트의 stage로 구분한다.
+`ai_setup_strategy_lookup`은 전략 조회·요청 항목 구성,
+`ai_setup_strategy_validation`은 전략 개수 확인,
+`ai_setup_message_encode`는 메시지 구성·JSON 직렬화,
+`ai_setup_outbox_save`는 발송 예약 저장이다.
+성공 후에는 기존 호출자가 `transaction_commit`으로 전환한다.
+전략·요청 본문·예외 메시지 원문은 추가로 기록하지 않는다.

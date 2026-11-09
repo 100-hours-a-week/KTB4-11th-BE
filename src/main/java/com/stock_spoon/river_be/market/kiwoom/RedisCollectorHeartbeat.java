@@ -15,6 +15,7 @@ import org.springframework.stereotype.Component;
 @Component
 @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "kiwoom.legacy.enabled", havingValue = "true")
 public class RedisCollectorHeartbeat {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(RedisCollectorHeartbeat.class);
     static final String KEY = "coord:kiwoom:collector";
     private static final DefaultRedisScript<Long> RENEW = new DefaultRedisScript<>(
             "if redis.call('GET',KEYS[1]) == ARGV[1] then return redis.call('EXPIRE',KEYS[1],15) else return 0 end", Long.class);
@@ -35,6 +36,7 @@ public class RedisCollectorHeartbeat {
     public void start() {
         if (!enabled) return;
         if (!Boolean.TRUE.equals(redis.opsForValue().setIfAbsent(KEY, owner, Duration.ofSeconds(15)))) {
+            log.error("event=collector_lease_failed stage=lease_acquisition code=LEASE_ALREADY_HELD ownerId={}", owner);
             throw new IllegalStateException("이미 실행 중인 키움 수집 담당이 있습니다.");
         }
         active = true;
@@ -44,8 +46,13 @@ public class RedisCollectorHeartbeat {
     public void renew() {
         if (!active) return;
         try {
-            if (!Long.valueOf(1).equals(redis.execute(RENEW, List.of(KEY), owner))) active = false;
+            if (!Long.valueOf(1).equals(redis.execute(RENEW, List.of(KEY), owner))) {
+                log.warn("event=collector_lease_failed stage=lease_renewal code=LEASE_NOT_RENEWED ownerId={}", owner);
+                active = false;
+            }
         } catch (RuntimeException error) {
+            log.warn("event=collector_lease_failed stage=lease_renewal ownerId={} causeType={}",
+                    owner, error.getClass().getSimpleName());
             active = false;
         }
     }
@@ -55,6 +62,8 @@ public class RedisCollectorHeartbeat {
         try {
             if (owner.equals(redis.opsForValue().get(KEY))) return true;
         } catch (RuntimeException error) {
+            log.warn("event=collector_lease_failed stage=lease_verification ownerId={} causeType={}",
+                    owner, error.getClass().getSimpleName());
             // Redis 확인 실패는 담당 유효성 실패로 처리한다.
         }
         active = false;
@@ -70,6 +79,8 @@ public class RedisCollectorHeartbeat {
         try {
             redis.execute(RELEASE, List.of(KEY), owner);
         } catch (RuntimeException error) {
+            log.warn("event=collector_lease_failed stage=lease_release ownerId={} causeType={}",
+                    owner, error.getClass().getSimpleName());
             // 종료 시 Redis가 없으면 TTL로 정리한다.
         }
     }

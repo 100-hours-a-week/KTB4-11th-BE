@@ -21,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/competitions")
 @RequiredArgsConstructor // 리포트 서비스를 생성자로 주입받는다.
 public class CompetitionReportSaveController {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CompetitionReportSaveController.class);
     private final CompetitionReportService reports;
 
     @PostMapping("/{competitionId}/report")
@@ -28,7 +29,15 @@ public class CompetitionReportSaveController {
     public CompetitionReportSaveResponse save(@AuthenticationPrincipal Jwt jwt,
             @PathVariable long competitionId, @Valid @RequestBody CompetitionReportSaveRequest request) {
         // JWT의 사용자 ID와 URL의 대결 ID, 검증된 요청을 저장 서비스에 전달한다.
-        reports.save(Long.parseLong(jwt.getSubject()), competitionId, request);
+        try {
+            reports.save(Long.parseLong(jwt.getSubject()), competitionId, request);
+        } catch (RuntimeException error) {
+            log.warn("event=competition_report_save_failed stage=save_transaction competitionId={} participantId={} causeType={}",
+                    competitionId, request.getParticipantId(), error.getClass().getSimpleName());
+            throw error;
+        }
+        log.info("event=competition_report_saved competitionId={} participantId={} newsCount={} thoughtCount={}",
+                competitionId, request.getParticipantId(), request.getNews().size(), request.getThoughts().size());
         return new CompetitionReportSaveResponse(competitionId, "success");
     }
 }

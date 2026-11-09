@@ -43,9 +43,17 @@ public class CompetitionCompletionService {
                 || now.toInstant().isBefore(competition.tradingEndsAt())) return;
 
         var links = participants.findAllByCompetitionIdOrderByIdAsc(competitionId);
-        CompetitionParticipants.requireValid(competition, links);
+        try {
+            CompetitionParticipants.requireValid(competition, links);
+        } catch (IllegalStateException error) {
+            log.error("event=competition_settlement_failed stage=participant_validation competitionId={} competitionType={} participantCount={} expectedAiCount={} code=INVALID_PARTICIPANTS",
+                    competitionId, competition.getCompetitionType(), links.size(), competition.getAiParticipantCount());
+            throw error;
+        }
         if (competition.getCompetitionType() == Competition.Type.AI_VS_AI
                 && !CompetitionParticipants.validStrategies(links, agents.findAllByParticipantCompetitionIdOrderByPositionAsc(competitionId))) {
+            log.error("event=competition_settlement_failed stage=strategy_validation competitionId={} competitionType={} participantCount={} code=INVALID_STRATEGIES",
+                    competitionId, competition.getCompetitionType(), links.size());
             throw new IllegalStateException("AI 참가자의 전략 연결을 확인할 수 없습니다.");
         }
         // 주문 체결과 같은 계좌 잠금을 잡아 평가 중 자산이 바뀌지 않게 한다. 잠금 순서는 ID 순이다.
@@ -61,7 +69,11 @@ public class CompetitionCompletionService {
         for (var holding : holdings.findAllByAccountIds(accountIds)) {
             long price = prices.computeIfAbsent(holding.getStockCode(),
                     code -> market.closingPrice(code, competition.tradingEndDate()));
-            if (price <= 0 || holding.getQuantity() <= 0) throw new IllegalStateException("종가와 보유 수량을 확인하세요.");
+            if (price <= 0 || holding.getQuantity() <= 0) {
+                log.error("event=competition_settlement_failed stage=holding_valuation_validation competitionId={} accountId={} stockCode={} code=INVALID_PRICE_OR_QUANTITY",
+                        competitionId, holding.getAccountId(), holding.getStockCode());
+                throw new IllegalStateException("종가와 보유 수량을 확인하세요.");
+            }
             values.merge(holding.getAccountId(), Math.multiplyExact(price, holding.getQuantity()), Math::addExact);
         }
         for (var link : links) link.recordFinalAssets(values.get(link.getAccount().getId()));

@@ -9,6 +9,7 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 import tools.jackson.databind.json.JsonMapper;
 
 public class RedisOrderReservationStore implements OrderReservationStore {
+    private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(RedisOrderReservationStore.class);
     private static final String PREFIX="order:temporary:";
     private static final String ACCOUNTS="order:temporary:accounts";
     private static final DefaultRedisScript<Long> PUBLISHED=new DefaultRedisScript<>(
@@ -23,8 +24,11 @@ public class RedisOrderReservationStore implements OrderReservationStore {
     public void add(Reservation r) {
         // Register first: a crash can leave an empty account entry, never an undiscoverable reservation.
         redis.opsForSet().add(ACCOUNTS,Long.toString(r.message().accountId()));
-        if(!Boolean.TRUE.equals(redis.opsForHash().putIfAbsent(key(r.message().accountId()),r.message().eventId(),json.writeValueAsString(r))))
+        if(!Boolean.TRUE.equals(redis.opsForHash().putIfAbsent(key(r.message().accountId()),r.message().eventId(),json.writeValueAsString(r)))) {
+            log.warn("event=order_reservation_failed stage=reservation_insert code=CONCURRENT_RESERVATION_CHANGE eventId={} correlationId={} accountId={}",
+                    r.message().eventId(),r.message().correlationId(),r.message().accountId());
             throw new IllegalStateException("Concurrent reservation change; retry with the same eventId");
+        }
     }
     public void remove(long accountId,String eventId) {
         redis.opsForHash().delete(key(accountId),eventId);

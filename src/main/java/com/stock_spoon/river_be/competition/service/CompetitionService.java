@@ -32,6 +32,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class CompetitionService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CompetitionService.class);
     private final UserRepository users;
     private final AccountRepository accounts;
     private final CompetitionRepository competitions;
@@ -71,12 +72,20 @@ public class CompetitionService {
                 .orElseThrow(() -> new CompetitionException(HttpStatus.NOT_FOUND,
                         "COMPETITION_NOT_FOUND", "대결을 찾을 수 없습니다."));
         if (competition.getState() != Competition.State.COMPLETED) {
+            log.warn("event=competition_result_rejected stage=completion_check competitionId={} code=COMPETITION_NOT_COMPLETED", competitionId);
             throw new CompetitionException(HttpStatus.CONFLICT, "COMPETITION_NOT_COMPLETED", "아직 완료되지 않은 대결입니다.");
         }
 
         var links = participants.findAllByCompetitionIdOrderByIdAsc(competitionId);
-        if (!CompetitionParticipants.valid(competition, links) || competition.getWinner() == null
+        if (!CompetitionParticipants.valid(competition, links)) {
+            log.error("event=competition_result_failed stage=participant_validation competitionId={} competitionType={} participantCount={} expectedAiCount={} code=COMPETITION_RESULT_UNAVAILABLE",
+                    competitionId, competition.getCompetitionType(), links.size(), competition.getAiParticipantCount());
+            throw resultUnavailable();
+        }
+        if (competition.getWinner() == null
                 || links.stream().anyMatch(p -> p.getFinalAssetValue() == null || p.getFinalReturnPercent() == null)) {
+            log.error("event=competition_result_failed stage=final_result_validation competitionId={} competitionType={} code=COMPETITION_RESULT_UNAVAILABLE",
+                    competitionId, competition.getCompetitionType());
             throw resultUnavailable();
         }
         boolean aiOnly = competition.getCompetitionType() == Competition.Type.AI_VS_AI;
@@ -84,7 +93,11 @@ public class CompetitionService {
         var strategies = new java.util.HashMap<Long, CompetitionDetailResponse.Strategy>();
         if (aiOnly) {
             var settings = agentSettings.findAllByParticipantCompetitionIdOrderByPositionAsc(competitionId);
-            if (!CompetitionParticipants.validStrategies(links, settings)) throw resultUnavailable();
+            if (!CompetitionParticipants.validStrategies(links, settings)) {
+                log.error("event=competition_result_failed stage=strategy_validation competitionId={} competitionType={} participantCount={} strategyCount={} code=COMPETITION_RESULT_UNAVAILABLE",
+                        competitionId, competition.getCompetitionType(), links.size(), settings.size());
+                throw resultUnavailable();
+            }
             for (var agent : settings) {
                 long participantId = agent.getParticipant().getId();
                 positions.put(participantId, agent.getPosition());

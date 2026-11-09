@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Isolation;
 @Service
 @RequiredArgsConstructor // final 필드에 필요한 생성자를 만들어 Spring이 Repository를 주입하게 한다.
 public class CompetitionReportService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CompetitionReportService.class);
     private final CompetitionRepository competitions;
     private final CompetitionMarketAnalysisRepository analyses;
     private final CompetitionJudgmentSummaryRepository summaries;
@@ -67,12 +68,20 @@ public class CompetitionReportService {
                 .orElseThrow(() -> new CompetitionException(HttpStatus.NOT_FOUND,
                         "COMPETITION_NOT_FOUND", "대결을 찾을 수 없습니다."));
         var links = participants.findAllByCompetitionIdOrderByIdAsc(competitionId);
-        if (!CompetitionParticipants.valid(competition, links)) throw reportUnavailable();
+        if (!CompetitionParticipants.valid(competition, links)) {
+            log.error("event=competition_report_lookup_failed stage=participant_validation competitionId={} competitionType={} participantCount={} expectedAiCount={}",
+                    competitionId, competition.getCompetitionType(), links.size(), competition.getAiParticipantCount());
+            throw reportUnavailable();
+        }
         boolean aiOnly = competition.getCompetitionType() == Competition.Type.AI_VS_AI;
         var positions = new HashMap<Long, Integer>();
         if (aiOnly) {
             var settings = agents.findAllByParticipantCompetitionIdOrderByPositionAsc(competitionId);
-            if (!CompetitionParticipants.validStrategies(links, settings)) throw reportUnavailable();
+            if (!CompetitionParticipants.validStrategies(links, settings)) {
+                log.error("event=competition_report_lookup_failed stage=strategy_validation competitionId={} participantCount={} strategyCount={}",
+                        competitionId, links.size(), settings.size());
+                throw reportUnavailable();
+            }
             for (var agent : settings) positions.put(agent.getParticipant().getId(), agent.getPosition());
             links = links.stream().sorted(Comparator.comparingInt(p -> positions.get(p.getId()))).toList();
         }

@@ -20,11 +20,15 @@ import software.amazon.awssdk.auth.credentials.*;
 /** 인프라 환경변수로 연결 방식만 선택한다. 데이터 저장·담당 정책은 변경하지 않는다. */
 @Configuration(proxyBeanMethods = false)
 public class RedisDeploymentConfiguration {
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(RedisDeploymentConfiguration.class);
     @Bean
     LettuceConnectionFactory redisConnectionFactory(DataRedisProperties properties, ClientResources resources,
             ObjectProvider<ElastiCacheIamCredentials> credentials, @Value("${REDIS_CLUSTER_MODE:false}") boolean cluster) {
         var iam = credentials.getIfAvailable();
         if (iam != null && (!cluster || !properties.getSsl().isEnabled())) {
+            log.error("event=redis_configuration_failed stage=connection_factory code=IAM_REQUIRES_CLUSTER_AND_SSL cluster={} ssl={}",
+                    cluster, properties.getSsl().isEnabled());
             throw new IllegalStateException("Serverless IAM 연결에는 REDIS_CLUSTER_MODE=true와 REDIS_SSL=true가 필요합니다.");
         }
         ClientOptions.Builder options = cluster ? ClusterClientOptions.builder().topologyRefreshOptions(
@@ -64,6 +68,7 @@ public class RedisDeploymentConfiguration {
         ElastiCacheIamCredentials redisIamCredentials(AwsCredentialsProvider aws, DataRedisProperties properties,
                 @Value("${ELASTICACHE_CACHE_NAME}") String cache, @Value("${AWS_REGION:}") String region) {
             if (!StringUtils.hasText(properties.getUsername()) || !StringUtils.hasText(region)) {
+                log.error("event=redis_configuration_failed stage=iam_credentials code=IAM_USERNAME_OR_REGION_MISSING");
                 throw new IllegalStateException("IAM 연결에는 REDIS_USERNAME과 AWS_REGION이 필요합니다.");
             }
             return new ElastiCacheIamCredentials(aws, cache, properties.getUsername(), region, Clock.systemUTC());

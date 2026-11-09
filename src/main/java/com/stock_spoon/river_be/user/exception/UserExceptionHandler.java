@@ -10,14 +10,14 @@ public class UserExceptionHandler {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(UserExceptionHandler.class);
     @ExceptionHandler(AiSnapshotUnavailableException.class)
     ResponseEntity<Map<String, String>> handle(AiSnapshotUnavailableException error) {
-        log.error("event=api_rejected status=503 code=MARKET_DATA_UNAVAILABLE");
+        log.error("event=api_rejected status=503 code=MARKET_DATA_UNAVAILABLE stage=user_exception_handler causeType={}", error.getClass().getSimpleName());
         return ResponseEntity.status(503)
                 .body(Map.of("code", "MARKET_DATA_UNAVAILABLE", "message", error.getMessage()));
     }
 
     @ExceptionHandler(UserNotFoundException.class)
     ResponseEntity<Map<String, String>> handle(UserNotFoundException error) {
-        log.warn("event=api_rejected status=404 code=USER_NOT_FOUND");
+        log.warn("event=api_rejected status=404 code=USER_NOT_FOUND stage=user_exception_handler");
         return ResponseEntity.status(404)
                 .body(Map.of("code", "USER_NOT_FOUND", "message", error.getMessage()));
     }

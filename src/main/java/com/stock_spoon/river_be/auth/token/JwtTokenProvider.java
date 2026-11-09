@@ -18,6 +18,7 @@ import com.stock_spoon.river_be.config.JwtProperties;
 
 @Component
 public class JwtTokenProvider {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(JwtTokenProvider.class);
     private final JwtEncoder encoder;
     private final JwtDecoder refreshDecoder;
     private final JwtProperties properties;
@@ -46,10 +47,12 @@ public class JwtTokenProvider {
             String subject = refreshDecoder.decode(token).getSubject();
             long userId = Long.parseLong(subject);
             if (userId <= 0) {
+                log.warn("event=auth_reissue_rejected stage=refresh_subject_validation code=NON_POSITIVE_SUBJECT");
                 throw invalidRefreshToken();
             }
             return userId;
         } catch (JwtException | NumberFormatException error) {
+            log.warn("event=auth_reissue_rejected stage=refresh_jwt_validation code=INVALID_REFRESH_TOKEN causeType={}", error.getClass().getSimpleName());
             throw invalidRefreshToken();
         }
     }

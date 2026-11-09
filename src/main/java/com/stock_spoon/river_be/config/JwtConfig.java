@@ -22,12 +22,14 @@ import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 @Configuration
 @EnableConfigurationProperties(JwtProperties.class)
 public class JwtConfig {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(JwtConfig.class);
     @Bean
     SecretKey jwtSecretKey(JwtProperties properties) {
         byte[] secret = properties.secret() == null
                 ? new byte[0]
                 : properties.secret().getBytes(StandardCharsets.UTF_8);
         if (secret.length < 32) {
+            log.error("event=jwt_configuration_failed stage=secret_key code=JWT_SECRET_TOO_SHORT");
             throw new IllegalStateException("JWT_SECRET은 32바이트 이상이어야 합니다.");
         }
         return new SecretKeySpec(secret, "HmacSHA256");

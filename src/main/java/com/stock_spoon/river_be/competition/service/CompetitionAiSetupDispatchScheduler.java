@@ -47,10 +47,10 @@ public class CompetitionAiSetupDispatchScheduler {
                     attempted++;
                     try {
                         // 별도 서비스 프록시가 요청별 트랜잭션을 커밋한 후 성공 로그를 남긴다.
-                        String requestId = dispatch.dispatch(id);
-                        if (requestId != null) {
+                        String eventId = dispatch.dispatch(id);
+                        if (eventId != null) {
                             succeeded++;
-                            log.info("event=competition_ai_setup_outbox_sent outboxId={} requestId={}", id, requestId);
+                            log.info("event=competition_ai_setup_outbox_sent outboxId={} eventId={}", id, eventId);
                         }
                     } catch (RuntimeException error) {
                         failed++;

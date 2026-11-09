@@ -22,6 +22,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 /** DB에서 응답용 값만 복사한 후 트랜잭션 밖에서 현재 보유분을 평가한다. */
 @Service
 public class CompetitionDetailService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CompetitionDetailService.class);
     private final CompetitionRepository competitions;
     private final CompetitionParticipantRepository participants;
     private final CompetitionDailyPerformanceRepository performances;
@@ -57,7 +58,7 @@ public class CompetitionDetailService {
         var nameCache = new HashMap<String, String>();
         var items = snapshot.participants().stream().map(p -> {
             var item = new ParticipantItem(p.id(), p.accountId(), p.ai() ? "ai" : "user", p.name(), p.count(), p.strategy(),
-                    topHolding(p.holdings(), priceCache, nameCache));
+                    topHolding(snapshot.id(), p.id(), p.accountId(), p.holdings(), priceCache, nameCache));
             long assets = p.cash();
             for (var holding : p.holdings()) assets = Math.addExact(assets,
                     Math.multiplyExact(priceCache.get(holding.code()), holding.quantity()));
@@ -96,6 +97,8 @@ public class CompetitionDetailService {
             for (int i = 0; i < links.size(); i++) valid &= uniquePositions.contains(i);
         }
         if (!valid) {
+            log.error("event=competition_detail_failed stage=participant_validation competitionId={} competitionType={} participantCount={} userCount={} strategyCount={} expectedAiCount={} code=INVALID_COMPETITION_PARTICIPANTS",
+                    competitionId, competition.getCompetitionType(), links.size(), userCount, settings.size(), competition.getAiParticipantCount());
             throw new CompetitionException(HttpStatus.INTERNAL_SERVER_ERROR,
                     "INVALID_COMPETITION_PARTICIPANTS", "대결 참가자 정보를 확인할 수 없습니다.");
         }
@@ -131,11 +134,13 @@ public class CompetitionDetailService {
                 competition.getEndDate(), dDay, items);
     }
 
-    private TopReturnHolding topHolding(List<Owned> owned, Map<String, Long> priceCache, Map<String, String> nameCache) {
+    private TopReturnHolding topHolding(long competitionId, long participantId, long accountId, List<Owned> owned, Map<String, Long> priceCache, Map<String, String> nameCache) {
         Owned best = null;
         BigDecimal bestRate = null;
         for (var row : owned) {
             if (row.quantity() <= 0 || row.cost() == null || row.cost().signum() <= 0) {
+                log.error("event=competition_detail_failed stage=holding_validation competitionId={} participantId={} accountId={} stockCode={} code=INVALID_HOLDINGS_DATA",
+                        competitionId, participantId, accountId, row.code());
                 throw new CompetitionException(HttpStatus.INTERNAL_SERVER_ERROR,
                         "INVALID_HOLDINGS_DATA", "보유 데이터를 확인해주세요.");
             }
@@ -143,9 +148,15 @@ public class CompetitionDetailService {
             try {
                 price = priceCache.computeIfAbsent(row.code(), prices::currentPrice);
             } catch (IllegalStateException error) {
+                log.warn("event=competition_detail_failed stage=current_price_lookup competitionId={} participantId={} accountId={} stockCode={} code=HOLDINGS_DATA_UNAVAILABLE causeType={}",
+                        competitionId, participantId, accountId, row.code(), error.getClass().getSimpleName());
                 throw unavailable();
             }
-            if (price <= 0) throw unavailable();
+            if (price <= 0) {
+                log.warn("event=competition_detail_failed stage=current_price_validation competitionId={} participantId={} accountId={} stockCode={} code=HOLDINGS_DATA_UNAVAILABLE",
+                        competitionId, participantId, accountId, row.code());
+                throw unavailable();
+            }
             var value = BigDecimal.valueOf(price).multiply(BigDecimal.valueOf(row.quantity()));
             var rate = value.subtract(row.cost()).multiply(BigDecimal.valueOf(100)).divide(row.cost(), MathContext.DECIMAL128);
             if (best == null || rate.compareTo(bestRate) > 0
@@ -159,9 +170,15 @@ public class CompetitionDetailService {
         try {
             name = nameCache.computeIfAbsent(best.code(), code -> market.stockDetails(code).stockName());
         } catch (IllegalStateException error) {
+            log.warn("event=competition_detail_failed stage=stock_details_lookup competitionId={} participantId={} accountId={} stockCode={} code=HOLDINGS_DATA_UNAVAILABLE causeType={}",
+                    competitionId, participantId, accountId, best.code(), error.getClass().getSimpleName());
             throw unavailable();
         }
-        if (name == null || name.isBlank()) throw unavailable();
+        if (name == null || name.isBlank()) {
+            log.warn("event=competition_detail_failed stage=stock_name_validation competitionId={} participantId={} accountId={} stockCode={} code=HOLDINGS_DATA_UNAVAILABLE",
+                    competitionId, participantId, accountId, best.code());
+            throw unavailable();
+        }
         return new TopReturnHolding(best.code(), name, bestRate);
     }
 

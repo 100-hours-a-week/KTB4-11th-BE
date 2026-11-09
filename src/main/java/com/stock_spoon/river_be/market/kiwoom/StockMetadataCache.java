@@ -13,6 +13,7 @@ import tools.jackson.databind.json.JsonMapper;
 /** 장기 보관 가능한 종목 속성만 저장한다. 주문 상태 검증에는 사용하지 않는다. */
 @Component
 public class StockMetadataCache {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(StockMetadataCache.class);
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private final StringRedisTemplate redis;
     // 조회 중인 작업만 유지한다. 결과는 Redis에 저장하고 작업은 성공·실패 모두 제거한다.
@@ -28,7 +29,11 @@ public class StockMetadataCache {
         var existing = loading.putIfAbsent(code, own);
         if (existing != null) {
             try { return existing.join(); }
-            catch (java.util.concurrent.CompletionException error) { throw new IllegalStateException("종목정보 확보에 실패했습니다."); }
+            catch (java.util.concurrent.CompletionException error) {
+                log.warn("event=stock_metadata_failed stage=shared_load_wait stockCode={} causeType={}",
+                        code, error.getCause() == null ? error.getClass().getSimpleName() : error.getCause().getClass().getSimpleName());
+                throw new IllegalStateException("종목정보 확보에 실패했습니다.");
+            }
         }
         try {
             cached = read(code);
@@ -44,6 +49,8 @@ public class StockMetadataCache {
             own.complete(cached);
             return cached;
         } catch (RuntimeException | Error error) {
+            log.warn("event=stock_metadata_failed stage=load_and_cache stockCode={} causeType={}",
+                    code, error.getClass().getSimpleName());
             own.completeExceptionally(error);
             if (error instanceof ClassCastException) throw invalid();
             if (error instanceof org.springframework.dao.DataAccessException) throw unavailable();
@@ -54,11 +61,17 @@ public class StockMetadataCache {
     private Map<String, Object> read(String code) {
         String raw;
         try { raw = redis.opsForValue().get("quote:" + code + ":metadata"); }
-        catch (org.springframework.dao.DataAccessException error) { throw unavailable(); }
+        catch (org.springframework.dao.DataAccessException error) {
+            log.warn("event=stock_metadata_failed stage=cache_read stockCode={} causeType={}", code, error.getClass().getSimpleName());
+            throw unavailable();
+        }
         if (raw == null) return null;
         Metadata value;
         try { value = JSON.readValue(raw, Metadata.class); }
-        catch (RuntimeException error) { throw invalid(); }
+        catch (RuntimeException error) {
+            log.warn("event=stock_metadata_failed stage=cache_decode stockCode={} causeType={}", code, error.getClass().getSimpleName());
+            throw invalid();
+        }
         validate(code, value);
         return fields(value);
     }

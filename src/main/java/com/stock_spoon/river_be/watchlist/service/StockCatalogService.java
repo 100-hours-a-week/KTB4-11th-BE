@@ -35,6 +35,7 @@ public class StockCatalogService {
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public long resolveStockId(String code) {
         if (code == null || !code.matches("[0-9A-Z]{6}")) {
+            log.warn("event=watchlist_stock_resolution_failed stage=stock_code_validation code=INVALID_STOCK_CODE");
             throw new WatchlistException(HttpStatus.BAD_REQUEST, "INVALID_STOCK_CODE", "종목코드를 확인해주세요.");
         }
         Long existing = read.execute(status -> existingId(code));
@@ -43,8 +44,9 @@ public class StockCatalogService {
         try {
             master = market.stockMaster(code);
         } catch (IllegalStateException | RestClientException error) {
-            log.warn("event=watchlist_stock_resolution_failed stage=kiwoom code=STOCK_INFO_UNAVAILABLE stockCode={} causeType={}",
-                    code, error.getClass().getSimpleName());
+            log.warn("event=watchlist_stock_resolution_failed stage=kiwoom code=STOCK_INFO_UNAVAILABLE stockCode={} causeType={} nestedCauseType={}",
+                    code, error.getClass().getSimpleName(),
+                    error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
             throw new WatchlistException(HttpStatus.SERVICE_UNAVAILABLE, "STOCK_INFO_UNAVAILABLE", "종목정보를 가져올 수 없습니다.");
         }
         long id;
@@ -60,7 +62,12 @@ public class StockCatalogService {
                 if (stocks.findByMarketAndStockCode(master.marketCode(), code).isEmpty()) return null;
                 return existingId(code);
             });
-            if (winner == null) throw error;
+            if (winner == null) {
+                log.error("event=watchlist_stock_resolution_failed stage=stock_insert_conflict_recheck stockCode={} code=UNRECOVERED_INTEGRITY_VIOLATION causeType={} nestedCauseType={}",
+                        code, error.getClass().getSimpleName(),
+                        error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
+                throw error;
+            }
             id = winner;
         }
         return resolved(code, id, "kiwoom");
@@ -69,6 +76,7 @@ public class StockCatalogService {
     private Long existingId(String code) {
         var matches = stocks.findAllByStockCode(code);
         if (matches.size() > 1) {
+            log.warn("event=watchlist_stock_resolution_failed stage=existing_stock_lookup stockCode={} code=AMBIGUOUS_STOCK_CODE", code);
             throw new WatchlistException(HttpStatus.CONFLICT, "AMBIGUOUS_STOCK_CODE", "종목코드가 여러 시장에 존재합니다.");
         }
         return matches.isEmpty() ? null : matches.getFirst().getId();

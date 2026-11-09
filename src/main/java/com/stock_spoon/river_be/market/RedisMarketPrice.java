@@ -9,6 +9,7 @@ import tools.jackson.databind.json.JsonMapper;
 /** 평가용 마지막 가격 조회. 저장된 스냅샷을 체결 이벤트로 만들지 않는다. */
 @Component
 public class RedisMarketPrice {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(RedisMarketPrice.class);
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private final StringRedisTemplate redis;
 
@@ -30,6 +31,9 @@ public class RedisMarketPrice {
             if (price <= 0) throw new IllegalArgumentException("현재가 범위 오류");
             return price;
         } catch (RuntimeException error) {
+            log.warn("event=redis_market_price_failed stage=current_price_lookup stockCode={} causeType={} nestedCauseType={}",
+                    code, error.getClass().getSimpleName(),
+                    error.getCause() == null ? "none" : error.getCause().getClass().getSimpleName());
             throw new IllegalStateException("Redis 현재가를 조회할 수 없습니다.");
         }
     }

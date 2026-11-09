@@ -11,6 +11,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 /** 키움 앱의 토큰만 저장한다. 앱 키·시크릿 원문은 저장하지 않는다. */
 public class RedisKiwoomTokenStore {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(RedisKiwoomTokenStore.class);
     private final String key;
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final DefaultRedisScript<Long> INVALIDATE = new DefaultRedisScript<>(
@@ -42,20 +43,32 @@ public class RedisKiwoomTokenStore {
                     || value.appFingerprint() == null) throw new IllegalStateException();
             if (!fingerprint.equals(value.appFingerprint())) return Optional.empty();
             return Optional.of(new Token(value.token(), value.expiresAt()));
-        } catch (RuntimeException error) { throw unavailable(); }
+        } catch (RuntimeException error) {
+            log.warn("event=kiwoom_token_store_failed stage=token_read causeType={}", error.getClass().getSimpleName());
+            throw unavailable();
+        }
     }
 
     public void save(Token token, Instant now) {
         Duration ttl = Duration.between(now, token.expiresAt().minusSeconds(60));
-        if (ttl.isNegative() || ttl.isZero()) throw unavailable();
+        if (ttl.isNegative() || ttl.isZero()) {
+            log.warn("event=kiwoom_token_store_failed stage=token_save code=TOKEN_TTL_NOT_POSITIVE");
+            throw unavailable();
+        }
         try {
             redis.opsForValue().set(key, JSON.writeValueAsString(new StoredToken(token.value(), token.expiresAt(), fingerprint)), ttl);
-        } catch (RuntimeException error) { throw unavailable(); }
+        } catch (RuntimeException error) {
+            log.warn("event=kiwoom_token_store_failed stage=token_save causeType={}", error.getClass().getSimpleName());
+            throw unavailable();
+        }
     }
 
     public void invalidate(String rejected) {
         try { redis.execute(INVALIDATE, List.of(key), rejected, fingerprint); }
-        catch (RuntimeException error) { throw unavailable(); }
+        catch (RuntimeException error) {
+            log.warn("event=kiwoom_token_store_failed stage=token_invalidation causeType={}", error.getClass().getSimpleName());
+            throw unavailable();
+        }
     }
 
     private IllegalStateException unavailable() { return new IllegalStateException("키움 토큰 저장소를 사용할 수 없습니다."); }

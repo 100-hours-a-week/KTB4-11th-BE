@@ -20,6 +20,7 @@ import org.springframework.stereotype.Service;
 @Service
 @RequiredArgsConstructor
 public class CompetitionTradeHistoryService {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CompetitionTradeHistoryService.class);
     private final AccountRepository accounts;
     private final CompetitionHistoryAccess access;
     private final CompetitionTradeHistoryRepository trades;
@@ -83,6 +84,7 @@ public class CompetitionTradeHistoryService {
     }
 
     private CompetitionException invalidOrderData() {
+        log.error("event=competition_trade_history_failed stage=execution_data_validation code=INVALID_ORDER_DATA");
         return new CompetitionException(HttpStatus.INTERNAL_SERVER_ERROR, "INVALID_ORDER_DATA", "주문 체결 데이터를 확인해주세요.");
     }
 
@@ -112,6 +114,8 @@ public class CompetitionTradeHistoryService {
             try {
                 return market.stockDetails(code).stockName();
             } catch (IllegalStateException error) {
+                log.warn("event=competition_trade_history_failed stage=stock_details_lookup orderId={} stockCode={} code=ORDER_DATA_UNAVAILABLE causeType={}",
+                        first.getOrderId(), code, error.getClass().getSimpleName());
                 throw new CompetitionException(HttpStatus.SERVICE_UNAVAILABLE, "ORDER_DATA_UNAVAILABLE", "주문 종목 정보를 조회할 수 없습니다.");
             }
         });

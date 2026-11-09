@@ -233,8 +233,9 @@ public class DbWriteReplayExceptionResolver implements HandlerExceptionResolver 
         try {
             objectMapper.writeValue(response.getOutputStream(), body);
         } catch (IOException writeFailure) {
-            log.warn("event=db_write_replay_response_write_failed requestId={} failureType={}",
-                    accepted.httpRequestId(), writeFailure.getClass().getSimpleName());
+            log.warn("event=db_write_replay_response_write_failed requestId={} failureType={} stage=accepted_response_write replayRequestId={} transactionId={}",
+                    accepted.httpRequestId(), writeFailure.getClass().getSimpleName(),
+                    accepted.replayRequestId(), accepted.transactionId());
         }
         return new ModelAndView();
     }

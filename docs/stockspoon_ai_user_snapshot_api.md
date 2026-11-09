@@ -5,6 +5,19 @@ DB 조회와 인증을 준비한 [1단계](stockspoon_ai_user_snapshot_phase1.md
 [2단계](stockspoon_ai_user_snapshot_phase2_auth.md)에 이어 실제 GET 응답을 연결했다.
 최신 `dev`의 대기 주문 기반 WebSocket 구독과 지정가 체결을 재사용한다.
 
+## 2026-11-09 참가자 식별 정보 추가 (#270)
+
+각 계좌의 `participant_id`를 항상 반환한다. 대결 계좌는 연결된 대결 참가자 ID이며, 참가 기록이 없는 일반 AI 계좌는 `null`이다. 기존 사용자별 계좌 구조와 진행 중·기간 내 대결 계좌만 조회하는 조건은 유지한다. 대상 계좌 ID를 모아 참가 기록을 한 번에 조회하므로 계좌별 추가 쿼리를 실행하지 않는다.
+
+```json
+{"user_id": 10, "accounts": [
+  {"account_id": 100, "participant_id": null},
+  {"account_id": 301, "participant_id": 201}
+]}
+```
+
+위 예시는 기존 계좌 필드를 생략한 것이다. 같은 참가자의 전략 설정 SQS 메시지와 `participant_id`로 연결한다. 아래 문서는 기존 구현 당시의 기록이며 현재 추가 필드와 조회 조건은 이 절을 우선한다.
+
 ## 확정한 계약
 
 - `GET /api/v1/users/ai-server`. 요청 body와 필수 query parameter는 없다.

@@ -12,11 +12,12 @@ import static org.mockito.Mockito.*;
 
 class CompetitionAiSetupMessageTests {
     @Test void serializesAgreedSnakeCaseContract() {
-        var message = new CompetitionAiSetupRequest("stable-id", "competition_ai_setup", 1L,
+        var message = new CompetitionAiSetupRequest("stable-id", "competition_ai_setup", 1L, 10L,
                 List.of(new CompetitionAiSetupRequest.Agent(201L, 301L, 5, List.of("반도체"), List.of(), "")));
         var node = JsonMapper.builder().build().readTree(JsonMapper.builder().build().writeValueAsString(message));
         assertThat(node.get("event_id").asText()).isEqualTo("stable-id");
         assertThat(node.get("event_type").asText()).isEqualTo("competition_ai_setup");
+        assertThat(node.get("user_id").asLong()).isEqualTo(10L);
         assertThat(node.get("agents").get(0).get("participant_id").asLong()).isEqualTo(201);
         assertThat(node.get("agents").get(0).get("account_id").asLong()).isEqualTo(301);
         assertThat(node.get("agents").get(0).get("risk_level").asInt()).isEqualTo(5);

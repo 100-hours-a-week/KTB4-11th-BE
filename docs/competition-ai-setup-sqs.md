@@ -36,7 +36,7 @@ POST /api/v2/users/me/competitions
              excludedThemes, additionalRequest)
           → 설정 개수와 competition.getAiParticipantCount() 일치 확인
           → new CompetitionAiSetupRequest(eventId, "competition_ai_setup",
-                                          competition.getId(), settings)
+                                          competition.getId(), competition.getUser().getId(), settings)
           → JsonMapper.writeValueAsString(message) → 고정 JSON 본문
           → CompetitionAiSetupOutboxRepository.save(
               new CompetitionAiSetupOutbox(competition, eventId, JSON 본문))
@@ -118,7 +118,8 @@ SQS 전송이 성공한 뒤 DB 커밋에 실패하면 실제로 메시지가 도
 
 ## 계약
 
-본문: event_id, event_type=competition_ai_setup, competition_id, agents.
+본문: event_id, event_type=competition_ai_setup, competition_id, user_id, agents.
+user_id는 대결 생성자의 ID다. participant_id는 대결 참가자를 구분한다.
 각 agent: participant_id, account_id, risk_level, preferred_themes, excluded_themes, additional_request.
 AI 2~4명을 설정 순서로 포함한다. risk_level은 1=안정형, 5=성장형이다. agent_id는 보내지 않는다.
 
@@ -154,3 +155,7 @@ BE만 수정한다. FE/AI 코드는 수정하지 않는다. 설정 완료 통지
 - 실제 SQS와 원격 MySQL 적용은 실행하지 않았다.
 
 - 최종 전체 테스트: 744개, 실패 0, 오류 0, 건너뜀 24. 단일 Gradle 실행 BUILD SUCCESSFUL 확인.
+
+## 기존 아웃박스 호환 (#270)
+
+새로 생성되는 예약의 본문에만 대결 소유자의 user_id를 포함한다. 기존에 고정 저장된 미전송 메시지는 자동 변경하지 않으며, AI 수신 측과 기존 메시지 처리 방법 및 배포 순서를 확인해야 한다. agent_id는 전송하지 않고 participant_id로 참가자를 식별한다. DB 스키마 변경은 없다.

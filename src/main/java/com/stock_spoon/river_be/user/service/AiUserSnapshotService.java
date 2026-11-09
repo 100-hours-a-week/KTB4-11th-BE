@@ -2,6 +2,7 @@ package com.stock_spoon.river_be.user.service;
 
 import com.stock_spoon.river_be.account.entity.Account;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
+import com.stock_spoon.river_be.competition.repository.CompetitionParticipantRepository;
 import com.stock_spoon.river_be.holding.repository.HoldingRepository;
 import com.stock_spoon.river_be.order.entity.Order;
 import com.stock_spoon.river_be.order.repository.OrderRepository;
@@ -23,13 +24,16 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class AiUserSnapshotService {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AiUserSnapshotService.class);
+    private final CompetitionParticipantRepository participants;
     private final UserRepository users;
     private final AccountRepository accounts;
     private final HoldingRepository holdings;
     private final OrderRepository orders;
 
     public AiUserSnapshotService(UserRepository users, AccountRepository accounts,
-            HoldingRepository holdings, OrderRepository orders) {
+            HoldingRepository holdings, OrderRepository orders,
+            CompetitionParticipantRepository participants) {
+        this.participants = participants;
         this.users = users;
         this.accounts = accounts;
         this.holdings = holdings;
@@ -42,6 +46,10 @@ public class AiUserSnapshotService {
         Map<Long, List<AccountSnapshot>> accountsByUser = new HashMap<>();
         if (!managedAccounts.isEmpty()) {
             var accountIds = managedAccounts.stream().map(Account::getId).toList();
+            Map<Long, Long> participantIdsByAccount = new HashMap<>();
+            for (var participant : participants.findAllByAccountIdIn(accountIds)) {
+                participantIdsByAccount.put(participant.getAccount().getId(), participant.getId());
+            }
             Map<Long, List<StockSnapshot>> stocksByAccount = new HashMap<>();
             for (var holding : holdings.findAllByAccountIds(accountIds)) {
                 stocksByAccount.computeIfAbsent(holding.getAccountId(), ignored -> new ArrayList<>())
@@ -59,7 +67,8 @@ public class AiUserSnapshotService {
             }
             for (var account : managedAccounts) {
                 accountsByUser.computeIfAbsent(account.getUser().getId(), ignored -> new ArrayList<>())
-                        .add(new AccountSnapshot(account.getId(), account.getName(), account.isActive(),
+                        .add(new AccountSnapshot(account.getId(), participantIdsByAccount.get(account.getId()),
+                                account.getName(), account.isActive(),
                                 account.getCashBalance(),
                                 List.copyOf(stocksByAccount.getOrDefault(account.getId(), List.of())),
                                 List.copyOf(ordersByAccount.getOrDefault(account.getId(), List.of()))));

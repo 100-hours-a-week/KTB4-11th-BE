@@ -59,6 +59,7 @@ class CompetitionUnifiedCreationTests {
             var reservation = reservations.getFirst();
             var payload = tools.jackson.databind.json.JsonMapper.builder().build().readTree(reservation.getPayload());
             assertThat(payload.get("event_id").asText()).isEqualTo(reservation.getEventId());
+            assertThat(payload.get("user_id").asLong()).isEqualTo(owner.getId());
             assertThat(payload.get("agents").size()).isEqualTo(count);
             var stored = agents.findAllByParticipantCompetitionIdOrderByPositionAsc(c.getId());
             assertThat(stored).hasSize(count);

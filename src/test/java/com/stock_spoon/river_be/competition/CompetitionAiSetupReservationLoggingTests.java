@@ -26,6 +26,9 @@ class CompetitionAiSetupReservationLoggingTests {
         var json = spy(JsonMapper.builder().build());
         var competition = mock(Competition.class);
         when(competition.getId()).thenReturn(10L);
+        var owner = mock(com.stock_spoon.river_be.user.entity.User.class);
+        when(owner.getId()).thenReturn(1L);
+        when(competition.getUser()).thenReturn(owner);
         when(competition.getAiParticipantCount()).thenReturn(1);
         var participant = mock(CompetitionParticipant.class);
         var account = mock(com.stock_spoon.river_be.account.entity.Account.class);

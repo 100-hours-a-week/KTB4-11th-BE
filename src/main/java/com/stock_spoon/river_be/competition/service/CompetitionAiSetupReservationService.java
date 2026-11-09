@@ -32,7 +32,8 @@ public class CompetitionAiSetupReservationService {
             throw new IllegalStateException("AI strategy count mismatch");
         }
         CompetitionCreationLog.stage("ai_setup_message_encode");
-        var message = new CompetitionAiSetupRequest(eventId, "competition_ai_setup", competition.getId(), settings);
+        var message = new CompetitionAiSetupRequest(eventId, "competition_ai_setup",
+                competition.getId(), competition.getUser().getId(), settings);
         String payload = json.writeValueAsString(message);
         CompetitionCreationLog.stage("ai_setup_outbox_save");
         outboxes.save(new CompetitionAiSetupOutbox(competition, eventId, payload));

@@ -23,6 +23,9 @@ public interface CompetitionParticipantRepository extends JpaRepository<Competit
     @EntityGraph(attributePaths = "competition")
     Optional<CompetitionParticipant> findByAccountId(Long accountId);
 
+    @EntityGraph(attributePaths = "account")
+    List<CompetitionParticipant> findAllByAccountIdIn(java.util.Collection<Long> accountIds);
+
     boolean existsByAccountId(Long accountId);
 
     @org.springframework.data.jpa.repository.Query("select p.account.id from CompetitionParticipant p where p.account.id in :accountIds")

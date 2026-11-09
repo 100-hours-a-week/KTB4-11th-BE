@@ -5,6 +5,41 @@ DB 조회와 인증을 준비한 [1단계](stockspoon_ai_user_snapshot_phase1.md
 [2단계](stockspoon_ai_user_snapshot_phase2_auth.md)에 이어 실제 GET 응답을 연결했다.
 최신 `dev`의 대기 주문 기반 WebSocket 구독과 지정가 체결을 재사용한다.
 
+## 2026-11-09 참가자 식별 정보 추가 (#270)
+
+각 계좌의 `participant_id`를 항상 반환한다. 대결 계좌는 연결된 대결 참가자 ID이며, 참가 기록이 없는 일반 AI 계좌는 `null`이다. 기존 사용자별 계좌 구조와 진행 중·기간 내 대결 계좌만 조회하는 조건은 유지한다. 대상 계좌 ID를 모아 참가 기록을 한 번에 조회하므로 계좌별 추가 쿼리를 실행하지 않는다.
+
+```json
+{"user_id": 10, "accounts": [
+  {"account_id": 100, "participant_id": null},
+  {"account_id": 301, "participant_id": 201}
+]}
+```
+
+위 예시는 기존 계좌 필드를 생략한 것이다. 같은 참가자의 전략 설정 SQS 메시지와 `participant_id`로 연결한다. 아래 문서는 기존 구현 당시의 기록이며 현재 추가 필드와 조회 조건은 이 절을 우선한다.
+
+### 현재 참가자 ID 조회 흐름
+
+```text
+GET /api/v1/users/ai-server
+  → user.controller.AiUserSnapshotController.snapshot()
+  → user.service.AiUserSnapshotService.snapshot() [읽기 트랜잭션]
+    → AccountRepository.findActiveAiManaged() → AI 운용 계좌 목록
+    → 각 계좌의 id를 모아 accountIds 생성
+    → CompetitionParticipantRepository.findAllByAccountIdIn(accountIds)
+      → 각 참가자와 연결 계좌를 함께 조회
+    → account ID → participant ID 매핑 생성
+    → 보유종목·대기 주문 일괄 조회
+    → 각 AccountSnapshot에 participantIdsByAccount.get(accountId) 전달
+      (참가 기록이 없으면 null)
+    → 사용자별 계좌를 UserSnapshot으로 묶어 반환
+  → AiUserSnapshotResponse(users) → HTTP 200 JSON
+```
+
+계좌가 하나도 없으면 참가자·보유종목·대기 주문 조회는 건너뛰고 사용자별 빈 계좌 목록을 만든다. 계좌가 있으면 대상 계좌 ID를 모아 참가 기록을 한 번에 조회하고 계좌 ID를 키로 저장한다. 이어서 원래 조회한 계좌를 순회하면서 연결된 참가자 ID를 넣는다. 저장된 참가 기록이 없는 계좌는 `null`이고, 해당 필드는 JSON에서도 생략하지 않는다. 반환 대상 계좌는 기존의 활성 AI 계좌 및 대결 상태·기간 조건을 따른다.
+
+코드: [컨트롤러](../src/main/java/com/stock_spoon/river_be/user/controller/AiUserSnapshotController.java), [조회 서비스](../src/main/java/com/stock_spoon/river_be/user/service/AiUserSnapshotService.java), [참가자 저장소](../src/main/java/com/stock_spoon/river_be/competition/repository/CompetitionParticipantRepository.java), [응답 DTO](../src/main/java/com/stock_spoon/river_be/user/dto/AiUserSnapshotResponse.java).
+
 ## 확정한 계약
 
 - `GET /api/v1/users/ai-server`. 요청 body와 필수 query parameter는 없다.

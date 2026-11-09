@@ -1,6 +1,7 @@
 package com.stock_spoon.river_be.user.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import java.math.BigDecimal;
 import java.util.List;
 
@@ -9,6 +10,7 @@ public record AiUserSnapshotResponse(List<UserSnapshot> users) {
             List<AccountSnapshot> accounts) {}
 
     public record AccountSnapshot(@JsonProperty("account_id") long accountId,
+            @JsonProperty("participant_id") @JsonInclude(JsonInclude.Include.ALWAYS) Long participantId,
             @JsonProperty("account_name") String accountName,
             @JsonProperty("is_active") boolean active,
             @JsonProperty("cash_balance") long cashBalance,

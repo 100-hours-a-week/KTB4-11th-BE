@@ -7,6 +7,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.stock_spoon.river_be.account.entity.Account;
+import com.stock_spoon.river_be.competition.entity.Competition;
+import com.stock_spoon.river_be.competition.entity.CompetitionParticipant;
+import com.stock_spoon.river_be.competition.repository.CompetitionRepository;
+import com.stock_spoon.river_be.competition.repository.CompetitionParticipantRepository;
+import jakarta.persistence.EntityManager;
+import static org.assertj.core.api.Assertions.assertThat;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import com.stock_spoon.river_be.config.JwtProperties;
 import com.stock_spoon.river_be.market.MarketStream;
@@ -40,6 +46,9 @@ import org.springframework.web.context.WebApplicationContext;
 class AiUserSnapshotControllerTests {
     @Autowired WebApplicationContext context;
     @Autowired UserRepository users;
+    @Autowired CompetitionRepository competitions;
+    @Autowired CompetitionParticipantRepository participants;
+    @Autowired EntityManager entityManager;
     @Autowired AccountRepository accounts;
     @Autowired HoldingRepository holdings;
     @Autowired OrderRepository orders;
@@ -67,7 +76,7 @@ class AiUserSnapshotControllerTests {
                 .andExpect(content().json("""
                         {"users":[
                           {"user_id":%d,"accounts":[{
-                            "account_id":%d,"account_name":"AI 계좌","is_active":true,
+                            "account_id":%d,"participant_id":null,"account_name":"AI 계좌","is_active":true,
                             "cash_balance":1000000,
                             "stocks":[{"stock_code":"005930","total_cost":1000000,"quantity":10}],
                             "pending_orders":[{"order_id":%d,"stock_code":"005930",
@@ -78,6 +87,36 @@ class AiUserSnapshotControllerTests {
                         ]}
                         """.formatted(user.getId(), account.getId(), order.getId(), emptyUser.getId()),
                         JsonCompareMode.STRICT));
+    }
+
+    @Test
+    void returnsMatchingParticipantIdsForBothCompetitionTypesAndNullForGeneralAccount() throws Exception {
+        var user = users.save(new User("전략 사용자"));
+        var other = users.save(new User("다른 사용자"));
+        var general = accounts.save(new Account(user, "일반 AI", 1_000_000));
+        var userAi = accounts.save(new Account(user, "사용자 대결 AI", 1_000_000, true));
+        var aiAi = accounts.save(new Account(other, "AI 대결 AI", 1_000_000, true));
+        var readyAccount = accounts.save(new Account(other, "대기 대결 AI", 1_000_000, true));
+        var today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
+        var first = competitions.save(new Competition(user, "대결 1", Competition.Type.USER_VS_AI, today, today.plusDays(3), 1_000_000, 1));
+        var second = competitions.save(new Competition(other, "대결 2", Competition.Type.AI_VS_AI, today, today.plusDays(3), 1_000_000, 2));
+        var ready = competitions.save(new Competition(other, "대결 3", Competition.Type.AI_VS_AI, today, today.plusDays(3), 1_000_000, 2));
+        var p1 = participants.save(new CompetitionParticipant(first, userAi));
+        var p2 = participants.save(new CompetitionParticipant(second, aiAi));
+        participants.save(new CompetitionParticipant(ready, readyAccount));
+        entityManager.flush();
+        entityManager.createNativeQuery("update competitions set state = 'IN_PROGRESS' where competition_id in (:ids)")
+                .setParameter("ids", java.util.List.of(first.getId(), second.getId())).executeUpdate();
+        entityManager.clear();
+        var result = mvc.perform(get("/api/v1/users/ai-server").cookie(aiCookie())).andExpect(status().isOk()).andReturn();
+        var json = tools.jackson.databind.json.JsonMapper.builder().build().readTree(result.getResponse().getContentAsString());
+        var byAccount = new java.util.HashMap<Long, tools.jackson.databind.JsonNode>();
+        json.get("users").forEach(u -> u.get("accounts").forEach(a -> byAccount.put(a.get("account_id").asLong(), a)));
+        assertThat(byAccount.get(general.getId()).has("participant_id")).isTrue();
+        assertThat(byAccount.get(general.getId()).get("participant_id").isNull()).isTrue();
+        assertThat(byAccount.get(userAi.getId()).get("participant_id").asLong()).isEqualTo(p1.getId());
+        assertThat(byAccount.get(aiAi.getId()).get("participant_id").asLong()).isEqualTo(p2.getId());
+        assertThat(byAccount).doesNotContainKey(readyAccount.getId());
     }
 
     @Test
@@ -104,7 +143,7 @@ class AiUserSnapshotControllerTests {
                 .andExpect(status().isOk())
                 .andExpect(content().json("""
                         {"users":[{"user_id":%d,"accounts":[{
-                          "account_id":%d,"account_name":"빈 AI 계좌","is_active":true,
+                          "account_id":%d,"participant_id":null,"account_name":"빈 AI 계좌","is_active":true,
                           "cash_balance":1000000,"stocks":[],"pending_orders":[]
                         }]}]}
                         """.formatted(user.getId(), account.getId()), JsonCompareMode.STRICT));

@@ -2,6 +2,8 @@ package com.stock_spoon.river_be.competition.dto;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.LocalDate;
+import java.util.List;
+import jakarta.validation.Valid;
 
 import jakarta.validation.constraints.*;
 import lombok.Getter;
@@ -35,6 +37,12 @@ public class CompetitionCreateRequest {
     private Long initialCapital;
 
     @JsonProperty("ai_participant_count")
+    @NotNull
     @Min(1)
+    @Max(4)
     private Integer aiParticipantCount=1;
+
+    @Size(min = 2, max = 4)
+    @io.swagger.v3.oas.annotations.media.Schema(description = "ai_vs_ai 대결의 AI 전략 목록. 생성 요청에 통합되어 있으며 별도 ai-settings API는 없습니다.")
+    private List<@NotNull @Valid CompetitionAgentRequest> agents;
 }

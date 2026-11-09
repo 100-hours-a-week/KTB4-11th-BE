@@ -1,5 +1,11 @@
 package com.stock_spoon.river_be.order.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
+import com.stock_spoon.river_be.config.DbReadRetryable;
+import com.stock_spoon.river_be.config.DbWriteReplayBusinessCommand;
+import static com.stock_spoon.river_be.config.DbWriteReplayBusinessCommand.Type.*;
 import com.stock_spoon.river_be.order.dto.OrderCancelRequest;
 import com.stock_spoon.river_be.order.dto.OrderCreateRequest;
 import com.stock_spoon.river_be.order.dto.OrderCreateResponse;
@@ -26,6 +32,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+@Tag(name = "주문")
 @RestController
 @RequestMapping("/api/v1/accounts/{accountId}/orders")
 public class OrderController {
@@ -56,7 +63,9 @@ public class OrderController {
         this.stream = stream;
     }
 
+    @DbReadRetryable
     @org.springframework.web.bind.annotation.GetMapping
+    @Operation(summary = "주문 내역 조회")
     public OrderHistoryResponse list(@AuthenticationPrincipal Jwt jwt, @PathVariable long accountId,
             @org.springframework.web.bind.annotation.RequestParam(required = false) String limit,
             @org.springframework.web.bind.annotation.RequestParam(required = false) String page,
@@ -74,7 +83,9 @@ public class OrderController {
 
 
     @org.springframework.web.bind.annotation.PatchMapping("/{orderId}")
+    @DbWriteReplayBusinessCommand(ORDER_CANCEL)
     @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Operation(summary = "주문 취소")
     public void cancel(@AuthenticationPrincipal Jwt jwt, @PathVariable long accountId,
             @PathVariable long orderId, @Valid @RequestBody OrderCancelRequest request) {
         long userId;
@@ -92,7 +103,9 @@ public class OrderController {
     // @RequestBody는 JSON을 DTO로 변환하고 @Valid는 DTO의 제약을 검사한다.
     // 반환 DTO는 Spring이 JSON으로 변환하며 @ResponseStatus에 따라 HTTP 201을 보낸다.
     @PostMapping
+    @DbWriteReplayBusinessCommand(ORDER_CREATE)
     @ResponseStatus(HttpStatus.CREATED)
+    @Operation(summary = "매수·매도 주문 생성")
     public Object create(@AuthenticationPrincipal Jwt jwt,
             @PathVariable long accountId, @Valid @RequestBody OrderCreateRequest request,
             @org.springframework.web.bind.annotation.RequestHeader(name = "Idempotency-Key", required = false) String eventId) {

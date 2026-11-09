@@ -12,6 +12,18 @@ import static org.mockito.Mockito.*;
 
 class ElastiCacheIamCredentialsTests {
     @Test
+    void shortLivedConnectionDoesNotReceiveRedundantAuthentication() {
+        var aws = mock(AwsCredentialsProvider.class);
+        when(aws.resolveCredentials()).thenReturn(AwsBasicCredentials.create("test-access", "test-secret"));
+        var provider = new ElastiCacheIamCredentials(aws, "test-cache", "backend-user", "ap-northeast-2", Clock.systemUTC());
+        StepVerifier.withVirtualTime(provider::credentials)
+                .expectSubscription()
+                .expectNoEvent(Duration.ofMinutes(1))
+                .thenCancel().verify(Duration.ofSeconds(5));
+        verifyNoInteractions(aws);
+    }
+
+    @Test
     void signsServerlessCacheAndSessionCredentialsWithoutEndpointOrScheme() {
         var aws = mock(AwsCredentialsProvider.class);
         when(aws.resolveCredentials()).thenReturn(AwsSessionCredentials.create("test-access", "test-secret", "test-session"));
@@ -30,12 +42,12 @@ class ElastiCacheIamCredentialsTests {
     }
 
     @Test
-    void initialStreamingFailureDoesNotPreventNextTickRenewal() {
+    void firstScheduledFailureDoesNotPreventNextTickRenewal() {
         var aws = mock(AwsCredentialsProvider.class);
         when(aws.resolveCredentials()).thenThrow(new IllegalStateException("test failure"))
                 .thenReturn(AwsBasicCredentials.create("renewed", "test-secret"));
         var provider = new ElastiCacheIamCredentials(aws, "test-cache", "backend-user", "ap-northeast-2", Clock.systemUTC());
-        StepVerifier.withVirtualTime(provider::credentials).thenAwait(Duration.ofMinutes(10))
+        StepVerifier.withVirtualTime(provider::credentials).thenAwait(Duration.ofMinutes(20))
                 .expectNextMatches(value -> parameters(new String(value.getPassword())).get("X-Amz-Credential").startsWith("renewed/"))
                 .thenCancel().verify(Duration.ofSeconds(10));
     }
@@ -57,6 +69,9 @@ class ElastiCacheIamCredentialsTests {
         var provider = new ElastiCacheIamCredentials(aws, "test-cache", "backend-user", "ap-northeast-2", Clock.systemUTC());
         assertThat(provider.supportsStreaming()).isTrue();
         StepVerifier.withVirtualTime(provider::credentials)
+                .expectSubscription()
+                .expectNoEvent(Duration.ofMinutes(9))
+                .thenAwait(Duration.ofMinutes(1))
                 .expectNextMatches(value -> parameters(new String(value.getPassword())).get("X-Amz-Credential").startsWith("first/"))
                 .thenAwait(Duration.ofMinutes(10))
                 .thenAwait(Duration.ofMinutes(10))

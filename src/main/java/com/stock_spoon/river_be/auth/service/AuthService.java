@@ -16,6 +16,8 @@ public class AuthService {
         this.refreshTokenService = refreshTokenService;
     }
 
+    // [회원 탈퇴 수정] 회원 확인·프로필 동기화부터 토큰 저장까지 한 트랜잭션으로 묶어 회원 잠금이 중간에 풀리지 않게 한다.
+    @org.springframework.transaction.annotation.Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public LoginTokens login(String authorizationCode) {
         var user = kakaoAuthService.verify(authorizationCode);
         var tokens = refreshTokenService.create(user);

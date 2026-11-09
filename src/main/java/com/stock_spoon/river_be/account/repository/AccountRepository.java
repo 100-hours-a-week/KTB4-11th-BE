@@ -9,6 +9,10 @@ import jakarta.persistence.LockModeType;
 import com.stock_spoon.river_be.account.entity.Account;
 
 public interface AccountRepository extends JpaRepository<Account, Long> {
+    // [회원 탈퇴 추가] 비활성 계좌도 포함한 모든 소유 계좌를 ID 순으로 잠가 체결과 삭제를 직렬화한다.
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select a from Account a where a.user.id = :userId order by a.id")
+    List<Account> findAllLockedByUserId(long userId);
     @Query("select p.competition from CompetitionParticipant p where p.account.id = :accountId")
     Optional<com.stock_spoon.river_be.competition.entity.Competition> findCompetitionByAccountId(Long accountId);
 
@@ -32,10 +36,13 @@ public interface AccountRepository extends JpaRepository<Account, Long> {
 
     Optional<Account> findByIdAndUserIdAndActiveTrue(Long accountId, Long userId);
 
+    // 과거 주문·매매 기록 조회는 활성 여부와 관계없이 소유권만 검사한다.
+    Optional<Account> findByIdAndUserId(Long accountId, Long userId);
+
+    // [계좌 목록 수정] 일반·대결 AI 계좌를 제외하고 본인의 활성 비AI 계좌만 반환한다.
     @Query("select a from Account a where a.user.id = :userId and a.active = true "
-            + "and not exists (select p.id from CompetitionParticipant p where p.account = a and a.aiManaged = true) "
-            + "order by a.createdAt, a.id")
-    List<Account> findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(Long userId);
+            + "and a.aiManaged = false order by a.createdAt, a.id")
+    List<Account> findAllByUserIdAndActiveTrueAndAiManagedFalseOrderByCreatedAtAscIdAsc(Long userId);
 
     // 일반 v1 AI 계좌는 유지한다. 대결 계좌는 진행 중이고 기간 안인 경우에만 운용 대상으로 공개한다.
     @Query("select a from Account a join fetch a.user where a.active = true and a.aiManaged = true "

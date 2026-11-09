@@ -85,32 +85,33 @@ class CompetitionResultTests {
                 .andExpect(jsonPath("$.start_date").value("2026-10-12"))
                 .andExpect(jsonPath("$.end_date").value("2026-10-16"))
                 .andExpect(jsonPath("$.d_day").value(org.hamcrest.Matchers.nullValue()))
-                .andExpect(jsonPath("$.winner").value("user"))
-                .andExpect(jsonPath("$.user_final_return_percent").value(8.2))
-                .andExpect(jsonPath("$.ai_final_return_percent").value(5.6))
+                .andExpect(jsonPath("$.winner").value("나"))
+                .andExpect(jsonPath("$.participants[1].final_return_percent").value(8.2))
+                .andExpect(jsonPath("$.participants[0].final_return_percent").value(5.6))
                 .andExpect(jsonPath("$.participants[0].account_id").value(aiParticipant.getAccount().getId().intValue()))
                 .andExpect(jsonPath("$.participants[0].participant_type").value("ai"))
                 .andExpect(jsonPath("$.participants[1].account_id").value(userParticipant.getAccount().getId().intValue()))
                 .andExpect(jsonPath("$.participants[1].participant_type").value("user"))
-                .andExpect(jsonPath("$.daily_performances.length()").value(2))
-                .andExpect(jsonPath("$.daily_performances[0].date").value("2026-10-15"))
-                .andExpect(jsonPath("$.daily_performances[0].user_cumulative_return_percent").value(2.0))
-                .andExpect(jsonPath("$.daily_performances[0].ai_cumulative_return_percent").value(1.0))
-                .andExpect(jsonPath("$.daily_performances[1].user_cumulative_return_percent").value(8.2))
-                .andExpect(jsonPath("$.daily_performances[1].ai_cumulative_return_percent").value(5.6));
+                .andExpect(jsonPath("$.participants[1].daily_performances.length()").value(2))
+                .andExpect(jsonPath("$.participants[1].daily_performances[0].date").value("2026-10-15"))
+                .andExpect(jsonPath("$.participants[1].daily_performances[0].cumulative_return_percent").value(2.0))
+                .andExpect(jsonPath("$.participants[0].daily_performances[0].cumulative_return_percent").value(1.0))
+                .andExpect(jsonPath("$.participants[1].daily_performances[1].cumulative_return_percent").value(8.2))
+                .andExpect(jsonPath("$.participants[0].daily_performances[1].cumulative_return_percent").value(5.6));
         assertThat(performances.count()).isEqualTo(count);
         verifyNoInteractions(market);
     }
 
     @Test
-    void missingParticipantDayIsNullRatherThanInventedZero() throws Exception {
+    void missingParticipantDaysAreNotInvented() throws Exception {
         point(userParticipant, LAST_DAY.minusDays(1), 10_200_000);
         point(aiParticipant, LAST_DAY, 10_560_000);
         mvc.perform(get(path()).cookie(auth(user)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.daily_performances.length()").value(2))
-                .andExpect(jsonPath("$.daily_performances[0].ai_cumulative_return_percent").value(org.hamcrest.Matchers.nullValue()))
-                .andExpect(jsonPath("$.daily_performances[1].user_cumulative_return_percent").value(org.hamcrest.Matchers.nullValue()));
+                .andExpect(jsonPath("$.participants[0].daily_performances.length()").value(1))
+                .andExpect(jsonPath("$.participants[0].daily_performances[0].date").value("2026-10-16"))
+                .andExpect(jsonPath("$.participants[1].daily_performances.length()").value(1))
+                .andExpect(jsonPath("$.participants[1].daily_performances[0].date").value("2026-10-15"));
     }
 
     @ParameterizedTest
@@ -138,8 +139,8 @@ class CompetitionResultTests {
     @Test
     void absentHistoryRemainsEmptyAndMissingFinalResultIsReported() throws Exception {
         mvc.perform(get(path()).cookie(auth(user))).andExpect(status().isOk())
-                .andExpect(jsonPath("$.daily_performances").isEmpty())
-                .andExpect(jsonPath("$.user_final_return_percent").value(8.2));
+                .andExpect(jsonPath("$.participants[1].daily_performances").isEmpty())
+                .andExpect(jsonPath("$.participants[1].final_return_percent").value(8.2));
         ReflectionTestUtils.setField(competition, "winner", null);
         competitions.save(competition);
         mvc.perform(get(path()).cookie(auth(user))).andExpect(status().isInternalServerError())

@@ -24,6 +24,7 @@ public class CompetitionDailyPerformanceService {
     private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
     private final CompetitionRepository competitions;
     private final CompetitionParticipantRepository participants;
+    private final com.stock_spoon.river_be.competition.repository.CompetitionAgentRepository agents;
     private final CompetitionDailyPerformanceRepository performances;
     private final AccountRepository accounts;
     private final ExecutionRepository executions;
@@ -33,7 +34,9 @@ public class CompetitionDailyPerformanceService {
     // 같은 대결의 정산·기록 작업은 대결 잠금으로 순서를 지킨다. 실패한 대결의 새 기록은 함께 롤백한다.
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public void recordMissingDays(Long competitionId) {
-        var competition = competitions.findLockedById(competitionId).orElseThrow();
+        // [회원 탈퇴 수정] 후보 선정 후 삭제된 대결에는 일별 성과를 생성하지 않고 정상 종료한다.
+        var competition = competitions.findLockedById(competitionId).orElse(null);
+        if (competition == null || competition.isDailyPerformanceComplete()) return;
         if (competition.getStartedAt() == null || (competition.getState() != Competition.State.IN_PROGRESS
                 && competition.getState() != Competition.State.COMPLETED)) return;
         var now = tradingHours.now();
@@ -46,9 +49,18 @@ public class CompetitionDailyPerformanceService {
         }
 
         var links = participants.findAllByCompetitionIdOrderByIdAsc(competitionId);
-        if (links.size() != 2 || links.stream().filter(p -> p.getAccount().isAiManaged()).count() != 1) {
-            log.error("event=competition_performance_failed stage=participant_validation competitionId={} code=INVALID_PARTICIPANTS", competitionId);
-            throw new IllegalStateException("사용자와 AI 참가자를 확인할 수 없습니다.");
+        try {
+            CompetitionParticipants.requireValid(competition, links);
+        } catch (IllegalStateException error) {
+            log.error("event=competition_performance_failed stage=participant_validation competitionId={} competitionType={} participantCount={} expectedAiCount={} code=INVALID_PARTICIPANTS",
+                    competitionId, competition.getCompetitionType(), links.size(), competition.getAiParticipantCount());
+            throw error;
+        }
+        if (competition.getCompetitionType() == Competition.Type.AI_VS_AI
+                && !CompetitionParticipants.validStrategies(links, agents.findAllByParticipantCompetitionIdOrderByPositionAsc(competitionId))) {
+            log.error("event=competition_performance_failed stage=strategy_validation competitionId={} competitionType={} participantCount={} code=INVALID_STRATEGIES",
+                    competitionId, competition.getCompetitionType(), links.size());
+            throw new IllegalStateException("AI 참가자의 전략 연결을 확인할 수 없습니다.");
         }
         // {참가자 ID: 이미 저장된 날짜들}. 양쪽 모두 기록된 날짜는 다시 조회·평가하지 않는다.
         var recorded = new HashMap<Long, Set<LocalDate>>();
@@ -62,7 +74,10 @@ public class CompetitionDailyPerformanceService {
             LocalDate day = date;
             if (links.stream().anyMatch(p -> !recorded.getOrDefault(p.getId(), Set.of()).contains(day))) missingDays.add(day);
         }
-        if (missingDays.isEmpty()) return;
+        if (missingDays.isEmpty()) {
+            markCompleteIfFinished(competition, lastDate);
+            return;
+        }
 
         // 장 마감 직전부터 진행하던 체결이 끝날 때까지 같은 계좌 잠금으로 기다린다.
         var accountIds = links.stream().map(p -> p.getAccount().getId()).sorted().toList();
@@ -106,6 +121,14 @@ public class CompetitionDailyPerformanceService {
                 }
                 performances.save(new CompetitionDailyPerformance(link, day, assets));
             }
+        }
+        // 기록 저장과 완료 표시를 같은 트랜잭션으로 묶어 실패하면 다음 주기에도 후보로 남긴다.
+        markCompleteIfFinished(competition, lastDate);
+    }
+
+    private void markCompleteIfFinished(Competition competition, LocalDate lastDate) {
+        if (competition.getState() == Competition.State.COMPLETED && lastDate.equals(competition.tradingEndDate())) {
+            competition.markDailyPerformanceComplete();
         }
     }
 

@@ -28,6 +28,38 @@ public class KakaoClient {
         this.properties = properties;
     }
 
+    // [회원 탈퇴 추가] 내부 회원 ID가 아닌 카카오 식별자로 앱 연결을 해제한다. 기존 call()의 통신 오류 변환을 재사용한다.
+    public void unlink(long providerUserId) {
+        // Admin 키가 없으면 삭제 전에 503을 반환한다. 로그인용 Client Secret과는 별개의 서버 전용 키다.
+        if (properties.adminKey() == null || properties.adminKey().isBlank()) {
+            throw new AuthException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "KAKAO_UNLINK_NOT_CONFIGURED", "카카오 연결 해제 설정이 필요합니다.");
+        }
+        // 카카오 Admin 키 인증 규격에 따라 대상 타입과 카카오 회원번호를 폼으로 전달한다.
+        var form = new LinkedMultiValueMap<String, String>();
+        form.add("target_id_type", "user_id");
+        form.add("target_id", Long.toString(providerUserId));
+        Map<String, Object> result = call(() -> {
+            try {
+                return client.post().uri("https://kapi.kakao.com/v1/user/unlink")
+                        .header("Authorization", "KakaoAK " + properties.adminKey())
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED).body(form)
+                        .retrieve().body(JSON);
+            } catch (RestClientResponseException error) {
+                // 연결 해제 성공 뒤 DB 실패/응답 유실로 재요청한 경우도 허용한다.
+                if (error.getStatusCode().value() == 400) {
+                    Map<?, ?> body = error.getResponseBodyAs(Map.class);
+                    if (body != null && body.get("code") instanceof Number code && code.intValue() == -101)
+                        return Map.of("id", providerUserId);
+                }
+                throw error;
+            }
+        }, false);
+        // 다른 사용자의 응답이나 비어 있는 응답을 삭제 성공으로 처리하지 않는다.
+        if (result == null || !(result.get("id") instanceof Number id) || id.longValue() != providerUserId)
+            throw providerError();
+    }
+
     public KakaoUserInfo verifyUser(String code) {
         var form = new LinkedMultiValueMap<String, String>();
         form.add("grant_type", "authorization_code");

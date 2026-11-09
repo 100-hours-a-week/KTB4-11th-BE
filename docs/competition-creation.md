@@ -1,5 +1,9 @@
 # 대결 기능: 브랜치별 호출 흐름
 
+`feat/262-competition/ai-report-sqs`의 최신 리포트 흐름은 [AI 참가자별 SQS 요청](competition-report-outbox.md)과 [참가자별 저장·조회](competition-participant-reports.md)를 참고한다. AI마다 요청을 보내고 POST 본문의 participant_id로 보고서를 저장하며 GET은 reports 배열을 반환한다. 아래 단일 보고서·대결 report_ready 기준의 설명은 이전 브랜치 기록이다.
+
+`feat/232-competition/cancel`의 최신 변경은 [대결 취소와 종료 계좌 비활성화](competition-cancellation-design.md)를 참고한다. 취소 API와 정상 종료 시 양측 계좌 비활성화를 추가했으며, 비활성 일반 계좌도 본인의 과거 주문·매매 내역과 AI 판단 근거를 조회할 수 있다. 취소 대결의 AI 기록 비공개는 유지한다. 아래 과거 브랜치의 설명보다 이 정책을 우선 적용한다.
+
 각 기능은 **호출 흐름 → 전달값 표 → 계산·정책 예시 → 예외 처리** 순서로 읽는다.
 메서드는 현재 코드 기준이다. 자동 실행 기능의 진입점은 스케줄러다.
 
@@ -16,6 +20,8 @@
 | 같은 브랜치 | 완료 대결의 최종 성적·비교 그래프 조회 | [8. 대결 결과 조회](#8-대결-결과-조회) |
 
 ## 1. 대결 생성
+
+2026-11-03부터 같은 생성 API가 `ai_vs_ai`와 nullable `agents`를 지원한다. 아래 기존 1:1 흐름은 `user_vs_ai`에 해당하며, AI 간 대결의 단일 트랜잭션 생성·전략 검증·FE 변경·DB 적용은 [통합 생성 문서](competition-ai-creation.md)를 따른다. 별도 ai-settings API는 제공하지 않는다.
 
 ### 호출 흐름
 
@@ -64,7 +70,7 @@ AI 계좌: 내부 이름 사용 / 자금 10,000,000원
 ```
 
 - JWT의 `sub`에서 사용자 ID를 읽는다. 온보딩 완료 사용자만 생성할 수 있다.
-- v2는 `user_vs_ai`, `ai_participant_count = 1`이다.
+- `user_vs_ai`는 `ai_participant_count = 1`이며 `agents` 생략/null을 허용한다. `ai_vs_ai`는 AI 2~4명과 같은 개수의 `agents`를 생성 요청에 함께 전달한다. AI 간 대결은 현재 READY로 유지하며 실제 운용은 후속 작업이다.
 - 시작일은 한국 시간 기준 오늘, 종료일과의 날짜 차이는 최소 3일이다.
 - 대결명은 앞뒤 공백을 제거한 뒤 20자 이하이며, 같은 사용자의 일반·대결 계좌명과 중복될 수 없다.
 - AI 계좌명은 `AI-{대결 ID의 36진수}`이며 충돌 시 접미사를 붙인다.
@@ -115,6 +121,39 @@ requestId=... event=competition_creation_failed stage=user_participant_save code
 `origin`은 가장 안쪽 원인의 클래스·메서드·행 번호다. 예외 메시지·전체 스택·SQL 원문·토큰·쿠키·요청 본문·거절된 입력값·대결명은 기록하지 않는다. DB 정보는 SQLState와 숫자 오류 코드만 기록한다. 발급 전 ID와 특정 계좌에 귀속되지 않는 커밋 단계의 accountId는 `none`이다. 실패 로그에 발급된 ID가 있어도 롤백되었을 수 있으므로 저장 완료를 뜻하지 않는다.
 
 범위가 닫히면 생성용 MDC를 복원한다. API 경계 없이 서비스를 직접 호출하는 테스트·내부 호출에서는 단계 정보를 남기지 않는다. 기존 공통 HTTP 로그는 별도로 유지하므로 내부 오류 시 HTTP 실패 로그가 추가로 보일 수 있다. 스케줄러·다른 대결 조회 로그 및 CloudWatch 수집 설정은 이번 변경 범위에 포함하지 않는다.
+
+## 대결명 사용 가능 여부 확인
+
+### 호출 흐름
+
+```text
+GET /api/v3/users/me/competitions/name-availability?competition_name=반도체
+  → SecurityConfig: access_token 쿠키의 JWT 인증
+  → CompetitionNameAvailabilityController.checkNameAvailability(jwt, competitionName)
+      → JWT subject를 사용자 ID로 변환, 쿼리 파라미터와 함께 전달
+  → CompetitionService.checkNameAvailability(userId, competitionName)
+      → 공백·원본 길이 검사 → 사용할 수 없으면 available=false
+      → 앞뒤 공백 제거 후 AccountRepository.existsByUserIdAndNameIgnoreCase(userId, name)
+      → 중복이 아니면 available=true
+  → CompetitionNameAvailabilityResponse → HTTP 200
+```
+
+이름 확인 요청이 들어오면 `competition.controller` 패키지의 [CompetitionNameAvailabilityController.checkNameAvailability()](../src/main/java/com/stock_spoon/river_be/competition/controller/CompetitionNameAvailabilityController.java)가 호출된다. 인증된 JWT는 `jwt`에, 쿼리 파라미터 `competition_name`의 값은 `competitionName`에 전달된다. 컨트롤러는 JWT subject를 숫자 사용자 ID로 변환해 이름과 함께 [CompetitionService.checkNameAvailability()](../src/main/java/com/stock_spoon/river_be/competition/service/CompetitionService.java)에 전달한다.
+
+서비스는 이름이 비어 있거나 공백만 있는지, 앞뒤 공백을 포함한 원본이 20자를 초과하는지 먼저 검사한다. 형식에 맞으면 앞뒤 공백을 제거하고 [AccountRepository.existsByUserIdAndNameIgnoreCase()](../src/main/java/com/stock_spoon/river_be/account/repository/AccountRepository.java)로 해당 사용자의 계좌명과 대소문자를 구분하지 않고 비교한다. 조회 결과를 반대로 바꾸어 [CompetitionNameAvailabilityResponse](../src/main/java/com/stock_spoon/river_be/competition/dto/CompetitionNameAvailabilityResponse.java)의 `available`에 담아 반환한다.
+
+| 단계 | 전달값 | 결과 |
+|---|---|---|
+| 컨트롤러 | JWT의 사용자 ID, `competition_name` | 서비스에 사용자 ID와 입력 이름 전달 |
+| 서비스 | 사용자 ID, 입력 이름 | 형식 검사와 앞뒤 공백 제거 |
+| Repository | 사용자 ID, 정리한 이름 | 해당 사용자의 계좌명 중복 여부 |
+| 응답 | 중복·형식 검사 결과 | HTTP 200, `available` boolean |
+
+예를 들어 본인 계좌에 `Tech`가 있으면 ` tech `는 `{"available":false}`다. 같은 이름이 다른 사용자의 계좌에만 있다면 `true`다. 활성·비활성 계좌를 모두 확인하므로 종료된 대결의 계좌명이 남아 있으면 다시 사용할 수 없다. 이 검사는 대결명 테이블을 별도로 검색하지 않고 계좌명을 기준으로 한다.
+
+빈 값이나 형식에 맞지 않는 이름은 HTTP 200과 `{"available":false}`를 반환한다. 필수 쿼리 파라미터를 생략하면 HTTP 400, 인증되지 않은 요청은 HTTP 401이다. 사용 가능 여부는 조회 시점의 결과이며 대결 생성을 보장하지 않는다. 확인 후 다른 요청으로 같은 계좌명이 생길 수 있어 `CompetitionService.createCompetition()`에서도 이름을 다시 검사한다.
+
+검증 코드는 [CompetitionNameAvailabilityControllerTests](../src/test/java/com/stock_spoon/river_be/competition/CompetitionNameAvailabilityControllerTests.java), [CompetitionNameAvailabilityTests](../src/test/java/com/stock_spoon/river_be/competition/CompetitionNameAvailabilityTests.java)와 [CompetitionCreationTests](../src/test/java/com/stock_spoon/river_be/competition/CompetitionCreationTests.java)에 있다. 컨트롤러 테스트는 테스트용 JWT와 DB 계좌 데이터를 사용한다.
 
 ## 2. 자동 시작
 
@@ -562,139 +601,57 @@ FE는 첫 요청에 limit을 명시하고 성공 응답의 next_cursor로 추가
 코드: [Controller](../src/main/java/com/stock_spoon/river_be/competition/controller/CompetitionTradeHistoryController.java) · [Service](../src/main/java/com/stock_spoon/river_be/competition/service/CompetitionTradeHistoryService.java) · [Repository](../src/main/java/com/stock_spoon/river_be/competition/repository/CompetitionTradeHistoryRepository.java) · [커서](../src/main/java/com/stock_spoon/river_be/competition/dto/CompetitionTradeHistoryCursor.java) · [응답 DTO](../src/main/java/com/stock_spoon/river_be/competition/dto/CompetitionTradeHistoryResponse.java)
 ## 7. 대결 상세 조회
 
-### 호출 흐름
+현재 호출 흐름은 [상세 조회 설명](competition-detail-summary.md), 응답 예시는 [상세·결과 통일 계약](competition-response-unification.md)을 따른다.
 
 ```text
 GET /api/v2/users/me/competitions/{competition_id}
-    ↓ JWT 사용자 ID + URL의 대결 ID
-CompetitionController.getCompetitionDetail()
-    ↓
-CompetitionService.getCompetitionDetail(userId, competitionId)
-    ├─ CompetitionRepository → 본인 대결 조회
-    ├─ CompetitionParticipantRepository → 참가자·계좌 조회
-    └─ CompetitionDailyPerformanceRepository → 사용자 확정 일별 기록 조회
-    ↓ CompetitionDetailResponse
-200 OK + JSON
+  → CompetitionController.getCompetitionDetail(jwt, competitionId)
+  → CompetitionService.getCompetitionDetail(userId, competitionId)
+  → CompetitionDetailService.get(userId, competitionId)
+    → read.execute(): 소유권·참가자·전략·매매 횟수·보유분·참가자별 일별 기록 조회
+    → 트랜잭션 밖에서 현재 보유분 평가
+  → CompetitionDetailResponse → 200 JSON
 ```
 
-### 단계별 전달값
-
-| 단계 | 실제 메서드 | 입력 → 결과 |
-|---|---|---|
-| 요청 수신 | `CompetitionController.getCompetitionDetail(jwt, competitionId)` | 인증 사용자·경로 ID → 서비스가 반환한 DTO |
-| 소유권 확인 | `CompetitionRepository.findByIdAndUserId(competitionId, userId)` | 대결·사용자 ID → 본인 대결 또는 없음 |
-| 참가자 조회 | `CompetitionParticipantRepository.findAllByCompetitionIdOrderByIdAsc(competitionId)` | 대결 ID → 사용자·AI 참가자와 계좌 |
-| 일별 기록 조회 | `CompetitionDailyPerformanceRepository.findAllByParticipantIdOrderByRecordDateAsc(participantId)` | 사용자 참가자 ID → 날짜 오름차순 확정 기록 |
-| 응답 구성 | `CompetitionService.getCompetitionDetail()` | 대결·참가자·사용자 기록 → `CompetitionDetailResponse` |
-
-### 표시 예시와 정책
-
-```text
-10월 15일 확정 기록: +2.0%
-
-10월 16일 장중 조회 → 그래프는 15일까지, 상단 수익률도 +2.0%
-16일 15:30 이후 기록 저장 전 조회 → 동일한 마지막 확정 기록 유지
-16일 기록 +2.9% 저장 후 조회 → 16일 점 추가, 상단도 +2.9%
-주말 조회 → 마지막 거래일 확정 기록 유지
-```
-
-- 오늘 장중 임시 점을 추가하지 않는다. 조회에서는 시세 API를 호출하거나 누락일을 생성하지 않는다.
-- 상단 `cumulative_return_percent`는 마지막 `daily_performances` 항목의 값과 같다. 첫 확정 기록 전에는 0과 빈 배열이다.
-- 상세는 완료 후에도 사용자 기록만 반환한다. AI 비교 성적은 결과 조회 API에서 제공한다.
-- `participants`에는 사용자·AI 각각의 `participant_id`, `account_id`, `participant_type`, `display_name`을 넣는다. 성적은 넣지 않는다.
-- 하단 매매 내역은 이 `account_id`로 별도 API를 호출한다. 상세 응답에는 매매 내역을 포함하지 않는다.
-- `d_day`는 기존 목록과 같은 한국 날짜 기준 계산값이며 완료·취소는 null이다.
-- `@Transactional(readOnly = true)`로 조회하고 Entity 대신 `class + @Getter` DTO를 반환한다. 참가자·일별 항목은 같은 DTO 파일의 내부 클래스다.
-- 목록 API의 진행 중 수익률은 기존 현재 평가 기준을 유지한다. 상세 API는 이번에 확정한 장 마감 기준이므로 장중에 두 값이 다를 수 있다.
-
-### 예외 처리
-
-```text
-미인증 → 401
-없는 대결 / 다른 사용자의 대결 → 404 + COMPETITION_NOT_FOUND
-사용자 참가자 누락 → 500 + INVALID_COMPETITION_PARTICIPANTS
-확정 기록 없음 → 정상 200, 수익률 0 + daily_performances: []
-```
-
-코드: [컨트롤러](../src/main/java/com/stock_spoon/river_be/competition/controller/CompetitionController.java) · [서비스](../src/main/java/com/stock_spoon/river_be/competition/service/CompetitionService.java) · [상세 DTO](../src/main/java/com/stock_spoon/river_be/competition/dto/CompetitionDetailResponse.java)
+Controller는 JWT subject를 사용자 ID로 바꿔 URL 대결 ID와 함께 Service에 전달한다. 상세 서비스는 본인 대결인지 확인한 후 DB 값을 Snapshot으로 복사한다. 이후 현재 시세로 참가자별 자산과 최고 수익률 보유 종목을 평가한다. 두 유형 모두 participants 내부에 현재 성적과 확정 일별 기록을 반환하며 최상위 수익률·그래프는 없다. 기록이 없으면 빈 배열, 보유분이 없으면 최고 종목 null이다. 시세 장애는 503으로 구분한다. 완료·취소 d_day는 null이다.
 
 ## 8. 대결 결과 조회
 
-### 호출 흐름
-
 ```text
 GET /api/v2/users/me/competitions/{competition_id}/result
-    ↓ JWT 사용자 ID + URL의 대결 ID
-CompetitionController.getCompetitionResult()
-    ↓
-CompetitionService.getCompetitionResult(userId, competitionId)
-    ├─ CompetitionRepository → 소유권·COMPLETED 상태 확인
-    ├─ CompetitionParticipantRepository → 사용자·AI 계좌 및 최종 성적 조회
-    └─ CompetitionDailyPerformanceRepository → 양측 일별 기록 조회
-    ↓ 날짜별로 두 참가자의 수익률을 결합
-CompetitionResultResponse
-    ↓
-200 OK + JSON
+  → CompetitionController.getCompetitionResult(jwt, competitionId)
+  → CompetitionService.getCompetitionResult(userId, competitionId) [읽기 전용 트랜잭션]
+    → CompetitionRepository.findByIdAndUserId(competitionId, userId): 소유권·완료 상태 확인
+    → CompetitionParticipantRepository.findAllByCompetitionIdOrderByIdAsc(competitionId)
+    → CompetitionParticipants.valid(): 계좌 연결·유형별 참가자 검사
+    → AI 간 대결만 CompetitionAgentRepository.findAllByParticipantCompetitionIdOrderByPositionAsc(competitionId)
+      → validStrategies(): 저장 전략·표시 순서 확인
+    → OrderRepository.countByAccountsAndStatus(accountIds, EXECUTED)
+    → CompetitionDailyPerformanceRepository.findAllByParticipantCompetitionId(competitionId)
+    → 참가자별 기록·확정 자산·전략·횟수와 정확한 비율 순위를 응답에 구성
+    → rank=1 참가자의 표시 이름 연결 → winner, 참가자 ID → winner_participant_ids
+  → CompetitionResultResponse → 200 JSON
 ```
 
-### 단계별 전달값
+Controller는 JWT 사용자 ID와 경로의 대결 ID를 Service에 넘긴다. Service는 소유권을 먼저 확인하고 완료가 아니면 409로 종료한다. 저장된 최종 자산과 참가자별 기록으로 응답 성적을 구성하므로 현재 시세를 조회하지 않는다. 매매 횟수는 계좌별 일괄 조회하고, 전략이 없는 기존 사용자 vs AI는 null로 반환한다. AI 간 대결은 전략 생성 순서로 AI 이름을 붙인다. 저장 확정 자산/초기금 비율로 순위를 계산하므로 표시 수익률이 같아도 순위는 다를 수 있다. 공동 순위는 1,1,3이며 winner는 참가자 응답 순서로 우승자 이름을 연결한다.
 
-| 단계 | 실제 메서드 | 입력 → 결과 |
-|---|---|---|
-| 요청 수신 | `CompetitionController.getCompetitionResult(jwt, competitionId)` | JWT·대결 ID → 결과 DTO |
-| 소유권 확인 | `CompetitionRepository.findByIdAndUserId(competitionId, userId)` | 대결·사용자 ID → 본인 대결 또는 없음 |
-| 최종 성적 조회 | `CompetitionParticipantRepository.findAllByCompetitionIdOrderByIdAsc(competitionId)` | 대결 ID → 참가자·계좌·확정 수익률 |
-| 일별 기록 조회 | `CompetitionDailyPerformanceRepository.findAllByParticipantCompetitionId(competitionId)` | 대결 ID → 사용자·AI 일별 성적 |
-| 그래프 결합 | `CompetitionService.getCompetitionResult()` | 일별 성적 → 날짜순 사용자·AI 수익률 쌍 |
-| 응답 구성 | `new CompetitionResultResponse(...)` | 대결·승자·확정 수익률·참가자·그래프 → 응답 DTO |
+응답 최종·일별 수익률은 저장 자산에서 소수점 한 자리로 한 번만 HALF_UP 반올림한다. DB 수익률 4자리 저장과 내부 Winner enum은 바꾸지 않는다. 최상위 사용자/AI 전용 수익률과 그래프는 제거했다. 완료 d_day=null이며, 없는 기록은 임의의 0%로 채우지 않는다.
 
-### 결합 예시와 정책
+미인증 401, 없는 대결·타인 소유 404, 미완료 409 COMPETITION_NOT_COMPLETED, 유효하지 않은 확정 성적/AI 전략 500 COMPETITION_RESULT_UNAVAILABLE을 반환한다.
 
-```text
-저장된 사용자 기록: 10/15 +2.0%, 10/16 +8.2%
-저장된 AI 기록:     10/15 +1.0%, 10/16 +5.6%
-    ↓ 날짜로 묶고 날짜 오름차순 정렬
-10/15 → user_cumulative_return_percent: 2.0, ai_cumulative_return_percent: 1.0
-10/16 → user_cumulative_return_percent: 8.2, ai_cumulative_return_percent: 5.6
-```
-
-- 먼저 본인 대결인지 확인하고 `COMPLETED` 상태를 검사한다. 종료일이 지났지만 아직 정산 중인 대결도 결과는 반환하지 않는다.
-- `winner`는 대결에 저장된 `USER` / `AI` / `DRAW`를 `user` / `ai` / `draw`로 변환한다. 조회 시 승자를 다시 판단하지 않는다.
-- `user_final_return_percent`, `ai_final_return_percent`는 참가자의 `finalReturnPercent`를 읽는다. 계좌 현재 자산이나 그래프의 마지막 값을 이용해 재계산하지 않는다.
-- `d_day`는 항상 null이다. DTO에 `@JsonInclude(ALWAYS)`를 사용해 필드를 유지한다.
-- `participants`에는 각 참가자의 ID·유형·`account_id`·표시 이름을 반환한다. 참가자 저장 순서와 관계없이 AI 운용 여부로 성적을 구분한다.
-- `daily_performances`는 `TreeMap`으로 날짜별로 묶어 정렬한다. 한 날짜에 한쪽 기록이 없으면 그 값은 null이며, 양쪽 모두 없는 날짜는 만들지 않는다. 전체 일별 기록이 없으면 빈 배열이다.
-- `@Transactional(readOnly = true)`로 조회한다. 시세 API 호출, 일별 기록 생성, 정산 실행은 하지 않는다.
-- 매매 내역은 응답의 참가 계좌 ID로 별도 조회한다. 이번 결과 API에 매매 내역을 합치지 않는다.
-
-### 예외 처리
-
-```text
-미인증 → 401
-없는 대결 / 다른 사용자의 대결 → 404 + COMPETITION_NOT_FOUND
-READY / IN_PROGRESS / CANCELLED → 409 + COMPETITION_NOT_COMPLETED
-완료됐지만 참가자·승자·최종 수익률이 누락됨 → 500 + COMPETITION_RESULT_UNAVAILABLE
-```
-
-코드: [컨트롤러](../src/main/java/com/stock_spoon/river_be/competition/controller/CompetitionController.java) · [서비스](../src/main/java/com/stock_spoon/river_be/competition/service/CompetitionService.java) · [결과 DTO](../src/main/java/com/stock_spoon/river_be/competition/dto/CompetitionResultResponse.java)
-
-### 이전 매매 내역 브랜치에서 확인한 내용 — 현재 브랜치에는 미포함
-
-`feat/137-competition/trade-history`에서 독립 구현으로 변경한 뒤 `CompetitionTradeHistoryTests` 5개, `OrderHistoryTests` 13개, `OrderControllerTests` 30개가 통과했다. AI 조회 제한은 조회 권한만 검사하며 AI 주문 생성이나 판단 근거 저장을 중단하지 않는다. 아래 주문 상태 필터 논의도 해당 브랜치에서 이어진 기록이다.
-
-### 검토 중인 후속 변경: 기존 주문 내역의 상태 필터
-
-현재 기존 `/api/v1/accounts/{account_id}/orders` 구현은 AI의 체결 완료 주문만 반환한다. 대기 주문 조회는 별도 API를 만들지, 기존 API에 조건을 추가할지 아직 확정하지 않았다. 논의에서는 `?order_status=pending`, `executed`, `cancelled`로 필터링하는 방식을 제안했으며 **구현하지 않았다**. 필터 생략 시 전체 주문으로 바꾸는 경우 기존 FE와 응답 정책을 맞춰야 한다. 대기 주문은 `executions: []`, `execution_summary: null` 형태를 제안했다.
-
-대결 매매 내역 API는 현재 체결 완료 주문만 반환한다. 기존 주문 API의 상태 필터 논의와 AI 계좌의 완료 전 공개 제한은 별개의 정책이다.
+코드: [상세 서비스](../src/main/java/com/stock_spoon/river_be/competition/service/CompetitionDetailService.java) · [결과 서비스](../src/main/java/com/stock_spoon/river_be/competition/service/CompetitionService.java) · [결과 DTO](../src/main/java/com/stock_spoon/river_be/competition/dto/CompetitionResultResponse.java)
 
 ## 대결 AI 리포트 조회
+
+> 아래는 단일 보고서 구조의 구현 기록이다. 현재 참가자별 reports 응답과 저장 흐름은 [최신 문서](competition-participant-reports.md)를 따른다.
 
 ```text
 GET /api/v2/users/me/competitions/{competition_id}/report
   → CompetitionReportController.get(jwt, competitionId)
   → CompetitionReportService.get(userId, competitionId)
       → CompetitionRepository.findById(): 본인 소유 대결인지 검사
+      → competition.reportReady=false: report_state=pending + 빈 배열 반환
+      → competition.reportReady=true: 저장된 본문 조회 후 report_state=completed 반환
       → CompetitionMarketAnalysisRepository.findAllByCompetitionIdOrderByDateDescIdDesc()
       → CompetitionJudgmentSummaryRepository.findAllByCompetitionIdOrderByIdAsc()
   → CompetitionReportResponse: 대결 정보 + 시장 분석 + 판단 요약 → 200
@@ -706,17 +663,65 @@ GET /api/v2/users/me/competitions/{competition_id}/report
 | 서비스 | 대결 ID와 소유자 | 타인 대결과 없는 대결은 모두 404 COMPETITION_NOT_FOUND |
 | 시장 분석 | competition_id | analysis_id·date·title·content, 날짜 내림차순·동률은 ID 내림차순 |
 | 판단 요약 | competition_id | title·content, 저장 ID 오름차순 |
-| 응답 | 조회된 대결·분석·요약 | competition_id·competition_name·start_date·end_date·state·market_analyses·judgment_summaries |
+| 응답 | 조회된 대결·분석·요약 | competition_id·competition_name·start_date·end_date·report_state·market_analyses·judgment_summaries |
 
 사용자가 확정한 정책에 따라 **READY / IN_PROGRESS / COMPLETED / CANCELLED 상태와 관계없이 본인의 리포트를 공개**한다. 이 조회에는 AI 매매 내역의 완료 후 공개 검사를 적용하지 않는다. AI 매매 내역 및 주문별 판단 근거의 공개 제한은 별도 매매 내역 브랜치에서 구현한 정책이며 현재 브랜치에는 아직 포함되지 않았다.
 
-시장 분석 본문을 최초 응답에 포함하므로 화면의 접기·펼치기는 FE에서 처리한다. 데이터가 아직 없으면 `market_analyses: []`, `judgment_summaries: []`를 반환한다. 예시 문구나 주문별 판단 근거를 대신 채우지 않는다. 페이지네이션 없이 저장된 전체를 반환한다.
+시장 분석 본문을 최초 응답에 포함하므로 화면의 접기·펼치기는 FE에서 처리한다. 리포트 저장 전에는 `report_state: pending`, `market_analyses: []`, `judgment_summaries: []`를 반환한다. AI 저장 API가 정상 완료되면 배열이 비어 있더라도 `report_state: completed`다. 대결의 state를 리포트 상태로 반환하지 않는다. 예시 문구나 주문별 판단 근거를 대신 채우지 않는다. 페이지네이션 없이 저장된 전체를 반환한다.
+
+CompetitionReportService.save()는 기존 내용 교체와 competition.markReportReady()를 같은 트랜잭션에서 수행한다. 저장 실패 시 내용과 완료 표시가 함께 롤백된다. get()은 본인 소유를 검사한 후 이 표시를 확인해 아직 준비되지 않았으면 빈 배열을 즉시 반환하고, 준비됐으면 Repository에서 본문을 조회한다. JSON 필드명은 state에서 report_state로 변경되므로 FE도 이 이름으로 읽어야 한다. 날짜 반환 방식과 대결 상태별 접근 정책은 바꾸지 않았다.
+
+운영 DB에는 [competition-report-ready.sql](../db/competition-report-ready.sql)을 새 코드 배포 전에 적용해야 한다. 기존 내용이 있는 리포트는 완료 표시를 보정한다. 과거에 빈 배열로만 저장한 리포트는 기존 구조에 수신 기록이 없어 판별할 수 없으므로 재전달 또는 확인된 건의 별도 보정이 필요하다. 현재 개발에서는 운영 DB에 적용하지 않았다.
 
 저장 구조는 `competition_market_analyses`와 `competition_judgment_summaries` 두 테이블이며 각각 대결 ID로 연결한다. v2는 대결당 AI 하나이므로 대결별로 저장한다. 주문별 `ai_order_reports`와는 별개다. 신규 DDL은 `db/competition-reports.sql`이며 실제 DB에는 실행하지 않았다.
 
-**범위:** 이번 구현은 DB 저장 구조와 GET 조회다. AI 서버가 데이터를 보내고 BE가 저장한다는 방향은 정해졌지만 전송 URI·인증·갱신/중복 정책은 아직 정해지지 않아 수신 API는 구현하지 않았다. 수신 연동 전에는 별도로 저장된 데이터만 조회되며, 미저장 상태는 빈 배열이다.
+**구현 시점:** 이 GET 조회는 `feat/139-competition/ai-report`에서 먼저 구현했다. 현재 리포트 저장 API는 아래 별도 항목을 참고한다. 저장된 데이터가 없으면 빈 배열을 반환한다.
 
-검증 항목: 실제 HTTP로 모든 대결 상태 공개, 빈 배열, 날짜 정렬, 본문 전체 반환, 다른 대결 데이터 분리, 미인증 401·타인/없는 대결 404를 확인한다. 최초 구현한 매매 내역 브랜치에서는 매매 내역 테스트도 함께 통과했다. 현재 `feat/139-competition/ai-report` 브랜치는 상세·결과 구현이 포함된 dev 기반이며, 매매 내역 구현과 테스트는 아직 미포함이다.
+검증 항목: 실제 HTTP로 모든 대결 상태 공개, 빈 배열, 날짜 정렬, 본문 전체 반환, 다른 대결 데이터 분리, 미인증 401·타인/없는 대결 404를 확인한다. 최초 구현 당시 `feat/139-competition/ai-report`는 상세·결과 구현이 포함된 dev 기반이었고, 매매 내역 구현과 테스트는 아직 미포함이었다.
+
+## AI 서버의 대결 리포트 저장
+
+현재 브랜치 `feat/228-competition/report-save`의 구현이다. AI 서버가 생성한 결과를 수신하고, 기존 리포트 조회 API에서 사용할 수 있도록 저장한다. **대결 종료 후 SQS에 리포트 생성 요청을 보내는 기능은 아직 구현하지 않았다.**
+
+### 호출 흐름
+
+```text
+AI 서버 → GET /api/v1/auth/csrf → CSRF 토큰과 쿠키 획득
+AI 서버 → POST /api/v1/competitions/{competitionId}/report
+  → SecurityConfig: access_token 쿠키의 JWT 검증, CSRF 확인, actor=AI 검사
+  → CompetitionReportSaveController.save(jwt, competitionId, request)
+      → JSON을 CompetitionReportSaveRequest로 변환하고 @Valid 검증
+      → jwt.getSubject()를 long 사용자 ID로 변환
+  → CompetitionReportService.save(userId, competitionId, request) [트랜잭션]
+      → CompetitionRepository.findLockedById(competitionId): 대결 잠금·소유자 확인
+      → CompetitionMarketAnalysisRepository.findAllByCompetitionIdOrderByDateDescIdDesc(competitionId)
+      → CompetitionMarketAnalysisRepository.deleteAll(기존 뉴스)
+      → CompetitionJudgmentSummaryRepository.findAllByCompetitionIdOrderByIdAsc(competitionId)
+      → CompetitionJudgmentSummaryRepository.deleteAll(기존 판단 요약)
+      → CompetitionMarketAnalysisRepository.save(새 뉴스) / 날짜 null
+      → CompetitionJudgmentSummaryRepository.save(새 판단 요약)
+  → CompetitionReportSaveResponse(competitionId, "success") → HTTP 200
+```
+
+AI 서버의 POST 요청이 들어오면 [SecurityConfig](../src/main/java/com/stock_spoon/river_be/config/SecurityConfig.java)의 보안 필터가 JWT와 CSRF를 확인한다. 이 경로는 `actor`가 `AI`인 JWT를 요구하며, AI 서버가 보내는 토큰의 subject는 대결 소유자의 사용자 ID다. 기존 인증 과정에서 사용자 ID의 형식과 사용자 존재 여부도 검사한다.
+
+인증을 통과하면 [CompetitionReportSaveController.save()](../src/main/java/com/stock_spoon/river_be/competition/controller/CompetitionReportSaveController.java)가 호출된다. 인증된 JWT는 `jwt`, URL의 대결 ID는 `competitionId`, JSON을 변환한 [CompetitionReportSaveRequest](../src/main/java/com/stock_spoon/river_be/competition/dto/CompetitionReportSaveRequest.java)는 `request`로 전달된다. `@Valid` 검증을 통과하면 컨트롤러는 JWT subject를 숫자로 바꿔 [CompetitionReportService.save()](../src/main/java/com/stock_spoon/river_be/competition/service/CompetitionReportService.java)에 사용자 ID, 대결 ID, 요청 DTO를 전달한다.
+
+서비스는 [CompetitionRepository.findLockedById()](../src/main/java/com/stock_spoon/river_be/competition/repository/CompetitionRepository.java)로 대결을 잠그고 해당 사용자 소유인지 확인한다. 이후 기존 뉴스·판단 요약을 조회해 삭제하고 요청의 각 항목을 Entity로 변환해 저장한다. 작업이 정상 커밋되면 컨트롤러가 대결 ID와 `success`를 응답한다. 이후 사용자는 위 GET 조회로 저장된 결과를 볼 수 있다.
+
+| 요청 값 | 저장되는 값 |
+|---|---|
+| `news[].title`, `news[].summary` | `competition_market_analyses.title`, `content` |
+| 뉴스 날짜 | 요청에 없어 `analysis_date`에 `NULL` 저장 |
+| `thoughts[].title`, `thoughts[].text` | `competition_judgment_summaries.title`, `content` |
+
+`news`와 `thoughts` 배열은 필수이며 빈 배열은 허용한다. 각 항목은 null이 아니어야 하고 제목·본문은 공백만 있을 수 없다. 제목은 최대 255자다. 빈 배열로 교체하면 해당 종류의 기존 항목은 모두 삭제된다.
+
+같은 대결의 저장 요청은 대결 행의 쓰기 잠금으로 순서대로 처리하고, 기존 내용을 새 요청 내용으로 교체한다. 삭제와 저장은 하나의 트랜잭션으로 묶여 실패 시 롤백된다. 다만 요청 버전이 없어 오래된 요청이 늦게 도착하면 최신 내용을 덮어쓸 수 있다. 대결 상태에 따른 저장 제한은 현재 구현하지 않았다.
+
+검증 실패는 400, 인증 실패는 401, AI 권한 또는 CSRF 확인 실패는 403이다. 대결이 없거나 JWT의 사용자가 소유자가 아니면 `COMPETITION_NOT_FOUND` 404를 반환한다. DB 오류도 트랜잭션을 롤백한다.
+
+테스트는 [CompetitionReportTests](../src/test/java/com/stock_spoon/river_be/competition/CompetitionReportTests.java)와 [SecurityJwtTests](../src/test/java/com/stock_spoon/river_be/config/SecurityJwtTests.java)에서 저장·교체·실패 롤백·동시 요청·인증과 로컬 HTTP POST→GET을 확인한다. 2026-10-30 전체 테스트는 성공했으며 574개 중 18개는 건너뛰었다. 실제 AI 서버와 운영 DB를 사용한 연동 검증은 아직 수행하지 않았다.
 
 ## 설정과 DB 적용
 
@@ -731,6 +736,7 @@ GET /api/v2/users/me/competitions/{competition_id}/report
 - 기존 대결 테이블이 있는 DB: [competition-completion.sql](../db/competition-completion.sql)로 정산 컬럼만 추가한다. 두 SQL을 중복 적용하지 않는다.
 - 일별 성적 테이블: 위 대결 테이블 준비 후 [competition-daily-performance.sql](../db/competition-daily-performance.sql)을 한 번 추가 적용한다.
 - 대결 시장 분석·판단 요약 테이블: [competition-reports.sql](../db/competition-reports.sql)을 한 번 추가 적용한다.
+- AI 리포트 뉴스에 날짜가 없는 경우를 위해 [competition-report-nullable-analysis-date.sql](../db/competition-report-nullable-analysis-date.sql)로 기존 `analysis_date`의 NULL 허용이 필요하다. 운영 적용 전 인프라 담당자가 기존 컬럼 정의를 확인해야 한다.
 - SQL 파일은 실제 DB에 자동 실행하지 않았다. 운영 스키마 확인 후 적용해야 한다.
 
 ## 기존 기능 연결과 후속 작업
@@ -739,5 +745,5 @@ GET /api/v2/users/me/competitions/{competition_id}/report
 - AI 서버 계좌 조회는 기간 내 진행 중 대결의 AI 계좌를 포함한다. 마감 직후 상태 변경 전에는 목록에 남을 수 있지만 주문은 종료 시각으로 차단한다.
 - 일반 계좌 생성·이름 변경은 대결 생성과 같은 사용자 잠금을 사용해 이름 중복 경쟁을 막는다.
 - 기존 v1 일반 AI 계좌와 저장 데이터는 유지한다. v2 일반 계좌의 사용자 운용 전환·사용자 직접 주문 지원은 별도 작업이다.
-- 이 브랜치에는 일별 누적 수익률 DB 기록, 사용자 상세 조회, 결과 조회와 대결 AI 리포트 조회가 포함된다. 대결 매매 내역은 별도 브랜치에 있으며, AI 시장 분석·판단 요약 수신 연동은 후속 작업이다.
+- AI 리포트 결과 수신·저장은 구현했으며, 대결 종료 후 AI 서버에 SQS 생성 요청을 보내는 기능과 실제 서버 간 연동 검증은 후속 작업이다.
 - 새 기능도 **짧은 호출 흐름 → 전달값 표 → 계산·정책 예시 → 예외 처리**로 기록하고 구현된 내용과 계획을 구분한다.

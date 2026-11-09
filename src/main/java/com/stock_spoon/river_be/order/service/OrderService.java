@@ -79,17 +79,18 @@ public class OrderService {
                 Order.Side.valueOf(request.orderSide().toUpperCase(java.util.Locale.ROOT)),
                 request.quantity(), request.limitPrice(), source == Order.Source.AI ? request.reason() : null,
                 request.stockName(), request.reasoning(),
-                request.holdingWeightLimitPercent(), request.isLowerTriggered(), source);
+                request.holdingWeightLimitPercent(), request.isLowerTriggered(),
+                source == Order.Source.AI ? request.reasonId() : null, source);
     }
 
     private Order reserveLimit(Long userId, long accountId, String stockCode, Order.Side side,
             long quantity, long limitPrice, String reason) {
-        return reserveLimit(userId, accountId, stockCode, side, quantity, limitPrice, reason, null, java.util.List.of(), null, null, Order.Source.AI);
+        return reserveLimit(userId, accountId, stockCode, side, quantity, limitPrice, reason, null, java.util.List.of(), null, null, null, Order.Source.AI);
     }
 
     private Order reserveLimit(Long userId, long accountId, String stockCode, Order.Side side,
             long quantity, long limitPrice, String reason, String stockName, java.util.List<ReportReasoning> reasoning,
-            Double holdingWeightLimitPercent, Boolean isLowerTriggered, Order.Source source) {
+            Double holdingWeightLimitPercent, Boolean isLowerTriggered, String reasonId, Order.Source source) {
         if (side == null || quantity <= 0 || limitPrice <= 0 || stockCode == null
                 || !stockCode.matches("[0-9]{6}")) {
             throw new OrderException("주문 입력값을 확인하세요.");
@@ -119,7 +120,7 @@ public class OrderService {
         // 여기의 orders는 OrderRepository이며 Controller의 orders(OrderService)와 타입이 다르다.
         // 예약금은 주문에 기록한다. 이 단계에서는 실제 현금이나 보유량을 차감하지 않는다.
         return orders.save(Order.pendingLimit(account, stockCode, side, quantity,
-                limitPrice, source, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered, clock.instant()));
+                limitPrice, source, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered, reasonId, clock.instant()));
     }
 
     @Transactional
@@ -147,8 +148,10 @@ public class OrderService {
                             "ORDER_NOT_FOUND", "주문을 찾을 수 없습니다.");
                 });
         if (order.getStatus() != Order.Status.PENDING) {
-            log.warn("event=order_cancel_rejected stage=order_status_check accountId={} orderId={} code=ORDER_NOT_PENDING status={}",
-                    accountId, orderId, order.getStatus());
+            log.warn("event=order_cancel_rejected accountId={} orderId={} orderStatus={} "
+                            + "reservedCashReleased={} cancelledAtPresent={} reason=order_not_pending",
+                    accountId, orderId, order.getStatus(), order.getReservedCash() == 0,
+                    order.getCancelledAt() != null);
             throw new OrderException(HttpStatus.CONFLICT, "ORDER_NOT_PENDING",
                     "대기 중인 주문만 취소할 수 있습니다.");
         }

@@ -117,7 +117,8 @@ public class OrderExecutionService {
         return executeMarket(userId, accountId, request.stockCode(),
                 side, request.quantity(), source == Order.Source.AI ? request.reason() : null,
                 book, request.stockName(), request.reasoning(),
-                request.holdingWeightLimitPercent(), request.isLowerTriggered(), prices, validate, source);
+                request.holdingWeightLimitPercent(), request.isLowerTriggered(),
+                source == Order.Source.AI ? request.reasonId() : null, prices, validate, source);
     }
 
     @Transactional
@@ -129,12 +130,12 @@ public class OrderExecutionService {
     /** 공개 메서드의 트랜잭션 안에서 주문·체결·자산을 전량 반영한다. */
     private Order executeMarket(long userId, long accountId, String stockCode, Order.Side side,
             long quantity, String reason, OrderBook book) {
-        return executeMarket(userId, accountId, stockCode, side, quantity, reason, book, null, java.util.List.of(), null, null, java.util.Map.of(), () -> {}, Order.Source.AI);
+        return executeMarket(userId, accountId, stockCode, side, quantity, reason, book, null, java.util.List.of(), null, null, null, java.util.Map.of(), () -> {}, Order.Source.AI);
     }
 
     private Order executeMarket(long userId, long accountId, String stockCode, Order.Side side,
             long quantity, String reason, OrderBook book, String stockName, java.util.List<ReportReasoning> reasoning,
-            Double holdingWeightLimitPercent, Boolean isLowerTriggered, java.util.Map<String, BigDecimal> prices,
+            Double holdingWeightLimitPercent, Boolean isLowerTriggered, String reasonId, java.util.Map<String, BigDecimal> prices,
             Runnable validate, Order.Source source) {
         if (source == null || side == null || stockCode == null || !stockCode.matches("[0-9]{6}") || quantity <= 0
                 || (source == Order.Source.AI && (reason == null || reason.isBlank() || reason.length() > 100000))) {
@@ -196,7 +197,7 @@ public class OrderExecutionService {
             throw new OrderException(HttpStatus.CONFLICT, "COMPETITION_NOT_IN_PROGRESS", "진행 중인 대결만 주문할 수 있습니다.");
         }
         var order = orders.save(Order.pendingMarket(account, stockCode, side, quantity, source, reason,
-                stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered, now));
+                stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered, reasonId, now));
         account.changeCash(cashDelta);
         var cost = BigDecimal.valueOf(amount);
         if (side == Order.Side.BUY) {
@@ -288,8 +289,12 @@ public class OrderExecutionService {
     public boolean executeLimit(long accountId, long orderId, long currentPrice,
             java.util.Map<String, BigDecimal> prices, Runnable validate) {
         if (currentPrice <= 0) throw new IllegalArgumentException("현재가는 양수여야 합니다.");
-        var account = accounts.findLockedById(accountId).orElseThrow();
-        var order = orders.findByIdAndAccountId(orderId, accountId).orElseThrow();
+        // [회원 탈퇴 수정] 시세 이벤트가 대기하던 사이 계좌나 주문이 삭제되었으면 체결하지 않고 false를 반환한다.
+        var account = accounts.findLockedById(accountId).orElse(null);
+        // [충돌 해결] 탈퇴로 삭제된 계좌와 개별 비활성 계좌 모두 자동 체결을 중단한다.
+        if (account == null || !account.isActive()) return false;
+        var order = orders.findByIdAndAccountId(orderId, accountId).orElse(null);
+        if (order == null) return false;
         if (order.getStatus() != Order.Status.PENDING || order.getType() != Order.Type.LIMIT) return false;
         var now = clock.instant();
         var local = now.atZone(SEOUL);

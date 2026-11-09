@@ -12,12 +12,22 @@ import java.util.Optional;
 // Spring Data JPA가 구현을 제공한다. save/findById 등은 JpaRepository에서 상속한다.
 // @Query의 Order와 필드명은 Entity 기준이며 JPA가 테이블·컬럼에 맞는 SQL로 변환한다.
 public interface OrderRepository extends JpaRepository<Order, Long> {
+    @Query("select o.account.id as accountId, count(o) as tradeCount from Order o "
+            + "where o.account.id in :accountIds and o.status = :status group by o.account.id")
+    List<AccountTradeCount> countByAccountsAndStatus(@Param("accountIds") List<Long> accountIds,
+            @Param("status") Order.Status status);
+
+    interface AccountTradeCount {
+        Long getAccountId();
+        long getTradeCount();
+    }
+
     @Query("select count(o) from Order o where o.account.id = :accountId and o.status = :status")
     long countByAccountIdAndStatus(@Param("accountId") long accountId, @Param("status") Order.Status status);
     // 체결 행이 아닌 주문을 묶어서 페이지를 나눈다. 체결 누락 주문도 남겨 서비스에서 검증한다.
     @Query("""
             select o from Order o left join Execution e on e.order = o
-            where o.account.id = :accountId and (:status is null or o.status = :status) and o.source = :source
+            where o.account.id = :accountId and (:status is null or o.status = :status)
             and (:side is null or o.side = :side)
             and (:stockCode is null or o.stockCode = :stockCode)
             group by o order by
@@ -25,18 +35,18 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
                 then max(e.createdAt) else o.createdAt end desc, o.id desc
             """)
     List<Order> findHistory(@Param("accountId") long accountId, @Param("status") Order.Status status,
-            @Param("source") Order.Source source, @Param("side") Order.Side side,
+            @Param("side") Order.Side side,
             @Param("stockCode") String stockCode,
             org.springframework.data.domain.Pageable pageable);
 
     @Query("""
             select count(o) from Order o
-            where o.account.id = :accountId and (:status is null or o.status = :status) and o.source = :source
+            where o.account.id = :accountId and (:status is null or o.status = :status)
             and (:side is null or o.side = :side)
             and (:stockCode is null or o.stockCode = :stockCode)
             """)
     long countHistory(@Param("accountId") long accountId, @Param("status") Order.Status status,
-            @Param("source") Order.Source source, @Param("side") Order.Side side,
+            @Param("side") Order.Side side,
             @Param("stockCode") String stockCode);
 
     List<Order> findAllByStatus(Order.Status status);

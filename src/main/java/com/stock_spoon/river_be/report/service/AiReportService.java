@@ -31,10 +31,10 @@ public class AiReportService {
 
     @Transactional(readOnly = true)
     public AiReportResponse get(long userId, long accountId, long orderId) {
-        accounts.findByIdAndUserIdAndActiveTrue(accountId, userId).orElseThrow(() -> {
+        if (accounts.findByIdAndUserId(accountId, userId).isEmpty()) {
             log.warn("event=ai_report_rejected stage=account_access_check accountId={} orderId={} code=FORBIDDEN_ACCOUNT", accountId, orderId);
-            return new OrderException(HttpStatus.FORBIDDEN, "FORBIDDEN_ACCOUNT", "이 계좌를 조회할 권한이 없습니다.");
-        });
+            throw new OrderException(HttpStatus.FORBIDDEN, "FORBIDDEN_ACCOUNT", "이 계좌를 조회할 권한이 없습니다.");
+        }
         competitionAccess.check(userId, accountId, false);
         var order = orders.findByIdAndAccountId(orderId, accountId).orElseThrow(() -> {
             log.warn("event=ai_report_rejected stage=order_lookup accountId={} orderId={} code=ORDER_NOT_FOUND", accountId, orderId);

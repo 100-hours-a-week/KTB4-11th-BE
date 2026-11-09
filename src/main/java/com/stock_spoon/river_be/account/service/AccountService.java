@@ -39,13 +39,16 @@ public class AccountService {
     private final RedisMarketPrice market;
     private final TransactionTemplate read;
     private final com.stock_spoon.river_be.competition.repository.CompetitionParticipantRepository participants;
+    private final com.stock_spoon.river_be.competition.repository.CompetitionRepository competitions;
 
     public AccountService(AccountRepository accountRepository, UserRepository userRepository,
             OrderService orderService, OrderRepository orders, HoldingRepository holdings,
             RedisMarketPrice market,
             PlatformTransactionManager transactions,
-            com.stock_spoon.river_be.competition.repository.CompetitionParticipantRepository participants) {
+            com.stock_spoon.river_be.competition.repository.CompetitionParticipantRepository participants,
+            com.stock_spoon.river_be.competition.repository.CompetitionRepository competitions) {
         this.participants = participants;
+        this.competitions = competitions;
         this.accountRepository = accountRepository;
         this.userRepository = userRepository;
         this.orderService = orderService;
@@ -89,7 +92,7 @@ public class AccountService {
                 ? nextDefaultName(userId)
                 : normalizeName(request.accountName());
 
-        if (accountRepository.existsByUserIdAndNameIgnoreCase(userId, name)) {
+        if (accountRepository.existsByUserIdAndNameIgnoreCase(userId, name) || aiCompetitionReservesName(userId, name)) {
             log.warn("event=account_operation_rejected stage=account_creation_name_check code=DUPLICATE_ACCOUNT_NAME");
             throw new AccountException(HttpStatus.CONFLICT,
                     "DUPLICATE_ACCOUNT_NAME", "이미 사용 중인 계좌 이름입니다.");
@@ -113,7 +116,7 @@ public class AccountService {
             return AccountResponse.from(account);
         }
         if (accountRepository.existsByUserIdAndNameIgnoreCaseAndIdNot(
-                userId, name, accountId)) {
+                userId, name, accountId) || aiCompetitionReservesName(userId, name)) {
             log.warn("event=account_operation_rejected stage=account_rename_name_check accountId={} code=DUPLICATE_ACCOUNT_NAME", accountId);
             throw new AccountException(HttpStatus.CONFLICT,
                     "DUPLICATE_ACCOUNT_NAME", "이미 사용 중인 계좌 이름입니다.");
@@ -126,7 +129,7 @@ public class AccountService {
     public List<AccountListResponse> list(long userId) {
         var availableCash = new HashMap<Long, Long>();
         var snapshot = read.execute(status -> {
-            var rows = accountRepository.findAllByUserIdAndActiveTrueOrderByCreatedAtAscIdAsc(userId);
+            var rows = accountRepository.findAllByUserIdAndActiveTrueAndAiManagedFalseOrderByCreatedAtAscIdAsc(userId);
             for (var account : rows) {
                 availableCash.put(account.getId(), orderService.availableCash(account.getId()));
             }
@@ -212,10 +215,16 @@ public class AccountService {
     private String nextDefaultName(long userId) {
         int number = 1;
         while (accountRepository.existsByUserIdAndNameIgnoreCase(
-                userId, DEFAULT_ACCOUNT_NAME_PREFIX + number)) {
+                userId, DEFAULT_ACCOUNT_NAME_PREFIX + number)
+                || aiCompetitionReservesName(userId, DEFAULT_ACCOUNT_NAME_PREFIX + number)) {
             number++;
         }
         return DEFAULT_ACCOUNT_NAME_PREFIX + number;
+    }
+
+    private boolean aiCompetitionReservesName(long userId, String name) {
+        return competitions.existsByUserIdAndCompetitionTypeAndCompetitionNameIgnoreCase(
+                userId, com.stock_spoon.river_be.competition.entity.Competition.Type.AI_VS_AI, name);
     }
 
     private String normalizeName(String name) {

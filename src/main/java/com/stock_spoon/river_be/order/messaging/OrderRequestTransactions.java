@@ -1,5 +1,6 @@
 package com.stock_spoon.river_be.order.messaging;
 
+import com.stock_spoon.river_be.account.entity.Account;
 import com.stock_spoon.river_be.account.repository.AccountRepository;
 import com.stock_spoon.river_be.execution.service.OrderExecutionService;
 import com.stock_spoon.river_be.execution.service.MarketOrderPricingService;
@@ -90,12 +91,44 @@ public class OrderRequestTransactions {
     }
     public OrderRequestRecord reject(OrderRequestMessage message, String code) {
         return tx.execute(status -> {
-            lock(message.accountId());
+            var account=lock(message.accountId());
             var done = existing(message);
             if (done != null) return done;
+            // [계좌 비활성화 수정] 처리 중 비활성화됐다면 원래 오류 대신 계좌 비활성 사유로 종결한다.
             return persist(new OrderRequestRecord(message.eventId(), message.accountId(), message.userId(),
-                    hash(message), null, code, clock.instant()));
+                    hash(message), null, account.isActive()?code:"ACCOUNT_INACTIVE", clock.instant()));
         });
+    }
+
+    // [계좌 비활성화 추가] 외부 시세 확보 전 잠금 재검사한다. 기존 결과는 보존하고 미처리 요청만 거절로 기록한다.
+    public OrderRequestRecord rejectIfInactive(OrderRequestMessage message) {
+        return tx.execute(status -> {
+            var account=lock(message.accountId());
+            if(account.isActive()) return null;
+            return inactiveResult(account,message);
+        });
+    }
+
+    // [계좌 비활성화 추가] Redis만 지우기 전에 요청 결과를 DB에 커밋한다. 실패하면 예약이 남아 다음 reconcile에서 재시도한다.
+    public boolean cleanupInactiveAccount(long accountId) {
+        boolean inactive=Boolean.TRUE.equals(tx.execute(status -> {
+            var account=lock(accountId);
+            if(account.isActive()) return false;
+            for(var reservation:store.list(accountId)) inactiveResult(account,reservation.message());
+            return true;
+        }));
+        if(inactive) store.removeAll(accountId);
+        return inactive;
+    }
+
+    // 예약/메시지가 실제 소유 계좌와 일치하는지 확인하고, 동일 eventId의 기존 결과·충돌 검증을 재사용한다.
+    private OrderRequestRecord inactiveResult(Account account,OrderRequestMessage message) {
+        if(account.getId()!=message.accountId() || !account.belongsTo(message.userId())) throw conflict();
+        var done=existing(message);
+        if(done!=null) return done;
+        validator.validate(message);
+        return persist(new OrderRequestRecord(message.eventId(),message.accountId(),message.userId(),
+                hash(message),null,"ACCOUNT_INACTIVE",clock.instant()));
     }
     public OrderRequestRecord find(OrderRequestMessage message) {
         return tx.execute(status -> existing(message));
@@ -105,8 +138,21 @@ public class OrderRequestTransactions {
         // Assigned IDs must INSERT, never JPA merge over an event concurrently committed by another account.
         em.persist(record); em.flush(); return record;
     }
+    // [회원 탈퇴 수정] 처리 후 정리 시 계좌가 이미 삭제됐다면 특정 요청 대신 해당 계좌의 잔여 예약 전체를 지운다.
     public void cleanup(OrderRequestMessage message) {
-        tx.executeWithoutResult(status -> { lock(message.accountId()); if (existing(message) != null) store.remove(message.accountId(), message.eventId()); });
+        tx.executeWithoutResult(status -> {
+            if (accounts.findLockedById(message.accountId()).isEmpty()) store.removeAll(message.accountId());
+            else if (existing(message) != null) store.remove(message.accountId(), message.eventId());
+        });
+    }
+    // [회원 탈퇴 추가] 계좌 잠금 조회로 실제 부재를 확인한 경우만 예약을 지우고 true를 반환한다.
+    public boolean discardIfAccountDeleted(long accountId) {
+        return tx.execute(status -> {
+            if (accounts.findLockedById(accountId).isPresent()) return false;
+            // DB 장애는 부재로 취급하지 않는다. 실제 부재일 때만 지연 메시지를 ACK할 수 있다.
+            store.removeAll(accountId);
+            return true;
+        });
     }
     public Map<String,Object> result(long userId, long accountId, String eventId) {
         return tx.execute(status -> {
@@ -117,16 +163,43 @@ public class OrderRequestTransactions {
             if(result!=null && result.accountId()==account.getId() && result.userId()==userId) {
                 Map<String,Object> response=new LinkedHashMap<>();
                 response.put("request_id",eventId); response.put("status",result.status().toLowerCase(Locale.ROOT));
-                response.put("order_id",result.orderId()); response.put("reason_code",result.reasonCode()); return response;
+                response.put("order_id",result.orderId()); response.put("reason_code",result.reasonCode());
+                if (result.orderId() != null) {
+                    var order = em.find(Order.class, result.orderId());
+                    if (order == null || order.getAccountId() != accountId)
+                        throw new OrderException(HttpStatus.INTERNAL_SERVER_ERROR,"INVALID_ORDER_DATA","주문 정보를 확인할 수 없습니다.");
+                    var fills = em.createQuery("select e from Execution e where e.order.id = :id",
+                            com.stock_spoon.river_be.execution.entity.Execution.class)
+                            .setParameter("id", order.getId()).getResultList();
+                    long quantity = 0;
+                    BigDecimal amount = BigDecimal.ZERO;
+                    for (var fill : fills) {
+                        quantity = Math.addExact(quantity, fill.getQuantity());
+                        amount = amount.add(BigDecimal.valueOf(fill.getPrice()).multiply(BigDecimal.valueOf(fill.getQuantity())));
+                    }
+                    if (order.getStatus() == Order.Status.EXECUTED && quantity == 0)
+                        throw new OrderException(HttpStatus.INTERNAL_SERVER_ERROR,"INVALID_ORDER_DATA","체결 정보를 확인할 수 없습니다.");
+                    response.put("stock_code", order.getStockCode());
+                    response.put("order_side", order.getSide().name().toLowerCase(Locale.ROOT));
+                    response.put("order_type", order.getType().name().toLowerCase(Locale.ROOT));
+                    response.put("order_status", order.getStatus().name().toLowerCase(Locale.ROOT));
+                    response.put("quantity", order.getQuantity());
+                    response.put("limit_price", order.getLimitPrice());
+                    response.put("executed_quantity", quantity);
+                    response.put("execution_price", quantity == 0 ? null : amount.divide(BigDecimal.valueOf(quantity), 2, java.math.RoundingMode.HALF_UP));
+                }
+                return response;
             }
             if(store.list(accountId).stream().anyMatch(r -> r.message().eventId().equals(eventId) && r.message().userId()==userId))
                 return Map.of("request_id",eventId,"status","processing");
             throw new OrderException(HttpStatus.NOT_FOUND,"ORDER_REQUEST_NOT_FOUND","주문 요청을 찾을 수 없습니다.");
         });
     }
-    private void lock(long accountId) {
+    // [계좌 비활성화 수정] 잠금 계좌를 반환해 모든 처리 경로가 refresh한 최신 active 값을 검사할 수 있게 한다.
+    private Account lock(long accountId) {
         var account=accounts.findLockedById(accountId).orElseThrow(() -> new OrderException("계좌를 찾을 수 없습니다."));
         em.refresh(account);
+        return account;
     }
     private List<Reservation> live(long accountId) {
         var all=store.list(accountId);

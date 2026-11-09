@@ -22,10 +22,14 @@ public class DbWriteReplayConfiguration {
             org.slf4j.LoggerFactory.getLogger(DbWriteReplayConfiguration.class);
     @Bean(destroyMethod = "close")
     SqsClient dbWriteReplaySqsClient(DbWriteReplayProperties properties) {
-        if (properties.getQueueUrl().isBlank() || !properties.getQueueUrl().endsWith(".fifo")) {
+        String queueUrl = properties.getQueueUrl();
+        String queueName = queueUrl.substring(queueUrl.lastIndexOf('/') + 1);
+        boolean isDbWriteReplayQueue = queueName.equals("db-write-replay.fifo")
+                || queueName.endsWith("-db-write-replay.fifo");
+        if (queueUrl.isBlank() || !isDbWriteReplayQueue) {
             log.error("event=db_write_replay_configuration_failed stage=sqs_client code=FIFO_QUEUE_URL_REQUIRED");
             throw new IllegalStateException(
-                    "DB_WRITE_REPLAY_QUEUE_URL must point to an SQS FIFO queue when replay is enabled");
+                    "DB_WRITE_REPLAY_QUEUE_URL must point to the DB migration db-write-replay FIFO queue");
         }
         return SqsClient.builder().build();
     }

@@ -42,6 +42,7 @@ public class JwtConfig {
                 .build();
     }
 
+    // User existence is checked after token validation by the common retrying filter.
     @Bean("accessJwtDecoder")
     JwtDecoder accessJwtDecoder(SecretKey key, JwtProperties properties) {
         return decoder(key, properties, "access");

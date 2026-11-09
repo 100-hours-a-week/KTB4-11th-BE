@@ -21,6 +21,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @Transactional
 class UserControllerTests {
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.stock_spoon.river_be.auth.service.JwtUserExistenceVerifier authLookup;
     @Autowired WebApplicationContext context;
     @Autowired UserRepository users;
     @Autowired JwtTokenProvider tokens;
@@ -28,6 +30,9 @@ class UserControllerTests {
 
     @BeforeEach
     void setup() {
+        // Preserve real membership checks in this test's uncommitted fixture transaction.
+        org.mockito.Mockito.when(authLookup.exists(org.mockito.ArgumentMatchers.anyLong()))
+                .thenAnswer(call -> users.existsById(call.getArgument(0, Long.class)));
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
     }
 
@@ -72,15 +77,16 @@ class UserControllerTests {
                 .andExpect(status().isUnauthorized());
     }
 
+    // [회원 탈퇴 테스트 수정] 삭제된 회원의 JWT는 조회 서비스의 404가 아니라 인증 단계의 401로 거절되어야 한다.
     @Test
-    void returnsNotFoundWhenTokenUserNoLongerExists() throws Exception {
+    void rejectsAccessTokenWhenUserNoLongerExists() throws Exception {
         var me = users.save(new User("탈퇴 사용자"));
         var cookie = accessCookie(me.getId());
         users.delete(me);
         users.flush();
         mvc.perform(get("/api/v1/users/me").cookie(cookie))
-                .andExpect(status().isNotFound())
-                .andExpect(jsonPath("$.code").value("USER_NOT_FOUND"));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
     }
 
     private Cookie accessCookie(long userId) {

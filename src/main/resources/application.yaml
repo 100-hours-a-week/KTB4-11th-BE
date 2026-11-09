@@ -24,6 +24,28 @@ spring:
       ddl-auto: ${JPA_DDL_AUTO}
     open-in-view: false
 
+competition:
+  completion:
+    close-cron: "${COMPETITION_COMPLETION_CLOSE_CRON:0 30,35 15 * * MON-FRI}"
+  ai-setup:
+    queue:
+      enabled: ${AI_REQUEST_QUEUE_ENABLED:false}
+      url: ${AI_REQUEST_QUEUE_URL:}
+      region: ${AWS_REGION:ap-northeast-2}
+    dispatch:
+      enabled: ${AI_SETUP_DISPATCH_ENABLED:true}
+      interval-ms: ${AI_SETUP_DISPATCH_INTERVAL_MS:60000}
+      batch-size: ${AI_SETUP_DISPATCH_BATCH_SIZE:20}
+  report:
+    dispatch:
+      enabled: ${REPORT_DISPATCH_ENABLED:true}
+      interval-ms: ${REPORT_DISPATCH_INTERVAL_MS:60000}
+      batch-size: ${REPORT_DISPATCH_BATCH_SIZE:20}
+    queue:
+      enabled: ${REPORT_QUEUE_ENABLED:true}
+      url: ${REPORT_QUEUE_URL:}
+      region: ${AWS_REGION:ap-northeast-2}
+
 order:
   queue:
     enabled: ${ORDER_QUEUE_ENABLED:false}
@@ -31,7 +53,10 @@ order:
     url: ${ORDER_QUEUE_URL:}
     region: ${AWS_REGION:ap-northeast-2}
 
+
 kakao:
+  # [회원 탈퇴 추가] 서버 전용 연결 해제 키. 미설정이면 앱 기동은 유지하고 unlink 요청 시 503을 반환한다.
+  admin-key: ${KAKAO_ADMIN_KEY:}
   client-id: ${KAKAO_CLIENT_ID}
   client-secret: ${KAKAO_CLIENT_SECRET}
   redirect-uri: ${KAKAO_REDIRECT_URI}
@@ -44,17 +69,17 @@ jwt:
   access-expiration: ${JWT_ACCESS_EXPIRATION:15m}
   refresh-expiration: ${JWT_REFRESH_EXPIRATION:14d}
 
-loadtest:
-  token-issuer:
-    enabled: ${LOADTEST_TOKEN_ISSUER_ENABLED:false}
-    secret: ${LOADTEST_TOKEN_ISSUER_SECRET:}
-    user-ids: ${LOADTEST_TOKEN_ISSUER_USER_IDS:}
+market:
+  http:
+    base-url: ${MARKET_HTTP_BASE_URL:https://stock-spoon.com/market}
 
 kiwoom:
+  legacy:
+    enabled: ${KIWOOM_LEGACY_ENABLED:false}
   app-key: ${KIWOOM_APP_KEY:}
   app-secret: ${KIWOOM_APP_SECRET:}
   collector:
-    enabled: ${KIWOOM_COLLECTOR_ENABLED:false}
+    enabled: ${KIWOOM_COLLECTOR_ENABLED:false} # legacy.enabled=true인 경우에만 사용한다.
     url: ${KIWOOM_COLLECTOR_URL:}
     secret: ${KIWOOM_COLLECTOR_SECRET:}
   stream:
@@ -63,7 +88,42 @@ management:
   endpoints:
     web:
       exposure:
-        include: health
+        include: health,metrics,prometheus
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: ${HTTP_REQUEST_HISTOGRAM_ENABLED:false}
+        hikaricp.connections.acquire: ${HIKARI_ACQUIRE_HISTOGRAM_ENABLED:false}
+        jvm.gc.pause: ${JVM_GC_PAUSE_HISTOGRAM_ENABLED:false}
+      minimum-expected-value:
+        http.server.requests: 1ms
+        hikaricp.connections.acquire: 1ms
+        jvm.gc.pause: 1ms
+      maximum-expected-value:
+        http.server.requests: 30s
+        hikaricp.connections.acquire: 30s
+        jvm.gc.pause: 30s
   endpoint:
     health:
       show-details: never
+
+server:
+  tomcat:
+    mbeanregistry:
+      enabled: true
+
+# Disable both endpoints in environments where API documentation is private.
+springdoc:
+  api-docs:
+    path: /api/v3/api-docs
+    enabled: ${SWAGGER_ENABLED:true}
+  paths-to-match: /api/**
+  swagger-ui:
+    path: /api/swagger-ui.html
+    enabled: ${SWAGGER_ENABLED:true}
+    with-credentials: true
+    csrf:
+      enabled: true
+    disable-swagger-default-url: true
+    operations-sorter: alpha
+    tags-sorter: alpha

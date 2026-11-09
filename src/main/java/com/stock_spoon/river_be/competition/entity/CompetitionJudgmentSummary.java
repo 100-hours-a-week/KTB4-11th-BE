@@ -6,7 +6,10 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 @Entity
-@Table(name = "competition_judgment_summaries", indexes = @Index(name = "ix_competition_judgment", columnList = "competition_id"))
+@Table(name = "competition_judgment_summaries", indexes = {
+        @Index(name = "ix_competition_judgment", columnList = "competition_id"),
+        @Index(name = "ix_competition_judgment_participant", columnList = "competition_id,participant_id")
+})
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class CompetitionJudgmentSummary {
@@ -17,13 +20,17 @@ public class CompetitionJudgmentSummary {
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "competition_id", nullable = false)
     private Competition competition;
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "participant_id", nullable = false)
+    private CompetitionParticipant participant;
     @Column(nullable = false)
     private String title;
     @Column(nullable = false, columnDefinition = "TEXT")
     private String content;
 
-    public CompetitionJudgmentSummary(Competition competition, String title, String content) {
-        this.competition = competition;
+    public CompetitionJudgmentSummary(CompetitionParticipant participant, String title, String content) {
+        this.participant = participant;
+        this.competition = participant.getCompetition();
         this.title = title;
         this.content = content;
     }

@@ -24,8 +24,56 @@ class KakaoClientTests {
     void setup() {
         var builder = RestClient.builder();
         server = MockRestServiceServer.bindTo(builder).build();
+        // [회원 탈퇴 테스트 수정] 연결 해제 요청의 Admin 키 인증을 검사할 수 있도록 테스트 전용 키를 설정한다.
         client = new KakaoClient(builder.build(), new KakaoProperties(
-                "test-app", "test-secret", "http://localhost:3000/callback", "", false));
+                "test-app", "test-secret", "http://localhost:3000/callback", "", false, "test-admin"));
+    }
+
+    // [회원 탈퇴 테스트 추가] 서버 Admin 키와 카카오 회원번호가 연결 해제 요청의 헤더·폼에 올바르게 전달되는지 확인한다.
+    @Test void unlinkUsesAdminKeyAndCorrectProviderId() {
+        server.expect(requestTo("https://kapi.kakao.com/v1/user/unlink"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(header(HttpHeaders.AUTHORIZATION, "KakaoAK test-admin"))
+                .andExpect(content().string("target_id_type=user_id&target_id=123"))
+                .andRespond(withSuccess("{\"id\":123}", MediaType.APPLICATION_JSON));
+        client.unlink(123);
+        server.verify();
+    }
+
+    // [회원 탈퇴 테스트 추가] 이미 연결이 없는 -101만 허용하고 다른 카카오 인증 오류는 실패로 남기는지 확인한다.
+    @Test void unlinkAcceptsAlreadyUnlinkedButRejectsOtherProviderErrors() {
+        server.expect(requestTo("https://kapi.kakao.com/v1/user/unlink"))
+                .andRespond(withStatus(HttpStatus.BAD_REQUEST).contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":-101,\"msg\":\"NotRegisteredUserException\"}"));
+        server.expect(requestTo("https://kapi.kakao.com/v1/user/unlink"))
+                .andRespond(withStatus(HttpStatus.UNAUTHORIZED).contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"code\":-401}"));
+        client.unlink(123);
+        assertThatThrownBy(() -> client.unlink(123)).isInstanceOf(AuthException.class);
+        server.verify();
+    }
+
+    // [회원 탈퇴 테스트 추가] 연결 해제 응답이 다른 카카오 회원번호이면 삭제 성공으로 처리하지 않는지 확인한다.
+    @Test void unlinkRejectsWrongUserResponse() {
+        server.expect(requestTo("https://kapi.kakao.com/v1/user/unlink"))
+                .andRespond(withSuccess("{\"id\":999}", MediaType.APPLICATION_JSON));
+        assertThatThrownBy(() -> client.unlink(123)).isInstanceOf(AuthException.class);
+    }
+
+    // [회원 탈퇴 테스트 추가] 카카오 타임아웃을 서비스의 504 오류로 변환하는지 확인한다.
+    @Test void unlinkTimeoutIsReportedAsGatewayTimeout() {
+        server.expect(requestTo("https://kapi.kakao.com/v1/user/unlink"))
+                .andRespond(withException(new SocketTimeoutException("timeout")));
+        assertThatThrownBy(() -> client.unlink(123)).isInstanceOfSatisfying(AuthException.class,
+                error -> assertThat(error.status()).isEqualTo(HttpStatus.GATEWAY_TIMEOUT));
+    }
+
+    // [회원 탈퇴 테스트 추가] Admin 키가 없으면 외부 요청 전에 설정 오류로 중단하는지 확인한다.
+    @Test void unlinkRequiresConfiguredAdminKey() {
+        var unconfigured = new KakaoClient(RestClient.create(),
+                new KakaoProperties("app", "", "", "", false, ""));
+        assertThatThrownBy(() -> unconfigured.unlink(123)).isInstanceOfSatisfying(AuthException.class,
+                error -> assertThat(error.code()).isEqualTo("KAKAO_UNLINK_NOT_CONFIGURED"));
     }
 
     @Test

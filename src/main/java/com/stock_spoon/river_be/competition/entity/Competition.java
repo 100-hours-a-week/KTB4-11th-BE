@@ -11,12 +11,15 @@ import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 @Entity // 이 클래스의 객체를 DB 테이블의 행으로 저장한다.
-@Table(name = "competitions", indexes = @Index(name = "ix_competitions_state_dates", columnList = "state,start_date,end_date"))
+@Table(name = "competitions", indexes = {
+        @Index(name = "ix_competitions_state_dates", columnList = "state,start_date,end_date"),
+        @Index(name = "ix_competitions_daily_pending", columnList = "state,daily_performance_complete,start_date")
+})
 @Getter // 값을 읽는 메서드만 생성한다. 상태 변경은 아래 업무 메서드로 제한한다.
 @NoArgsConstructor(access = AccessLevel.PROTECTED) // JPA가 객체를 복원할 때 사용할 기본 생성자다.
 public class Competition {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(Competition.class);
-    public enum Type { USER_VS_AI }
+    public enum Type { USER_VS_AI, AI_VS_AI }
     public enum State { READY, IN_PROGRESS, COMPLETED, CANCELLED }
     public enum Winner { USER, AI, DRAW }
 
@@ -26,6 +29,23 @@ public class Competition {
 
     @Column(name = "completed_at")
     private Instant completedAt;
+
+    // 구버전 수신 상태를 이관하기 위해 보존한다. 새 저장·조회는 참가자의 reportReady를 사용한다.
+    @Column(name = "report_ready", nullable = false)
+    private boolean reportReady;
+
+    public void markReportReady() {
+        this.reportReady = true;
+    }
+
+    // 완료 대결의 전체 일별 기록을 확인한 뒤에만 true로 만든다. 기존 대결은 false로 복구 검사를 시작한다.
+    @Column(name = "daily_performance_complete", nullable = false)
+    private boolean dailyPerformanceComplete;
+
+    public void markDailyPerformanceComplete() {
+        if (state != State.COMPLETED) throw new IllegalStateException("완료 대결만 일별 기록 복구를 마칠 수 있습니다.");
+        this.dailyPerformanceComplete = true;
+    }
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY) // DB가 발급한 자동 증가 ID를 사용한다.
@@ -84,7 +104,8 @@ public class Competition {
     }
 
     public void start(Instant startedAt) {
-        if (state != State.READY) {
+        // shortcut: 다수 AI 운용·정산 연동 전에는 생성·설정만 제공한다. 운용 지원 시 이 제한을 확장한다.
+        if (state != State.READY || competitionType == Type.AI_VS_AI) {
             log.warn("event=competition_transition_rejected stage=start_state_validation competitionId={} state={} code=COMPETITION_NOT_READY", id, state);
             throw new IllegalStateException("시작 대기 중인 대결만 시작할 수 있습니다.");
         }
@@ -107,6 +128,15 @@ public class Competition {
     public boolean isTradingAt(java.time.ZonedDateTime now) {
         return state == State.IN_PROGRESS && !now.toLocalDate().isBefore(startDate)
                 && now.toInstant().isBefore(tradingEndsAt());
+    }
+
+    // 반복 취소는 허용하며 완료된 대결은 취소 상태로 되돌리지 않는다.
+    public void cancel() {
+        if (state == State.CANCELLED) return;
+        if (state != State.READY && state != State.IN_PROGRESS) {
+            throw new IllegalStateException("대기 중이거나 진행 중인 대결만 취소할 수 있습니다.");
+        }
+        this.state = State.CANCELLED;
     }
 
     public void complete(Winner winner, Instant completedAt) {

@@ -55,6 +55,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @Transactional
 class OrderControllerTests {
+    @MockitoBean com.stock_spoon.river_be.auth.service.JwtUserExistenceVerifier authLookup;
     @org.springframework.test.context.bean.override.mockito.MockitoBean
     com.stock_spoon.river_be.market.RedisMarketPrice redisPrices;
     // 체결 및 대회 정책 검증을 위한 고정 시각.
@@ -100,6 +101,9 @@ class OrderControllerTests {
 
     @BeforeEach
     void setup() {
+        // Keep lookup in the fixture transaction; auth retry isolation is tested separately.
+        when(authLookup.exists(org.mockito.ArgumentMatchers.anyLong()))
+                .thenAnswer(call -> users.existsById(call.getArgument(0, Long.class)));
         MarketHours.now.set(Instant.parse("2026-10-01T01:00:00Z"));
         org.mockito.Mockito.doCallRealMethod().when(stream).latestQuote(anyString());
         org.mockito.Mockito.doCallRealMethod().when(stream).latestBookQuote(anyString());

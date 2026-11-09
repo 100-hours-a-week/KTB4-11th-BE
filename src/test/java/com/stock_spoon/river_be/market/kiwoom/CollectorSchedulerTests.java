@@ -1,12 +1,14 @@
 package com.stock_spoon.river_be.market.kiwoom;
 
 import java.time.Instant;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.MapPropertySource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.scheduling.TaskScheduler;
@@ -32,6 +34,8 @@ class CollectorSchedulerTests {
         when(redis.execute(any(org.springframework.data.redis.core.script.RedisScript.class), anyList(), any(Object[].class)))
                 .thenAnswer(call -> { if (blocked.get()) renewed.countDown(); return 1L; });
         try (var context = new AnnotationConfigApplicationContext()) {
+            context.getEnvironment().getPropertySources().addFirst(
+                    new MapPropertySource("test", Map.of("kiwoom.legacy.enabled", "true")));
             context.register(Scheduling.class, CollectorSchedulingConfig.class);
             context.registerBean(RedisCollectorHeartbeat.class, () -> heartbeat);
             context.refresh();

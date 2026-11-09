@@ -2,6 +2,7 @@ package com.stock_spoon.river_be.competition.service;
 
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateRequest;
 import com.stock_spoon.river_be.competition.dto.CompetitionCreateResponse;
+import com.stock_spoon.river_be.competition.dto.CompetitionNameAvailabilityResponse;
 import com.stock_spoon.river_be.competition.dto.CompetitionListResponse;
 import com.stock_spoon.river_be.competition.dto.CompetitionListCursor;
 import org.springframework.data.domain.PageRequest;
@@ -39,6 +40,30 @@ public class CompetitionService {
     private final CompetitionTradingHours tradingHours;
     private final AccountService accountService;
     private final CompetitionDailyPerformanceRepository dailyPerformances;
+    private final CompetitionAgentCreationService agentCreation;
+    private final CompetitionAiSetupReservationService aiSetupReservation;
+    private final jakarta.validation.Validator validator;
+    private final CompetitionDetailService detailService;
+    private final com.stock_spoon.river_be.competition.repository.CompetitionAgentRepository agentSettings;
+    private final com.stock_spoon.river_be.order.repository.OrderRepository orders;
+
+    @Transactional(readOnly = true) // 이름의 사용 가능 여부만 확인한다.
+    public CompetitionNameAvailabilityResponse checkNameAvailability(Long userId, String competitionName) {
+        // 생성 요청 DTO와 동일하게 공백 여부와 원본 문자열 길이를 먼저 검사한다.
+        if (competitionName == null || competitionName.isBlank() || competitionName.length() > 20) {
+            return new CompetitionNameAvailabilityResponse(false);
+        }
+
+        // 생성 시 계좌명으로 저장할 값의 앞뒤 공백을 제거한다.
+        String name = competitionName.trim();
+        if (name.isBlank()) {
+            return new CompetitionNameAvailabilityResponse(false);
+        }
+        // 활성·비활성 계좌를 모두 조회해 종료된 대결명도 중복으로 판단한다.
+        boolean duplicate = accounts.existsByUserIdAndNameIgnoreCase(userId, name)
+                || competitions.existsByUserIdAndCompetitionNameIgnoreCase(userId, name);
+        return new CompetitionNameAvailabilityResponse(!duplicate);
+    }
 
     @Transactional(readOnly = true)
     public CompetitionResultResponse getCompetitionResult(Long userId, Long competitionId) {
@@ -51,40 +76,64 @@ public class CompetitionService {
             throw new CompetitionException(HttpStatus.CONFLICT, "COMPETITION_NOT_COMPLETED", "아직 완료되지 않은 대결입니다.");
         }
 
-        // 2. 참가자 저장 순서와 관계없이 계좌의 AI 운용 여부로 사용자·AI를 구분한다.
         var links = participants.findAllByCompetitionIdOrderByIdAsc(competitionId);
-        if (links.size() != 2 || links.stream().filter(p -> p.getAccount().isAiManaged()).count() != 1) {
-            log.error("event=competition_result_failed stage=participant_validation competitionId={} code=COMPETITION_RESULT_UNAVAILABLE", competitionId);
+        if (!CompetitionParticipants.valid(competition, links)) {
+            log.error("event=competition_result_failed stage=participant_validation competitionId={} competitionType={} participantCount={} expectedAiCount={} code=COMPETITION_RESULT_UNAVAILABLE",
+                    competitionId, competition.getCompetitionType(), links.size(), competition.getAiParticipantCount());
             throw resultUnavailable();
         }
-        var user = links.stream().filter(p -> !p.getAccount().isAiManaged()).findFirst().orElseThrow();
-        var ai = links.stream().filter(p -> p.getAccount().isAiManaged()).findFirst().orElseThrow();
-        if (competition.getWinner() == null || user.getFinalReturnPercent() == null || ai.getFinalReturnPercent() == null) {
-            log.error("event=competition_result_failed stage=final_result_validation competitionId={} code=COMPETITION_RESULT_UNAVAILABLE", competitionId);
+        if (competition.getWinner() == null
+                || links.stream().anyMatch(p -> p.getFinalAssetValue() == null || p.getFinalReturnPercent() == null)) {
+            log.error("event=competition_result_failed stage=final_result_validation competitionId={} competitionType={} code=COMPETITION_RESULT_UNAVAILABLE",
+                    competitionId, competition.getCompetitionType());
             throw resultUnavailable();
         }
-
-        // 3. {날짜: {참가자 ID: 수익률}}로 묶는다. TreeMap은 날짜가 빠른 순서로 정렬해 준다.
-        // 없는 쪽의 값은 Map.get()이 null을 반환한다. 기록을 만들어 넣거나 현재가로 계산하지 않는다.
-        var byDate = new java.util.TreeMap<java.time.LocalDate, java.util.Map<Long, BigDecimal>>();
-        for (var record : dailyPerformances.findAllByParticipantCompetitionId(competitionId)) {
-            byDate.computeIfAbsent(record.getRecordDate(), date -> new java.util.HashMap<>())
-                    .put(record.getParticipant().getId(), record.getCumulativeReturnPercent());
+        boolean aiOnly = competition.getCompetitionType() == Competition.Type.AI_VS_AI;
+        var positions = new java.util.HashMap<Long, Integer>();
+        var strategies = new java.util.HashMap<Long, CompetitionDetailResponse.Strategy>();
+        if (aiOnly) {
+            var settings = agentSettings.findAllByParticipantCompetitionIdOrderByPositionAsc(competitionId);
+            if (!CompetitionParticipants.validStrategies(links, settings)) {
+                log.error("event=competition_result_failed stage=strategy_validation competitionId={} competitionType={} participantCount={} strategyCount={} code=COMPETITION_RESULT_UNAVAILABLE",
+                        competitionId, competition.getCompetitionType(), links.size(), settings.size());
+                throw resultUnavailable();
+            }
+            for (var agent : settings) {
+                long participantId = agent.getParticipant().getId();
+                positions.put(participantId, agent.getPosition());
+                strategies.put(participantId, new CompetitionDetailResponse.Strategy(agent.getRiskLevel(),
+                        java.util.List.copyOf(agent.getPreferredThemes()), java.util.List.copyOf(agent.getExcludedThemes()),
+                        agent.getAdditionalRequest()));
+            }
+            links = links.stream().sorted(java.util.Comparator.comparingInt(p -> positions.get(p.getId()))).toList();
         }
-        var history = byDate.entrySet().stream().map(day -> new CompetitionResultResponse.DailyPerformanceItem(
-                day.getKey(), day.getValue().get(user.getId()), day.getValue().get(ai.getId()))).toList();
-
-        // 4. account_id는 결과 화면 하단에서 참가 계좌의 매매 내역을 조회할 때 사용한다.
-        var participantItems = links.stream().map(link -> {
-            boolean isAi = link.getAccount().isAiManaged();
-            return new CompetitionResultResponse.ParticipantItem(link.getId(), isAi ? "ai" : "user",
-                    link.getAccount().getId(), isAi ? "AI" : "나");
+        var ordered = links;
+        var accountIds = ordered.stream().map(p -> p.getAccount().getId()).toList();
+        var counts = new java.util.HashMap<Long, Long>();
+        for (var count : orders.countByAccountsAndStatus(accountIds, com.stock_spoon.river_be.order.entity.Order.Status.EXECUTED)) {
+            counts.put(count.getAccountId(), count.getTradeCount());
+        }
+        var byParticipant = dailyPerformances.findAllByParticipantCompetitionId(competitionId).stream()
+                .collect(java.util.stream.Collectors.groupingBy(r -> r.getParticipant().getId()));
+        var items = ordered.stream().map(p -> {
+            String name = aiOnly ? "AI " + (positions.get(p.getId()) + 1) : p.getAccount().isAiManaged() ? "AI" : "나";
+            var history = byParticipant.getOrDefault(p.getId(), java.util.List.of()).stream()
+                    .sorted(java.util.Comparator.comparing(com.stock_spoon.river_be.competition.entity.CompetitionDailyPerformance::getRecordDate))
+                    .map(r -> new CompetitionDetailResponse.DailyPerformanceItem(r.getRecordDate(),
+                            com.stock_spoon.river_be.competition.dto.CompetitionReturnPercent.fromAssets(r.getAssetValue(), p.getAccount().getInitialCapital()))).toList();
+            return new CompetitionResultResponse.ParticipantItem(p.getId(), p.getAccount().isAiManaged() ? "ai" : "user",
+                    p.getAccount().getId(), name, p.getFinalAssetValue(),
+                    com.stock_spoon.river_be.competition.dto.CompetitionReturnPercent.fromAssets(p.getFinalAssetValue(), p.getAccount().getInitialCapital()),
+                    CompetitionParticipants.rank(p, ordered), counts.getOrDefault(p.getAccount().getId(), 0L),
+                    strategies.get(p.getId()), history);
         }).toList();
+        // 표시 수익률 대신 확정 자산 비율로 계산한 순위에서 공동 우승자까지 선택한다.
+        var winners = items.stream().filter(p -> p.getRank() == 1).toList();
         return new CompetitionResultResponse(competition.getId(), competition.getCompetitionName(),
-                competition.getCompetitionType().name().toLowerCase(Locale.ROOT), "completed",
-                competition.getStartDate(), competition.getEndDate(), null,
-                competition.getWinner().name().toLowerCase(Locale.ROOT), user.getFinalReturnPercent(),
-                ai.getFinalReturnPercent(), participantItems, history);
+                competition.getCompetitionType().name().toLowerCase(Locale.ROOT), "completed", competition.getStartDate(),
+                competition.getEndDate(), null, winners.stream().map(CompetitionResultResponse.ParticipantItem::getDisplayName)
+                        .collect(java.util.stream.Collectors.joining(", ")),
+                winners.stream().map(CompetitionResultResponse.ParticipantItem::getParticipantId).toList(), items);
     }
 
     private CompetitionException resultUnavailable() {
@@ -92,40 +141,8 @@ public class CompetitionService {
                 "COMPETITION_RESULT_UNAVAILABLE", "확정된 대결 결과를 확인할 수 없습니다.");
     }
 
-    @Transactional(readOnly = true) // 저장된 성적만 읽으므로 시세 API 호출이나 DB 갱신은 하지 않는다.
     public CompetitionDetailResponse getCompetitionDetail(Long userId, Long competitionId) {
-        // 1. 대결 ID와 로그인 사용자 ID를 함께 확인한다. 타인의 대결과 없는 대결은 같은 404로 응답한다.
-        var competition = competitions.findByIdAndUserId(competitionId, userId)
-                .orElseThrow(() -> new CompetitionException(HttpStatus.NOT_FOUND,
-                        "COMPETITION_NOT_FOUND", "대결을 찾을 수 없습니다."));
-
-        // 2. 두 참가자의 계좌 ID는 매매 내역 조회에 필요하다. 수익률 기록은 사용자 것만 읽는다.
-        var links = participants.findAllByCompetitionIdOrderByIdAsc(competitionId);
-        var userParticipant = links.stream().filter(p -> !p.getAccount().isAiManaged()).findFirst()
-                .orElseThrow(() -> new CompetitionException(HttpStatus.INTERNAL_SERVER_ERROR,
-                        "INVALID_COMPETITION_PARTICIPANTS", "대결 참가자 정보를 확인할 수 없습니다."));
-        var records = dailyPerformances.findAllByParticipantIdOrderByRecordDateAsc(userParticipant.getId());
-
-        // 3. 장중에도 전일까지 확정된 기록만 사용한다. 오늘 마감 후 저장된 행이 있어야 오늘 점이 추가된다.
-        // 상단 수익률은 그래프의 마지막 점과 일치시킨다. 첫 마감 기록 전에는 0%다.
-        BigDecimal latestReturn = records.isEmpty() ? BigDecimal.ZERO : records.getLast().getCumulativeReturnPercent();
-        var history = records.stream().map(record -> new CompetitionDetailResponse.DailyPerformanceItem(
-                record.getRecordDate(), record.getCumulativeReturnPercent())).toList();
-        var participantItems = links.stream().map(link -> {
-            boolean ai = link.getAccount().isAiManaged();
-            return new CompetitionDetailResponse.ParticipantItem(link.getId(), link.getAccount().getId(),
-                    ai ? "ai" : "user", ai ? "AI" : "나");
-        }).toList();
-
-        // 4. 남은 일수는 DB에 저장하지 않고 한국 날짜 기준으로 계산한다.
-        boolean closed = competition.getState() == Competition.State.COMPLETED
-                || competition.getState() == Competition.State.CANCELLED;
-        Integer dDay = closed ? null : Math.toIntExact(Math.max(0,
-                ChronoUnit.DAYS.between(tradingHours.now().toLocalDate(), competition.getEndDate())));
-        return new CompetitionDetailResponse(competition.getId(), competition.getCompetitionName(),
-                competition.getCompetitionType().name().toLowerCase(Locale.ROOT),
-                competition.getState().name().toLowerCase(Locale.ROOT), competition.getStartDate(),
-                competition.getEndDate(), dDay, latestReturn, participantItems, history);
+        return detailService.get(userId, competitionId);
     }
 
     public CompetitionListResponse listCompetitions(Long userId, String cursor, Integer limit, String state) {
@@ -220,8 +237,12 @@ public class CompetitionService {
         return new CompetitionListResponse(ongoingCount, items, pagination);
     }
 
-    @Transactional // 대결·계좌 두 개·참가자 중 하나라도 저장에 실패하면 모두 롤백한다.
+    @Transactional // 대결·참가 계좌·전략 중 하나라도 저장에 실패하면 모두 롤백한다.
     public CompetitionCreateResponse createCompetition(Long userId, CompetitionCreateRequest request) {
+        CompetitionCreationLog.stage("request_validation");
+        if (request == null || !validator.validate(request).isEmpty()) {
+            throw invalid("INVALID_REQUEST", "요청 형식이 올바르지 않습니다.");
+        }
         CompetitionCreationLog.stage("read_trading_time");
         var now = tradingHours.now(); // 자정 경계에서도 한 요청은 같은 날짜·시각으로 판단한다.
         CompetitionCreationLog.stage("user_lookup");
@@ -233,12 +254,25 @@ public class CompetitionService {
         }
         // 단일 필드의 필수값·범위는 @Valid로 검사하고 여기서는 대결 정책을 검사한다.
         CompetitionCreationLog.stage("validate_competition_type");
-        if (!"user_vs_ai".equals(request.getCompetitionType())) {
+        boolean aiVsAi = "ai_vs_ai".equals(request.getCompetitionType());
+        if (!aiVsAi && !"user_vs_ai".equals(request.getCompetitionType())) {
             throw invalid("INVALID_COMPETITION_TYPE", "지원하지 않는 대결 유형입니다.");
         }
         CompetitionCreationLog.stage("validate_ai_participant_count");
-        if (request.getAiParticipantCount() != 1) {
-            throw invalid("INVALID_AI_PARTICIPANT_COUNT", "v2 대결에는 AI 한 명만 참여할 수 있습니다.");
+        Integer count = request.getAiParticipantCount();
+        if (count == null || (aiVsAi ? count < 2 || count > 4 : count != 1)) {
+            throw invalid("INVALID_AI_PARTICIPANT_COUNT", "사용자 대 AI는 1명, AI 간 대결은 2~4명의 AI가 필요합니다.");
+        }
+        CompetitionCreationLog.stage("validate_agents");
+        if (aiVsAi) {
+            if (request.getAgents() == null) {
+                throw invalid("INVALID_REQUEST", "AI 간 대결에는 에이전트 설정이 필요합니다.");
+            }
+            if (request.getAgents().size() != count) {
+                throw invalid("AGENT_COUNT_MISMATCH", "대결의 AI 참가자 수와 설정 개수가 일치해야 합니다.");
+            }
+        } else if (request.getAgents() != null) {
+            throw invalid("INVALID_REQUEST", "사용자 대 AI 대결에는 에이전트 설정을 지정할 수 없습니다.");
         }
         CompetitionCreationLog.stage("validate_start_date");
         if (!request.getStartDate().equals(now.toLocalDate())) {
@@ -254,14 +288,22 @@ public class CompetitionService {
             throw invalid("INVALID_COMPETITION_NAME", "대결 이름은 공백이 아닌 20자 이하여야 합니다.");
         }
         CompetitionCreationLog.stage("check_account_name");
-        if (accounts.existsByUserIdAndNameIgnoreCase(userId, name)) {
+        if (accounts.existsByUserIdAndNameIgnoreCase(userId, name)
+                || competitions.existsByUserIdAndCompetitionNameIgnoreCase(userId, name)) {
             throw new CompetitionException(HttpStatus.CONFLICT, "DUPLICATE_ACCOUNT_NAME", "이미 사용 중인 계좌 이름입니다.");
         }
 
         CompetitionCreationLog.stage("competition_save");
-        var competition = competitions.save(new Competition(user, name, Competition.Type.USER_VS_AI,
-                request.getStartDate(), request.getEndDate(), request.getInitialCapital(), 1));
+        var competition = competitions.save(new Competition(user, name,
+                aiVsAi ? Competition.Type.AI_VS_AI : Competition.Type.USER_VS_AI,
+                request.getStartDate(), request.getEndDate(), request.getInitialCapital(), count));
         CompetitionCreationLog.competitionId(competition.getId());
+        if (aiVsAi) {
+            agentCreation.createParticipants(competition, request.getAgents());
+            aiSetupReservation.reserve(competition);
+            CompetitionCreationLog.stage("transaction_commit");
+            return new CompetitionCreateResponse("success", competition.getId(), "ready");
+        }
         CompetitionCreationLog.stage("initialize_competition_state");
         if (tradingHours.isOpen(now)) competition.start(now.toInstant());
 

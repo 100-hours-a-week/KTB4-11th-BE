@@ -10,12 +10,18 @@ import java.util.List;
 
 // save(), findById() 등 기본 저장·조회 기능은 Spring Data JPA가 구현한다.
 public interface CompetitionRepository extends JpaRepository<Competition, Long> {
+    boolean existsByUserIdAndCompetitionNameIgnoreCase(Long userId, String competitionName);
+    boolean existsByUserIdAndCompetitionTypeAndCompetitionNameIgnoreCase(Long userId, Competition.Type competitionType, String competitionName);
+    // [회원 탈퇴 추가] 소유 대결 전체를 ID 순으로 잠근 뒤 계좌를 잠가, 기존 대결 정산의 잠금 순서를 유지한다.
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("select c from Competition c where c.user.id = :userId order by c.id")
+    List<Competition> findAllLockedByUserId(long userId);
     // 소유자를 함께 조건으로 걸어 타인의 대결을 상세 조회하지 못하게 한다.
     java.util.Optional<Competition> findByIdAndUserId(Long id, Long userId);
 
-    // 완료 대결도 포함해 서버 중단 중 누락된 과거 일별 성적을 복구한다.
+    // 진행 중 대결과 아직 전체 일별 기록을 확인하지 않은 완료 대결만 복구한다.
     @org.springframework.data.jpa.repository.Query("select c.id from Competition c "
-            + "where c.state in (IN_PROGRESS, COMPLETED) and c.startedAt is not null "
+            + "where c.state in (IN_PROGRESS, COMPLETED) and c.dailyPerformanceComplete = false and c.startedAt is not null "
             + "and c.startDate <= :today order by c.id")
     java.util.List<Long> findDailyPerformanceCandidates(java.time.LocalDate today);
 
@@ -52,7 +58,7 @@ public interface CompetitionRepository extends JpaRepository<Competition, Long> 
 
     // 여러 BE 인스턴스가 동시에 실행해도 같은 대결을 중복 시작하지 않도록 잠근다.
     @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
-    @org.springframework.data.jpa.repository.Query("select c from Competition c where c.state = READY "
+    @org.springframework.data.jpa.repository.Query("select c from Competition c where c.state = READY and c.competitionType = USER_VS_AI "
             + "and c.startDate <= :today and c.endDate >= :today order by c.id")
     java.util.List<Competition> findWaitingToStart(java.time.LocalDate today);
 }

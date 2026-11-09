@@ -3,14 +3,16 @@ package com.stock_spoon.river_be.market.kiwoom;
 import java.math.BigDecimal;
 
 import java.util.Map;
+import com.stock_spoon.river_be.market.MarketStockClient;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
-/** 키움 시세 조회. 실전 주문 API는 호출하지 않는다. */
+/** 운영 종목정보·수정주가 종가는 시세 서버 HTTP를 사용한다. */
 public class KiwoomMarketClient {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(KiwoomMarketClient.class);
     private final KiwoomRestTransport transport;
     private final StockMetadataCache metadata;
+    private final MarketStockClient stocks;
 
     public KiwoomMarketClient(RestClient client, KiwoomTokenProvider tokens) {
         this(new DirectKiwoomRestTransport(client, tokens, () -> true));
@@ -21,12 +23,18 @@ public class KiwoomMarketClient {
     }
 
     public KiwoomMarketClient(KiwoomRestTransport transport, StockMetadataCache metadata) {
+        this(transport, metadata, null);
+    }
+
+    public KiwoomMarketClient(KiwoomRestTransport transport, StockMetadataCache metadata, MarketStockClient stocks) {
         this.transport = transport;
         this.metadata = metadata;
+        this.stocks = stocks;
     }
 
     /** ka10100: 주문 대상의 상장 시장과 종목 상태를 조회한다. */
     public StockInfo stockInfo(String stockCode) {
+        if (stocks != null) throw new IllegalStateException("시세 서버는 종목 상태·주문 경고를 제공하지 않습니다.");
         Map<String, Object> response = stockInfoResponse(stockCode);
         if (!stockCode.equals(response.get("code"))
                 || !(response.get("marketCode") instanceof String marketCode)
@@ -41,6 +49,7 @@ public class KiwoomMarketClient {
 
     /** ka10001 주식기본정보요청의 현재가. 가격의 +/- 방향 표기는 제거한다. */
     public long currentPrice(String stockCode) {
+        if (stocks != null) throw new IllegalStateException("운영 현재가는 RedisMarketPrice를 사용하세요.");
         if (stockCode == null || !stockCode.matches("[0-9A-Z]{6}")) {
             throw new IllegalArgumentException("종목코드를 확인하세요.");
         }
@@ -67,11 +76,12 @@ public class KiwoomMarketClient {
         }
     }
 
-    /** 종료 거래일의 원주가 종가. 다른 날짜나 현재가로 대체하지 않는다. */
+    /** 운영은 시세 서버 수정주가 종가. 다른 날짜나 현재가로 대체하지 않는다. */
     public long closingPrice(String stockCode, java.time.LocalDate date) {
         if (stockCode == null || !stockCode.matches("[0-9A-Z]{6}") || date == null) {
             throw new IllegalArgumentException("종목코드와 거래일을 확인하세요.");
         }
+        if (stocks != null) return stocks.closingPrice(stockCode, date);
         String day = date.format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE);
         Map<String, Object> response;
         try {
@@ -148,12 +158,13 @@ public class KiwoomMarketClient {
     public record StockMaster(String stockCode, String stockName, String marketCode, String sector) {}
 
     Map<String, Object> metadata(String stockCode) {
-        return metadata.load(stockCode, () -> transport.metadata(stockCode));
+        return metadata.load(stockCode, () -> stocks == null ? transport.metadata(stockCode) : stocks.stockInfo(stockCode));
     }
 
-    // 주문 검증과 보유 조회가 같은 ka10100 호출을 재사용하되 각자의 필수 필드만 검증한다.
-    private Map<String, Object> stockInfoResponse(String stockCode) {
+    // 운영 빈은 시세 서버를 사용한다. 기존 생성자는 단독 키움 연동 테스트에서 사용한다.
+    Map<String, Object> stockInfoResponse(String stockCode) {
         if (stockCode == null || !stockCode.matches("[0-9A-Z]{6}")) throw new IllegalArgumentException("종목코드를 확인하세요.");
+        if (stocks != null) return stocks.stockInfo(stockCode);
         Map<String, Object> response;
         try {
             response = transport.query("ka10100", "/api/dostk/stkinfo", Map.of("stk_cd", stockCode));

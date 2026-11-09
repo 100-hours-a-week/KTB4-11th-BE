@@ -15,6 +15,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
 
+// [회원 탈퇴 테스트 수정] KakaoProperties의 adminKey 인자를 추가했다. 실제 외부 연결 없이 기존 로그인 동작을 검증한다.
 class KakaoAuthServiceTests {
     @Test
     void blankConfigurationFailsBeforeAnyExternalCall() {
@@ -22,7 +23,7 @@ class KakaoAuthServiceTests {
         var users = mock(UserRepository.class);
         var oauthUsers = mock(UserOAuthRepository.class);
         var service = new KakaoAuthService(client,
-                new KakaoProperties("", "", "", "", true), users, oauthUsers);
+                new KakaoProperties("", "", "", "", true, ""), users, oauthUsers);
         assertThatThrownBy(() -> service.verify("code"))
                 .isInstanceOfSatisfying(AuthException.class,
                         error -> assertThat(error.code()).isEqualTo("OAUTH_NOT_CONFIGURED"));
@@ -35,9 +36,11 @@ class KakaoAuthServiceTests {
         var users = mock(UserRepository.class);
         var oauthUsers = mock(UserOAuthRepository.class);
         var service = new KakaoAuthService(client,
-                new KakaoProperties("app", "", "http://54.180.180.202/auth/callback", "", false),
+                new KakaoProperties("app", "", "http://54.180.180.202/auth/callback", "", false, "test-admin"),
                 users, oauthUsers);
         var existing = new User("dev");
+        // [회원 탈퇴 테스트 수정] 기존 회원 로그인도 잠금 재조회를 통과하도록 저장소 응답을 준비한다.
+        when(users.findLockedById(existing.getId())).thenReturn(Optional.of(existing));
         when(client.verifyUser("code")).thenReturn(new KakaoUserInfo(123L, "dev", null));
         when(oauthUsers.findByProviderAndProviderUserId(OAuthProvider.KAKAO, 123L))
                 .thenReturn(Optional.of(new UserOAuth(existing, OAuthProvider.KAKAO, 123L)));
@@ -50,7 +53,7 @@ class KakaoAuthServiceTests {
     void rejectsUnapprovedHttpCallbackBeforeExternalCall() {
         var client = mock(KakaoClient.class);
         var service = new KakaoAuthService(client,
-                new KakaoProperties("app", "", "http://example.com/auth/callback", "", false),
+                new KakaoProperties("app", "", "http://example.com/auth/callback", "", false, "test-admin"),
                 mock(UserRepository.class), mock(UserOAuthRepository.class));
         assertThatThrownBy(() -> service.verify("code"))
                 .isInstanceOfSatisfying(AuthException.class,
@@ -63,7 +66,7 @@ class KakaoAuthServiceTests {
         var users = mock(UserRepository.class);
         var oauthUsers = mock(UserOAuthRepository.class);
         var service = new KakaoAuthService(client,
-                new KakaoProperties("app", "", "http://localhost:3000/callback", "", false),
+                new KakaoProperties("app", "", "http://localhost:3000/callback", "", false, "test-admin"),
                 users, oauthUsers);
         when(client.verifyUser("code")).thenReturn(new KakaoUserInfo(
                 123L, "첫닉네임", "https://example.com/first.jpg"));
@@ -86,9 +89,11 @@ class KakaoAuthServiceTests {
         var users = mock(UserRepository.class);
         var oauthUsers = mock(UserOAuthRepository.class);
         var service = new KakaoAuthService(client,
-                new KakaoProperties("app", "", "http://localhost:3000/callback", "", false),
+                new KakaoProperties("app", "", "http://localhost:3000/callback", "", false, "test-admin"),
                 users, oauthUsers);
         User existingUser = new User("이전닉네임");
+        // [회원 탈퇴 테스트 수정] 프로필 동기화가 잠금 재조회한 회원에게 적용되는지 검증한다.
+        when(users.findLockedById(existingUser.getId())).thenReturn(Optional.of(existingUser));
         when(client.verifyUser("code")).thenReturn(new KakaoUserInfo(
                 123L, "새닉네임", "https://example.com/new.jpg"));
         when(oauthUsers.findByProviderAndProviderUserId(OAuthProvider.KAKAO, 123L))
@@ -109,7 +114,7 @@ class KakaoAuthServiceTests {
         var users = mock(UserRepository.class);
         var oauthUsers = mock(UserOAuthRepository.class);
         var service = new KakaoAuthService(client,
-                new KakaoProperties("app", "", "http://localhost:3000/callback", "", false),
+                new KakaoProperties("app", "", "http://localhost:3000/callback", "", false, "test-admin"),
                 users, oauthUsers);
         when(client.verifyUser("code")).thenReturn(new KakaoUserInfo(123L, null, null));
 

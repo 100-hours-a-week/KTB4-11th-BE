@@ -20,10 +20,11 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = {"kiwoom.collector.enabled=true", "kiwoom.collector.secret=test-only-collector-shared-secret"})
+        properties = {"kiwoom.legacy.enabled=true", "kiwoom.collector.enabled=true", "kiwoom.collector.secret=test-only-collector-shared-secret"})
 class CollectorSecurityTests {
     @Autowired WebApplicationContext context;
     @MockitoBean KiwoomRestTransport transport;
+    @MockitoBean com.stock_spoon.river_be.market.MarketStockClient stocks;
     @MockitoBean RedisCollectorHeartbeat heartbeat;
     @MockitoBean MarketStream stream;
     @MockitoBean StockMetadataCache metadata;
@@ -37,6 +38,7 @@ class CollectorSecurityTests {
         when(heartbeat.ownsLease()).thenReturn(true);
         when(heartbeat.ownerId()).thenReturn("owner-1");
         when(transport.query(anyString(), anyString(), anyMap())).thenReturn(Map.of("return_code", 0));
+        when(stocks.stockInfo("005930")).thenReturn(Map.of("return_code", 0));
     }
 
     @Test
@@ -63,7 +65,8 @@ class CollectorSecurityTests {
         mvc.perform(post("/internal/kiwoom/query").header("X-Kiwoom-Collector-Key", "test-only-collector-shared-secret")
                 .contentType(MediaType.APPLICATION_JSON).content(BODY))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.return_code").value(0));
-        verify(transport).query("ka10100", "/api/dostk/stkinfo", Map.of("stk_cd", "005930"));
+        verify(stocks).stockInfo("005930");
+        verifyNoInteractions(transport);
     }
 
     @Test
@@ -90,7 +93,8 @@ class CollectorSecurityTests {
                 "http://localhost:" + port, "test-only-collector-shared-secret");
         org.assertj.core.api.Assertions.assertThat(remote.query("ka10100", "/api/dostk/stkinfo", Map.of("stk_cd", "005930")))
                 .containsEntry("return_code", 0);
-        verify(transport).query("ka10100", "/api/dostk/stkinfo", Map.of("stk_cd", "005930"));
+        verify(stocks).stockInfo("005930");
+        verifyNoInteractions(transport);
         verifyNoInteractions(tokens);
     }
 
@@ -110,7 +114,7 @@ class CollectorSecurityTests {
         var fields = Map.<String, Object>of("return_code", 0, "code", "005930", "name", "삼성전자",
                 "marketCode", "0", "upName", "전기전자");
         when(metadata.load(eq("005930"), any())).thenAnswer(call -> ((java.util.function.Supplier<?>) call.getArgument(1)).get());
-        when(transport.metadata("005930")).thenReturn(fields);
+        when(stocks.stockInfo("005930")).thenReturn(fields);
         var redis = mock(StringRedisTemplate.class);
         ValueOperations<String, String> values = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(values);
@@ -119,7 +123,7 @@ class CollectorSecurityTests {
                 false, "http://localhost:" + port, "test-only-collector-shared-secret");
         var normal = new KiwoomMarketClient(remote, new StockMetadataCache(redis));
         org.assertj.core.api.Assertions.assertThat(normal.stockDetails("005930").stockName()).isEqualTo("삼성전자");
-        verify(transport).metadata("005930");
-        verify(transport, never()).query(anyString(), anyString(), anyMap());
+        verify(stocks).stockInfo("005930");
+        verifyNoInteractions(transport);
     }
 }

@@ -63,6 +63,14 @@ public class Order {
             long quantity, long limitPrice, Source source, String reason, String stockName,
             java.util.List<ReportReasoning> reasoning, Double holdingWeightLimitPercent,
             Boolean isLowerTriggered, Instant now) {
+        return pendingLimit(account, stockCode, side, quantity, limitPrice, source, reason, stockName,
+                reasoning, holdingWeightLimitPercent, isLowerTriggered, null, now);
+    }
+
+    public static Order pendingLimit(Account account, String stockCode, Side side,
+            long quantity, long limitPrice, Source source, String reason, String stockName,
+            java.util.List<ReportReasoning> reasoning, Double holdingWeightLimitPercent,
+            Boolean isLowerTriggered, String reasonId, Instant now) {
         var order = new Order();
         order.account = account;
         order.stockCode = stockCode;
@@ -74,7 +82,7 @@ public class Order {
         order.quantity = quantity;
         order.limitPrice = limitPrice;
         order.reservedCash = side == Side.BUY ? Math.multiplyExact(quantity, limitPrice) : 0;
-        if (reason != null) order.report = new AiOrderReport(order, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered);
+        if (reason != null) order.report = new AiOrderReport(order, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered, reasonId);
         order.createdAt = now;
         return order;
     }
@@ -104,6 +112,13 @@ public class Order {
     public static Order pendingMarket(Account account, String stockCode, Side side, long quantity,
             Source source, String reason, String stockName, java.util.List<ReportReasoning> reasoning,
             Double holdingWeightLimitPercent, Boolean isLowerTriggered, Instant now) {
+        return pendingMarket(account, stockCode, side, quantity, source, reason, stockName, reasoning,
+                holdingWeightLimitPercent, isLowerTriggered, null, now);
+    }
+
+    public static Order pendingMarket(Account account, String stockCode, Side side, long quantity,
+            Source source, String reason, String stockName, java.util.List<ReportReasoning> reasoning,
+            Double holdingWeightLimitPercent, Boolean isLowerTriggered, String reasonId, Instant now) {
         var order = new Order();
         order.account = account;
         order.stockCode = stockCode;
@@ -113,7 +128,7 @@ public class Order {
         order.source = source;
         order.quantity = quantity;
         if (source == Source.AI) {
-            order.report = new AiOrderReport(order, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered);
+            order.report = new AiOrderReport(order, reason, stockName, reasoning, holdingWeightLimitPercent, isLowerTriggered, reasonId);
         }
         order.createdAt = now;
         return order;

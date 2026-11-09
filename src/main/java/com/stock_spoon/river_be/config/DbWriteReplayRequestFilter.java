@@ -30,7 +30,8 @@ public class DbWriteReplayRequestFilter extends OncePerRequestFilter {
             FilterChain chain) throws ServletException, IOException {
         String requestId = MDC.get("requestId");
         if (!StringUtils.hasText(requestId)) requestId = UUID.randomUUID().toString();
-        requestContext.beginRequest(requestId, MDC.get(DbMigrationWriteAuditFilter.MDC_KEY));
+        requestContext.beginRequest(requestId, MDC.get(DbMigrationWriteAuditFilter.MDC_KEY),
+                request.getHeader("Idempotency-Key"));
         try {
             chain.doFilter(request, response);
         } finally {

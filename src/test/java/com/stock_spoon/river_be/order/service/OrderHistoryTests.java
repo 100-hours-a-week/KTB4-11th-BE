@@ -36,6 +36,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @Transactional
 class OrderHistoryTests {
+    @MockitoBean com.stock_spoon.river_be.auth.service.JwtUserExistenceVerifier authLookup;
     @Autowired WebApplicationContext context;
     @Autowired UserRepository users;
     @Autowired AccountRepository accounts;
@@ -49,6 +50,9 @@ class OrderHistoryTests {
     private Account account;
 
     @BeforeEach void setup() {
+        // Keep lookup in the fixture transaction; auth retry isolation is tested separately.
+        when(authLookup.exists(org.mockito.ArgumentMatchers.anyLong()))
+                .thenAnswer(call -> users.existsById(call.getArgument(0, Long.class)));
         mvc = MockMvcBuilders.webAppContextSetup(context).apply(springSecurity()).build();
         user = users.save(new User("체결목록 사용자"));
         account = accounts.save(new Account(user, "체결목록", 1000000));
@@ -157,43 +161,46 @@ class OrderHistoryTests {
         var executed = executed("2026-09-02T00:00:00Z", "2026-09-02T01:00:00Z", Order.Side.BUY);
         var cancelled = pending(account, Order.Side.SELL, "2026-09-03T00:00:00Z");
         cancelled.cancel(Instant.parse("2026-09-03T01:00:00Z"));
-        var all = orders.findHistory(account.getId(), null, Order.Source.AI, null, null,
+        var all = orders.findHistory(account.getId(), null, null, null,
                 org.springframework.data.domain.Pageable.unpaged());
         assertThat(all).extracting(Order::getId)
                 .containsExactlyInAnyOrder(pending.getId(), executed.getId(), cancelled.getId());
-        assertThat(orders.countHistory(account.getId(), null, Order.Source.AI, null, null)).isEqualTo(3);
+        assertThat(orders.countHistory(account.getId(), null, null, null)).isEqualTo(3);
         for (var order : List.of(pending, executed, cancelled)) {
-            assertThat(orders.findHistory(account.getId(), order.getStatus(), Order.Source.AI, null, null,
+            assertThat(orders.findHistory(account.getId(), order.getStatus(), null, null,
                     org.springframework.data.domain.Pageable.unpaged()))
                     .extracting(Order::getId).containsExactly(order.getId());
-            assertThat(orders.countHistory(account.getId(), order.getStatus(), Order.Source.AI, null, null)).isEqualTo(1);
+            assertThat(orders.countHistory(account.getId(), order.getStatus(), null, null)).isEqualTo(1);
         }
         verifyNoInteractions(market);
     }
 
-    @Test void repositoryCombinesStatusSideAccountAndSourceBeforePaging() {
+    @Test void repositoryCombinesStatusSideAccountAcrossSourcesBeforePaging() {
         var buy1 = pending(account, Order.Side.BUY, "2026-09-01T00:00:00Z");
         var buy2 = pending(account, Order.Side.BUY, "2026-09-02T00:00:00Z");
         pending(account, Order.Side.SELL, "2026-09-03T00:00:00Z");
         executed("2026-09-04T00:00:00Z", "2026-09-04T01:00:00Z", Order.Side.BUY);
         var other = accounts.save(new Account(users.save(new User("Repository 타인")), "타인 계좌", 1000000));
         pending(other, Order.Side.BUY, "2026-09-05T00:00:00Z");
-        orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY, 2, 70000,
+        var manual = orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY, 2, 70000,
                 Order.Source.USER, null, Instant.parse("2026-09-05T00:00:00Z")));
-        assertThat(orders.countHistory(account.getId(), Order.Status.PENDING, Order.Source.AI, Order.Side.BUY, null))
-                .isEqualTo(2);
-        var first = orders.findHistory(account.getId(), Order.Status.PENDING, Order.Source.AI, Order.Side.BUY, null,
+        assertThat(orders.countHistory(account.getId(), Order.Status.PENDING, Order.Side.BUY, null))
+                .isEqualTo(3);
+        var first = orders.findHistory(account.getId(), Order.Status.PENDING, Order.Side.BUY, null,
                 org.springframework.data.domain.PageRequest.of(0, 1));
-        var second = orders.findHistory(account.getId(), Order.Status.PENDING, Order.Source.AI, Order.Side.BUY, null,
+        var second = orders.findHistory(account.getId(), Order.Status.PENDING, Order.Side.BUY, null,
                 org.springframework.data.domain.PageRequest.of(1, 1));
-        assertThat(first).extracting(Order::getId).containsExactly(buy2.getId());
-        assertThat(second).extracting(Order::getId).containsExactly(buy1.getId());
-        assertThat(orders.countHistory(account.getId(), null, Order.Source.AI, Order.Side.BUY, null)).isEqualTo(3);
-        assertThat(orders.findHistory(account.getId(), null, Order.Source.AI, Order.Side.BUY, null,
-                org.springframework.data.domain.Pageable.unpaged())).hasSize(3);
-        assertThat(orders.countHistory(account.getId(), Order.Status.CANCELLED, Order.Source.AI, Order.Side.SELL, null))
+        var third = orders.findHistory(account.getId(), Order.Status.PENDING, Order.Side.BUY, null,
+                org.springframework.data.domain.PageRequest.of(2, 1));
+        assertThat(first).extracting(Order::getId).containsExactly(manual.getId());
+        assertThat(second).extracting(Order::getId).containsExactly(buy2.getId());
+        assertThat(third).extracting(Order::getId).containsExactly(buy1.getId());
+        assertThat(orders.countHistory(account.getId(), null, Order.Side.BUY, null)).isEqualTo(4);
+        assertThat(orders.findHistory(account.getId(), null, Order.Side.BUY, null,
+                org.springframework.data.domain.Pageable.unpaged())).hasSize(4);
+        assertThat(orders.countHistory(account.getId(), Order.Status.CANCELLED, Order.Side.SELL, null))
                 .isZero();
-        assertThat(orders.findHistory(account.getId(), Order.Status.CANCELLED, Order.Source.AI, Order.Side.SELL, null,
+        assertThat(orders.findHistory(account.getId(), Order.Status.CANCELLED, Order.Side.SELL, null,
                 org.springframework.data.domain.Pageable.unpaged())).isEmpty();
         verifyNoInteractions(market);
     }
@@ -238,19 +245,20 @@ class OrderHistoryTests {
         cancelled.cancel(Instant.parse("2026-09-05T01:00:00Z"));
         var other = accounts.save(new Account(users.save(new User("상태 필터 타인")), "타인", 1000000));
         pending(other, Order.Side.BUY, "2026-09-10T00:00:00Z");
-        orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY, 2, 70000,
+        var manual = orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY, 2, 70000,
                 Order.Source.USER, null, Instant.parse("2026-09-10T00:00:00Z")));
         list("?page=0&limit=2").andExpect(status().isOk())
-                .andExpect(jsonPath("$.pagination.total_elements").value(3))
-                .andExpect(jsonPath("$.orders[0].order_id").value(cancelled.getId()))
-                .andExpect(jsonPath("$.orders[1].order_id").value(newest.getId()));
+                .andExpect(jsonPath("$.pagination.total_elements").value(4))
+                .andExpect(jsonPath("$.orders[0].order_id").value(manual.getId()))
+                .andExpect(jsonPath("$.orders[1].order_id").value(cancelled.getId()));
         list("?page=1&limit=2").andExpect(status().isOk())
-                .andExpect(jsonPath("$.orders.length()").value(1))
-                .andExpect(jsonPath("$.orders[0].order_id").value(filled.getId()))
+                .andExpect(jsonPath("$.orders.length()").value(2))
+                .andExpect(jsonPath("$.orders[0].order_id").value(newest.getId()))
+                .andExpect(jsonPath("$.orders[1].order_id").value(filled.getId()))
                 .andExpect(jsonPath("$.pagination.has_next").value(false));
         list("?limit=3").andExpect(status().isOk())
                 .andExpect(jsonPath("$.orders.length()").value(3))
-                .andExpect(jsonPath("$.orders[0].order_status").value("cancelled"))
+                .andExpect(jsonPath("$.orders[0].order_status").value("pending"))
                 .andExpect(jsonPath("$.pagination").doesNotExist());
     }
 
@@ -289,7 +297,7 @@ class OrderHistoryTests {
         verifyNoInteractions(market);
     }
 
-    @Test void rejectsUnauthenticatedForeignMissingAndInactiveAccounts() throws Exception {
+    @Test void rejectsUnauthenticatedForeignAndMissingAccountsButAllowsOwnedInactiveAccount() throws Exception {
         mvc.perform(get("/api/v1/accounts/{id}/orders", account.getId())).andExpect(status().isUnauthorized());
         var other = users.save(new User("타인"));
         mvc.perform(get("/api/v1/accounts/{id}/orders", account.getId())
@@ -302,7 +310,7 @@ class OrderHistoryTests {
         em.createNativeQuery("update accounts set is_active=false where account_id=:id")
                 .setParameter("id", account.getId()).executeUpdate();
         em.clear();
-        list("").andExpect(status().isNotFound());
+        list("").andExpect(status().isOk());
         verifyNoInteractions(market);
     }
 
@@ -326,14 +334,15 @@ class OrderHistoryTests {
         manual.execute();
         listExecuted("?page=0&limit=2&order_side=buy").andExpect(status().isOk())
                 .andExpect(jsonPath("$.orders.length()").value(2))
-                .andExpect(jsonPath("$.orders[0].order_id").value(tie2.getId()))
-                .andExpect(jsonPath("$.orders[1].order_id").value(tie1.getId()))
-                .andExpect(jsonPath("$.pagination.total_elements").value(3))
+                .andExpect(jsonPath("$.orders[0].order_id").value(manual.getId()))
+                .andExpect(jsonPath("$.orders[1].order_id").value(tie2.getId()))
+                .andExpect(jsonPath("$.pagination.total_elements").value(4))
                 .andExpect(jsonPath("$.pagination.total_pages").value(2))
                 .andExpect(jsonPath("$.pagination.has_next").value(true));
         listExecuted("?page=1&limit=2&order_side=buy").andExpect(status().isOk())
-                .andExpect(jsonPath("$.orders.length()").value(1))
-                .andExpect(jsonPath("$.orders[0].order_id").value(oldest.getId()))
+                .andExpect(jsonPath("$.orders.length()").value(2))
+                .andExpect(jsonPath("$.orders[0].order_id").value(tie1.getId()))
+                .andExpect(jsonPath("$.orders[1].order_id").value(oldest.getId()))
                 .andExpect(jsonPath("$.pagination.page").value(1))
                 .andExpect(jsonPath("$.pagination.has_next").value(false));
         list("?order_side=sell&limit=3").andExpect(status().isOk())
@@ -341,7 +350,7 @@ class OrderHistoryTests {
                 .andExpect(jsonPath("$.orders[0].order_side").value("sell"))
                 .andExpect(jsonPath("$.pagination").doesNotExist());
         listExecuted("?page=0&limit=10").andExpect(status().isOk())
-                .andExpect(jsonPath("$.pagination.total_elements").value(4));
+                .andExpect(jsonPath("$.pagination.total_elements").value(5));
     }
 
     @Test void aggregatesMultipleExecutionsAndSortsByLastFill() throws Exception {
@@ -492,6 +501,38 @@ class OrderHistoryTests {
                     .andExpect(jsonPath("$.code").value("INVALID_ORDER_QUERY"));
         }
         verifyNoInteractions(market);
+    }
+
+    @Test void listsBothSourcesForEitherAccountTypeWithConsistentPaginationAndFilters() throws Exception {
+        for (boolean managed : List.of(true, false)) {
+            account = accounts.save(new Account(user, "혼합 출처 " + managed, 1000000, managed));
+            var ai = pending(account, Order.Side.BUY, "2026-09-01T00:00:00Z");
+            var manual = orders.save(Order.pendingLimit(account, "005930", Order.Side.BUY, 2, 70000,
+                    Order.Source.USER, null, Instant.parse("2026-09-02T00:00:00Z")));
+            pending(account, Order.Side.SELL, "2026-09-03T00:00:00Z");
+            pending(account, Order.Side.BUY, "2026-09-04T00:00:00Z").cancel(Instant.now());
+            orders.save(Order.pendingLimit(account, "000660", Order.Side.BUY, 2, 70000,
+                    Order.Source.USER, null, Instant.parse("2026-09-05T00:00:00Z")));
+            String filter = "?order_status=pending&order_side=buy&stock_code=005930";
+            list(filter).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.orders.length()").value(2))
+                    .andExpect(jsonPath("$.orders[0].order_id").value(manual.getId()))
+                    .andExpect(jsonPath("$.orders[0].order_source").value("USER"))
+                    .andExpect(jsonPath("$.orders[1].order_id").value(ai.getId()))
+                    .andExpect(jsonPath("$.orders[1].order_source").value("AI"));
+            list(filter + "&page=0&limit=1").andExpect(status().isOk())
+                    .andExpect(jsonPath("$.orders[0].order_id").value(manual.getId()))
+                    .andExpect(jsonPath("$.pagination.total_elements").value(2))
+                    .andExpect(jsonPath("$.pagination.total_pages").value(2))
+                    .andExpect(jsonPath("$.pagination.has_next").value(true));
+            list(filter + "&page=1&limit=1").andExpect(status().isOk())
+                    .andExpect(jsonPath("$.orders[0].order_id").value(ai.getId()))
+                    .andExpect(jsonPath("$.pagination.total_elements").value(2))
+                    .andExpect(jsonPath("$.pagination.has_next").value(false));
+            list(filter + "&page=2&limit=1").andExpect(status().isOk())
+                    .andExpect(jsonPath("$.orders").isEmpty())
+                    .andExpect(jsonPath("$.pagination.total_elements").value(2));
+        }
     }
 
     @Test void mapsStockInfoFailureTo503() throws Exception {

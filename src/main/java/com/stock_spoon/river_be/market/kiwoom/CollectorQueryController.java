@@ -9,15 +9,13 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 @RestController
-@ConditionalOnProperty(name = "kiwoom.collector.enabled", havingValue = "true")
+@ConditionalOnProperty(name = {"kiwoom.legacy.enabled", "kiwoom.collector.enabled"}, havingValue = "true")
 public class CollectorQueryController {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CollectorQueryController.class);
-    private final KiwoomRestTransport transport;
     private final RedisCollectorHeartbeat heartbeat;
     private final KiwoomMarketClient market;
 
     public CollectorQueryController(KiwoomRestTransport transport, RedisCollectorHeartbeat heartbeat, KiwoomMarketClient market) {
-        this.transport = transport;
         this.heartbeat = heartbeat;
         this.market = market;
     }
@@ -44,18 +42,20 @@ public class CollectorQueryController {
 
     @PostMapping("/internal/kiwoom/query")
     public Map<String, Object> query(@RequestBody CollectorQuery request) {
-        String path;
-        Map<String, String> body;
         try {
-            path = request.path();
-            body = request.body();
+            request.body();
         } catch (IllegalArgumentException error) {
             log.warn("event=collector_request_rejected stage=query_request_validation causeType={}", error.getClass().getSimpleName());
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "조회 요청을 확인하세요.");
         }
         try {
             if (!heartbeat.ownsLease() || !heartbeat.ownerId().equals(request.collectorId())) throw new IllegalStateException();
-            var response = transport.query(request.apiId(), path, body);
+            var response = "ka10100".equals(request.apiId())
+                    ? market.stockInfoResponse(request.stockCode())
+                    : Map.<String, Object>of("return_code", 0, "stk_cd", request.stockCode(),
+                            "stk_dt_pole_chart_qry", java.util.List.of(Map.of("dt", request.baseDate(),
+                            "cur_prc", market.closingPrice(request.stockCode(), java.time.LocalDate.parse(
+                                    request.baseDate(), java.time.format.DateTimeFormatter.BASIC_ISO_DATE)))));
             if (!heartbeat.ownsLease()) throw new IllegalStateException();
             return response;
         } catch (RuntimeException error) {

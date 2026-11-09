@@ -1,5 +1,8 @@
 package com.stock_spoon.river_be.stock.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+
 import com.stock_spoon.river_be.market.kiwoom.KiwoomMarketClient;
 import com.stock_spoon.river_be.stock.dto.StockNameResponse;
 import java.util.Map;
@@ -9,6 +12,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+@Tag(name = "종목")
 @RestController
 @RequestMapping("/api/v2/stocks")
 public class StockController {
@@ -20,7 +24,12 @@ public class StockController {
     }
 
     @GetMapping("/{stockCode}")
-    public StockNameResponse get(@PathVariable String stockCode) {
+    @Operation(summary = "종목명 조회", responses = {
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "종목코드와 종목명 반환", useReturnTypeSchema = true),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "INVALID_STOCK_CODE: 잘못된 종목코드"),
+        @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503", description = "STOCK_INFO_UNAVAILABLE: 시세 정보 조회 불가")
+    })
+    public StockNameResponse get(@io.swagger.v3.oas.annotations.Parameter(description = "6자리 종목코드", example = "005930") @PathVariable String stockCode) {
         if (!stockCode.matches("[0-9A-Z]{6}")) {
             log.warn("event=stock_code_rejected stage=stock_code_validation code=INVALID_STOCK_CODE");
             throw new IllegalArgumentException("종목코드를 확인해주세요.");

@@ -113,4 +113,9 @@ public class Account {
     public void rename(String name) {
         this.name = name;
     }
+
+    // [계좌 비활성화 추가] 소유자·현금·운용 유형·보유/투자 기록을 유지한 채 목록과 거래 대상에서 제외한다.
+    public void deactivate() {
+        this.active = false;
+    }
 }

@@ -14,6 +14,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 
 @Configuration
+@org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "kiwoom.legacy.enabled", havingValue = "true")
 public class CollectorSecurityConfig {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CollectorSecurityConfig.class);
     public static final String SECRET_HEADER = "X-Kiwoom-Collector-Key";

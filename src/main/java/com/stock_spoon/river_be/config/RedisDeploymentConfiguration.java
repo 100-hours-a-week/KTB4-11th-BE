@@ -23,6 +23,7 @@ public class RedisDeploymentConfiguration {
     private static final org.slf4j.Logger log =
             org.slf4j.LoggerFactory.getLogger(RedisDeploymentConfiguration.class);
     @Bean
+    @Primary
     LettuceConnectionFactory redisConnectionFactory(DataRedisProperties properties, ClientResources resources,
             ObjectProvider<ElastiCacheIamCredentials> credentials, @Value("${REDIS_CLUSTER_MODE:false}") boolean cluster) {
         var iam = credentials.getIfAvailable();

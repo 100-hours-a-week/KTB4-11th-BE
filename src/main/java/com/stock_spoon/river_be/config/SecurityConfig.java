@@ -7,6 +7,7 @@ import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -68,6 +69,7 @@ public class SecurityConfig {
             BearerTokenResolver accessTokenResolver,
             @Qualifier("accessJwtDecoder") JwtDecoder accessJwtDecoder,
             JwtUserExistenceVerifier jwtUserExistenceVerifier,
+            ObjectProvider<UserRateLimitService> userRateLimitService,
             @Value("${AUTH_CSRF_DISABLED:false}") boolean csrfDisabled,
             @Value("${AUTH_COOKIE_SAME_SITE:Lax}") String cookieSameSite) throws Exception {
         var csrf = new CookieCsrfTokenRepository();
@@ -145,6 +147,11 @@ public class SecurityConfig {
                         }));
         http.addFilterAfter(new JwtUserExistenceAuthenticationFilter(jwtUserExistenceVerifier),
                 org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter.class);
+        var rateLimitService = userRateLimitService.getIfAvailable();
+        if (rateLimitService != null) {
+            http.addFilterBefore(new UserRateLimitAuthenticationFilter(rateLimitService),
+                    JwtUserExistenceAuthenticationFilter.class);
+        }
         var chain = http.build();
         if (!csrfDisabled) {
             // Resource Server의 자동 CSRF 예외를 해제한다. JWT도 쿠키로 전달하므로 검증이 필요하다.

@@ -111,7 +111,8 @@ class UserRateLimitConfiguration {
             @Qualifier("rateLimitRedisConnectionFactory") RedisConnectionFactory connectionFactory,
             MeterRegistry meterRegistry,
             @Value("${security.user-rate-limit.max-requests:0}") int maxRequests,
-            @Value("${security.user-rate-limit.window:60s}") Duration window) {
+            @Value("${security.user-rate-limit.window:60s}") Duration window,
+            @Value("${security.user-rate-limit.mode:observe}") String mode) {
         if (maxRequests < 1) {
             throw new IllegalStateException("RATE_LIMIT_ENABLED=true이면 RATE_LIMIT_MAX_REQUESTS를 양수로 설정해야 합니다.");
         }
@@ -120,6 +121,7 @@ class UserRateLimitConfiguration {
         }
         var template = new StringRedisTemplate(connectionFactory);
         template.afterPropertiesSet();
-        return new UserRateLimitService(template, maxRequests, window, meterRegistry);
+        return new UserRateLimitService(template, maxRequests, window, UserRateLimitService.Mode.from(mode),
+                meterRegistry);
     }
 }

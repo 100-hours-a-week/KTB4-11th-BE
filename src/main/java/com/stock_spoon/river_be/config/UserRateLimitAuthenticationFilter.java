@@ -66,7 +66,15 @@ final class UserRateLimitAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
+        if (decision.observeOnly()) {
+            response.setHeader("X-RateLimit-Decision", "would-limit");
+            response.setHeader("Retry-After", Long.toString(decision.retryAfterSeconds()));
+            chain.doFilter(request, response);
+            return;
+        }
+
         response.setStatus(429);
+        response.setHeader("X-RateLimit-Decision", "blocked");
         response.setHeader("Retry-After", Long.toString(decision.retryAfterSeconds()));
         response.setContentType("application/json;charset=UTF-8");
         response.getWriter().write(

@@ -24,17 +24,32 @@ final class UserRateLimitAuthenticationFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return request.getDispatcherType() != DispatcherType.REQUEST
-                || "OPTIONS".equalsIgnoreCase(request.getMethod())
-                || !request.getServletPath().startsWith("/api/");
+        if (request.getDispatcherType() != DispatcherType.REQUEST) {
+            RequestLoggingFilter.recordRateLimitSkipped(request, "non_request_dispatch");
+            return true;
+        }
+        if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+            RequestLoggingFilter.recordRateLimitSkipped(request, "preflight_options");
+            return true;
+        }
+        if (!request.getServletPath().startsWith("/api/")) {
+            RequestLoggingFilter.recordRateLimitSkipped(request, "outside_api");
+            return true;
+        }
+        return false;
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
             FilterChain chain) throws ServletException, IOException {
         var authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (!(authentication instanceof JwtAuthenticationToken jwtAuthentication)
-                || !"USER".equals(jwtAuthentication.getToken().getClaimAsString("actor"))) {
+        if (!(authentication instanceof JwtAuthenticationToken jwtAuthentication)) {
+            RequestLoggingFilter.recordRateLimitSkipped(request, "missing_jwt_authentication");
+            chain.doFilter(request, response);
+            return;
+        }
+        if (!"USER".equals(jwtAuthentication.getToken().getClaimAsString("actor"))) {
+            RequestLoggingFilter.recordRateLimitSkipped(request, "non_user_actor");
             chain.doFilter(request, response);
             return;
         }
@@ -43,10 +58,12 @@ final class UserRateLimitAuthenticationFilter extends OncePerRequestFilter {
         try {
             userId = Long.parseLong(jwtAuthentication.getToken().getSubject());
             if (userId <= 0) {
+                RequestLoggingFilter.recordRateLimitSkipped(request, "invalid_subject");
                 chain.doFilter(request, response);
                 return;
             }
         } catch (RuntimeException invalidSubject) {
+            RequestLoggingFilter.recordRateLimitSkipped(request, "invalid_subject");
             chain.doFilter(request, response);
             return;
         }

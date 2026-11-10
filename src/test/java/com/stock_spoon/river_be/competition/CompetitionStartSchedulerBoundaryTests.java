@@ -19,7 +19,6 @@ class CompetitionStartSchedulerBoundaryTests {
         var before = ZonedDateTime.parse("2026-11-13T15:29:59+09:00[Asia/Seoul]");
         var c = new Competition(new User("경계 검사"), "장 마감", Competition.Type.AI_VS_AI,
                 before.toLocalDate().minusDays(3), before.toLocalDate().plusDays(2), 3_000_000, 2);
-        c.markAiSetupCompleted(before.minusMinutes(1).toInstant());
         var hours = spy(new CompetitionTradingHours());
         doReturn(before, ZonedDateTime.parse(afterWait)).when(hours).now();
         var competitions = mock(CompetitionRepository.class);

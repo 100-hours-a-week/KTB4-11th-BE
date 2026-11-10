@@ -107,7 +107,7 @@ AI 간 대결이면 Service가 저장한 Competition과 요청의 agents를 내�
 | 409 | ONBOARDING_REQUIRED / DUPLICATE_ACCOUNT_NAME | 온보딩 미완료 / 기존 본인 계좌·대결명 중복 |
 | 401/403 | 기존 보안 오류 | 미인증 / CSRF 실패 |
 
-생성 시 AI 간 대결은 장중에도 READY를 유지한다. AI 서버의 전체 설정 완료 통지를 받은 뒤 장중 스케줄러에서 시작한다. 준비 전에는 Entity.start도 거절한다. 완료 API와 배포 순서는 [AI 대결 시작 계약](competition-ai-start.md)을 따른다.
+생성 시 AI 간 대결은 장중에도 READY를 유지한다. 전략 전송 Outbox가 SENT이면 장중 스케줄러에서 시작한다. 시작 조건과 배포 순서는 [AI 대결 시작 계약](competition-ai-start.md)을 따른다.
 
 상세의 참가자별 자산·수익률·그래프, 다수 AI 일별 성과·정산·결과·취소는 [운용 확장 계약](competition-ai-operation.md)을 참고한다. 생성 요청과 성공 응답은 그대로다. 결과는 완료 전 기존 409 `COMPETITION_NOT_COMPLETED`를 반환한다. 다수 AI 리포트 계약은 후속 범위다.
 

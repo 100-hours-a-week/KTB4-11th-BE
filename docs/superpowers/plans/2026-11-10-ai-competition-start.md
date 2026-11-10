@@ -1,5 +1,7 @@
 # AI competition start Implementation Plan
 
+> 이력 문서: 이 콜백 방식은 SENT 시작 정책으로 대체됐다. 현재 구현·배포 기준은 [SENT 변경 계획](2026-11-10-ai-start-on-sent.md)과 [시작 계약](../../competition-ai-start.md)을 따른다.
+
 > **For agentic workers:** Use superpowers:executing-plans in this session.
 
 **Goal:** 모든 AI의 준비 완료 통지를 받은 대결을 장중에 자동 시작한다.

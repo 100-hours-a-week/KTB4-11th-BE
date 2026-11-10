@@ -116,20 +116,6 @@ public class SecurityConfig {
                                     && "ai-server".equals(token.getToken().getSubject());
                             return new AuthorizationDecision(allowed);
                         })
-                        .requestMatchers(HttpMethod.POST, "/api/v1/competitions/{competitionId}/ai-setup/complete")
-                        .access((authentication, context) -> {
-                            var current = authentication.get();
-                            boolean allowed = false;
-                            if (current instanceof JwtAuthenticationToken token
-                                    && "AI".equals(token.getToken().getClaimAsString("actor"))) {
-                                try {
-                                    allowed = Long.parseLong(token.getToken().getSubject()) > 0;
-                                } catch (NumberFormatException ignored) {
-                                    // 사용자 ID가 없는 전역 AI 토큰은 대결 소유권 확인에 사용할 수 없다.
-                                }
-                            }
-                            return new AuthorizationDecision(allowed);
-                        })
                         // 리포트 저장은 사용자 ID를 subject로 가진 AI 서버 토큰만 허용한다.
                         .requestMatchers(HttpMethod.POST, "/api/v1/competitions/{competitionId}/report")
                         .access((authentication, context) -> {

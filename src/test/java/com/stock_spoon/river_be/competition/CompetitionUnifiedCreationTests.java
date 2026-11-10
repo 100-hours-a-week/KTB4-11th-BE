@@ -80,7 +80,6 @@ class CompetitionUnifiedCreationTests {
                 assertThat(account.getInitialCapital()).isEqualTo(3_000_000);
                 assertThat(account.getCashBalance()).isEqualTo(3_000_000);
             }
-            assertThatThrownBy(() -> c.start(now.toInstant())).isInstanceOf(IllegalStateException.class);
             new CompetitionStartScheduler(competitions, hours).startWaitingCompetitions();
             assertThat(c.getState()).isEqualTo(Competition.State.READY);
         });

@@ -84,7 +84,7 @@ class CompetitionAiOperationTests {
             assertThat(engine.executeLimit(p.getAccount().getId(), order.getId(), 100_000)).isFalse();
         });
     }
-    @Test void readyAiAccountsCannotTradeOrStartAutomatically() {
+    @Test void readyAiAccountsWithoutSentCannotTradeOrStartAutomatically() {
         var f = fixture(2, false);
         var p = f.links().getFirst();
         var order = pending(p, 1);
@@ -92,7 +92,6 @@ class CompetitionAiOperationTests {
                 Clock.fixed(at("2026-10-12T10:00:00+09:00"), ZoneOffset.UTC));
         new TransactionTemplate(transactions).executeWithoutResult(status ->
                 assertThat(engine.executeLimit(p.getAccount().getId(), order.getId(), 100_000)).isFalse());
-        assertThatThrownBy(() -> f.competition().start(Instant.now())).isInstanceOf(IllegalStateException.class);
         new TransactionTemplate(transactions).executeWithoutResult(status ->
                 assertThat(competitions.findWaitingToStart(monday)).extracting(Competition::getId).doesNotContain(f.competition().getId()));
         assertThat(accounts.findById(p.getAccount().getId()).orElseThrow().getCashBalance()).isEqualTo(1_000_000);

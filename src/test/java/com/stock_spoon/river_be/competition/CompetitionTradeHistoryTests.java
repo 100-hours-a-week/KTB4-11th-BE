@@ -23,6 +23,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -305,6 +306,43 @@ class CompetitionTradeHistoryTests {
         get(reportPath(ordinary, ordinaryOrder.getId()), stranger, 403);
         // 대결 전용 매매 내역 URI는 일반 계좌에 열지 않는다.
         get(path(ordinary), owner, 404);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {2, 3, 4})
+    void exposesEachAiTradeHistoryAndReportWhileRunning(int count) throws Exception {
+        var duel = competitions.save(new Competition(owner, "AI 간 대결", Competition.Type.AI_VS_AI,
+                LocalDate.of(2026, 10, 12), LocalDate.of(2026, 10, 16), 10_000_000, count));
+        ReflectionTestUtils.setField(duel, "state", Competition.State.IN_PROGRESS);
+        competitions.save(duel);
+        var stranger = users.save(new User("대결 외 사용자"));
+        for (int i = 0; i < count; i++) {
+            var account = accounts.save(new Account(owner, "에이전트 " + i, 10_000_000, true));
+            participants.save(new CompetitionParticipant(duel, account));
+            var trade = order(account, Order.Side.BUY, true);
+            executions.save(new Execution(trade, 100, 10, null, null, TIME));
+            var history = get(path(account) + "?limit=1", owner, 200);
+            assertThat((List<?>) JsonPath.read(history, "$.executions")).hasSize(1);
+            assertThat(((Number) JsonPath.read(history, "$.executions[0].order_id")).longValue()).isEqualTo(trade.getId());
+            get("/api/v1/accounts/" + account.getId() + "/orders", owner, 200);
+            var report = get(reportPath(account, trade.getId()), owner, 200);
+            assertThat((String) JsonPath.read(report, "$.reason")).isEqualTo("실적 개선");
+            get(path(account), stranger, 404);
+            get("/api/v1/accounts/" + account.getId() + "/orders", stranger, 404);
+            for (var state : List.of(Competition.State.READY, Competition.State.CANCELLED)) {
+                ReflectionTestUtils.setField(duel, "state", state);
+                competitions.save(duel);
+                get(path(account), owner, 403);
+                get(reportPath(account, trade.getId()), owner, 403);
+                get("/api/v1/accounts/" + account.getId() + "/orders", owner, 403);
+            }
+            ReflectionTestUtils.setField(duel, "state", Competition.State.COMPLETED);
+            competitions.save(duel);
+            get(path(account), owner, 200);
+            get(reportPath(account, trade.getId()), owner, 200);
+            ReflectionTestUtils.setField(duel, "state", Competition.State.IN_PROGRESS);
+            competitions.save(duel);
+        }
     }
 
     private Order order(Account account, Order.Side side, boolean executed) {

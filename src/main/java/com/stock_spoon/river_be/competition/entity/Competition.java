@@ -83,6 +83,17 @@ public class Competition {
     @Column(name = "started_at")
     private Instant startedAt;
 
+    // SQS 발송 성공과 구분하여 모든 AI의 설정 완료 통지를 받은 시각을 저장한다.
+    @Column(name = "ai_setup_completed_at")
+    private Instant aiSetupCompletedAt;
+
+    public void markAiSetupCompleted(Instant completedAt) {
+        if (competitionType != Type.AI_VS_AI || state != State.READY) {
+            throw new IllegalStateException("시작 대기 중인 AI 간 대결만 준비 완료할 수 있습니다.");
+        }
+        if (aiSetupCompletedAt == null) aiSetupCompletedAt = java.util.Objects.requireNonNull(completedAt);
+    }
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -104,8 +115,7 @@ public class Competition {
     }
 
     public void start(Instant startedAt) {
-        // shortcut: 다수 AI 운용·정산 연동 전에는 생성·설정만 제공한다. 운용 지원 시 이 제한을 확장한다.
-        if (state != State.READY || competitionType == Type.AI_VS_AI) {
+        if (state != State.READY || (competitionType == Type.AI_VS_AI && aiSetupCompletedAt == null)) {
             log.warn("event=competition_transition_rejected stage=start_state_validation competitionId={} state={} code=COMPETITION_NOT_READY", id, state);
             throw new IllegalStateException("시작 대기 중인 대결만 시작할 수 있습니다.");
         }

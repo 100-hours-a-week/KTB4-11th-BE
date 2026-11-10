@@ -21,7 +21,11 @@ public class CompetitionStartScheduler {
         if (!tradingHours.isOpen(now)) return;
         // 종료일은 연장하지 않는다. 대기 중 종료일을 넘긴 건은 이 시작 처리에서 제외한다.
         for (var competition : competitions.findWaitingToStart(now.toLocalDate())) {
-            competition.start(now.toInstant());
+            // DB 잠금을 기다리는 사이 장이 닫히거나 날짜가 바뀔 수 있다.
+            var startTime = tradingHours.now();
+            if (!tradingHours.isOpen(startTime) || startTime.toLocalDate().isBefore(competition.getStartDate())
+                    || !startTime.toInstant().isBefore(competition.tradingEndsAt())) continue;
+            competition.start(startTime.toInstant());
         }
         // 조회한 엔티티는 JPA가 관리하므로 변경 내용을 트랜잭션 종료 시 자동 저장한다.
     }

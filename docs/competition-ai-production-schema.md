@@ -10,6 +10,7 @@
 | competition_agents (신규) | agent_id PK, participant_id UNIQUE/FK, agent_position, risk_level, additional_request | 기존 참가자에 설정을 소급 생성하지 않음 |
 | competition_agent_preferred_themes (신규) | agent_id FK, theme_position, theme | 관심 테마 순서 저장 |
 | competition_agent_excluded_themes (신규) | agent_id FK, theme_position, theme | 제외 테마 순서 저장 |
+| competitions.ai_setup_completed_at (후속 시작 기능) | nullable DATETIME(6), 전체 AI 준비 완료 수신 시각 | 기존 대결은 NULL 유지. [별도 SQL](../db/competition-ai-setup-completion.sql)을 BE 배포 전 수동 적용 |
 
 `risk_level`은 1=안정형, 2=안정추구형, 3=위험중립형, 4=성장추구형, 5=성장형이다. DB에도 1~5 CHECK를 둔다. 테마는 VARCHAR(255), 추가 요청은 LONGTEXT다. API는 추가 요청을 4000자로 제한한다.
 

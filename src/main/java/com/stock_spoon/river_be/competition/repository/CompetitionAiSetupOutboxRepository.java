@@ -7,6 +7,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 // 대기 요청의 저장과 기본 조회는 Spring Data JPA가 구현한다.
 public interface CompetitionAiSetupOutboxRepository extends JpaRepository<CompetitionAiSetupOutbox, Long> {
+    java.util.Optional<CompetitionAiSetupOutbox> findByCompetitionIdAndEventId(Long competitionId, String eventId);
+
     @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
     @org.springframework.data.jpa.repository.Query("select o from CompetitionAiSetupOutbox o where o.id = :id")
     java.util.Optional<CompetitionAiSetupOutbox> findLockedById(Long id);

@@ -72,17 +72,10 @@ public class OrderExecutionService {
                 && local.toLocalDate().equals(now.atZone(SEOUL).toLocalDate());
     }
 
-    /** AI 시세는 전체 거래소시각과 5초 신선도를 추가 검증한다. 기존 직접 수신 정책은 유지한다. */
+    /** 시세의 유효 시간은 백엔드의 실시간 수신 시각을 기준으로 판단한다. */
     public boolean isUsablePrice(com.stock_spoon.river_be.market.StockPrice price) {
-        if (price == null || price.tradeTime() == null || !isCurrentSession(price.receivedAt())) return false;
-        if (price.exchangeTimestamp() != null && (!isCurrentSession(price.exchangeTimestamp())
-                || !price.exchangeTimestamp().atZone(SEOUL).toLocalTime().equals(price.tradeTime())
-                || price.exchangeTimestamp().isBefore(clock.instant().minusSeconds(5))
-                || price.receivedAt().isBefore(clock.instant().minusSeconds(5)))) return false;
-        var received = price.receivedAt().atZone(SEOUL);
-        var traded = received.toLocalDate().atTime(price.tradeTime()).atZone(SEOUL);
-        return inTradingHours(traded) && !traded.toInstant().isAfter(price.receivedAt().plusSeconds(1))
-                && !traded.toInstant().isAfter(clock.instant().plusSeconds(1));
+        return price != null && isCurrentSession(price.receivedAt())
+                && !price.receivedAt().isBefore(clock.instant().minusSeconds(5));
     }
 
     @Transactional

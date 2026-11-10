@@ -5,7 +5,6 @@ import com.stock_spoon.river_be.market.QuoteLevel;
 import com.stock_spoon.river_be.order.entity.Order;
 import com.stock_spoon.river_be.order.exception.OrderException;
 import java.time.Instant;
-import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -60,17 +59,9 @@ public class MarketOrderPricingService {
 
     public static void validateBook(String code, OrderBook book, Instant now) {
         if (book == null || !code.equals(book.stockCode()) || book.receivedAt() == null
-                || book.quoteTime() == null || book.receivedAt().isAfter(now)
+                || book.receivedAt().isAfter(now)
                 || book.receivedAt().isBefore(now.minusSeconds(5))) {
             log.warn("event=market_order_pricing_failed stage=book_validation stockCode={} code=BOOK_IDENTITY_OR_RECEIVED_TIME_INVALID", code);
-            throw unavailable();
-        }
-        var local = now.atZone(ZoneId.of("Asia/Seoul"));
-        var quotedAt = local.toLocalDate().atTime(book.quoteTime()).atZone(local.getZone()).toInstant();
-        if ((book.exchangeTimestamp() != null && !book.exchangeTimestamp().equals(quotedAt))
-                || !book.receivedAt().atZone(local.getZone()).toLocalDate().equals(local.toLocalDate())
-                || quotedAt.isBefore(now.minusSeconds(5)) || quotedAt.isAfter(now.plusSeconds(1))) {
-            log.warn("event=market_order_pricing_failed stage=exchange_time_validation stockCode={} code=BOOK_EXCHANGE_TIME_INVALID", code);
             throw unavailable();
         }
     }

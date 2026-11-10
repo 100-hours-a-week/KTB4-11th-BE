@@ -1,6 +1,6 @@
 # 대결 종료 후 AI 리포트 요청 기록
 
-사용자 vs AI와 AI 간 대결 모두 **AI 참가자당 요청 1건**을 생성한다. 참가자별 저장·조회도 확장했으며 [저장·조회 문서](competition-participant-reports.md)를 따른다. 현재 `Competition.start()`의 AI 간 대결 자동 시작 제한은 변경하지 않았다. 실제 연동은 AI 서버의 participant_id 추가·FE의 reports 배열 대응 및 운영 DB 이관 후 활성화한다.
+사용자 vs AI와 AI 간 대결 모두 **AI 참가자당 요청 1건**을 생성한다. 참가자별 저장·조회도 확장했으며 [저장·조회 문서](competition-participant-reports.md)를 따른다. AI 대결은 [준비 완료·시작 계약](competition-ai-start.md)을 충족한 뒤 장중에 시작한다. 리포트 실제 연동은 AI 서버의 participant_id 추가·FE의 reports 배열 대응 및 운영 DB 이관 후 활성화한다.
 
 ## 대결 종료와 Outbox 저장
 

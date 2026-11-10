@@ -29,6 +29,8 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
     private static final Logger log = LoggerFactory.getLogger(RequestLoggingFilter.class);
     private static final String REQUEST_ID_ATTRIBUTE = RequestLoggingFilter.class.getName() + ".requestId";
     private static final String STARTED_ATTRIBUTE = RequestLoggingFilter.class.getName() + ".startedNanos";
+    private static final String RATE_LIMIT_OBSERVATION_ATTRIBUTE =
+            RequestLoggingFilter.class.getName() + ".rateLimitObservation";
     static final String EXCEPTION_ATTRIBUTE = RequestLoggingFilter.class.getName() + ".exceptionType";
     static final String EXCEPTION_CAUSE_ATTRIBUTE = RequestLoggingFilter.class.getName() + ".exceptionCauseType";
     private static final String ERROR_DISPATCH_ATTRIBUTE = RequestLoggingFilter.class.getName() + ".errorDispatchSeen";
@@ -37,6 +39,12 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
     static String requestId(HttpServletRequest request) {
         Object value = request.getAttribute(REQUEST_ID_ATTRIBUTE);
         return value instanceof String requestId ? requestId : "missing";
+    }
+
+    static void recordRateLimitObservation(HttpServletRequest request, String decision,
+            Long count, Integer limit, Long windowMillis) {
+        request.setAttribute(RATE_LIMIT_OBSERVATION_ATTRIBUTE,
+                new RateLimitObservation(decision, count, limit, windowMillis));
     }
 
     static void recordException(HttpServletRequest request, Throwable error) {
@@ -145,11 +153,21 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
         String exceptionType = exception == null ? "none" : exception.toString();
         Object cause = request.getAttribute(EXCEPTION_CAUSE_ATTRIBUTE);
         String causeType = cause == null ? "none" : cause.toString();
+        Object observationValue = request.getAttribute(RATE_LIMIT_OBSERVATION_ATTRIBUTE);
+        RateLimitObservation observation = observationValue instanceof RateLimitObservation value ? value : null;
+        String rateLimitDecision = observation == null ? "not_evaluated" : observation.decision();
+        Object rateLimitCount = observation == null || observation.count() == null ? "na" : observation.count();
+        Object rateLimitLimit = observation == null || observation.limit() == null ? "na" : observation.limit();
+        Object rateLimitWindowMillis = observation == null || observation.windowMillis() == null
+                ? "na" : observation.windowMillis();
         var level = status >= 500 ? log.atError() : status >= 400 ? log.atWarn() : log.atInfo();
-        level.log("event=http_response_audit requestId={} dispatcherType={} method={} route={} status={} exceptionType={} exceptionCauseType={} elapsedMs={}",
+        level.log("event=http_response_audit requestId={} dispatcherType={} method={} route={} status={} exceptionType={} exceptionCauseType={} elapsedMs={} userRateLimitDecision={} userRateLimitCount={} userRateLimitLimit={} userRateLimitWindowMs={}",
                 requestId, dispatcher, request.getMethod(), pattern, status, exceptionType, causeType,
-                (System.nanoTime() - started) / 1_000_000);
+                (System.nanoTime() - started) / 1_000_000, rateLimitDecision, rateLimitCount,
+                rateLimitLimit, rateLimitWindowMillis);
     }
+
+    private record RateLimitObservation(String decision, Long count, Integer limit, Long windowMillis) {}
 
     private static void logSqlExceptionIfPresent(HttpServletRequest request, Throwable error) {
         SQLException fallbackError =

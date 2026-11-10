@@ -31,7 +31,7 @@
 
 이관 후에는 participant_id를 쓰지 않는 구버전 앱이 동작하지 않으므로 구·신버전 동시 쓰기를 허용하지 않는다. 앱 롤백은 추가 컬럼을 남기는 것만으로 충분하지 않다. 다중 AI 행이 생성된 뒤에는 기존 대결 단독 UNIQUE도 그대로 복원할 수 없으므로 별도 롤백 계획이 필요하다. 기존 완료 AI 대결에 요청을 소급 생성하지는 않는다.
 
-SQS 본문은 competition_id, participant_id, portfolio_reason_ids 세 필드이며 user_id를 제거했다. AI 서버와 이 계약을 맞춘다. 참가자별 저장·조회도 확장했으며 다음 절차까지 적용한 뒤 다중 AI 리포트 콜백을 연동한다. AI 대결 시작은 별도의 [준비 완료·시작 계약](competition-ai-start.md)을 따른다.
+SQS 본문은 competition_id, participant_id, portfolio_reason_ids 세 필드이며 user_id를 제거했다. AI 서버와 이 계약을 맞춘다. 참가자별 저장·조회도 확장했으며 다음 절차까지 적용한 뒤 다중 AI 리포트 콜백을 연동한다. AI 대결 시작은 별도의 [전송 성공·시작 계약](competition-ai-start.md)을 따른다.
 
 ### AI 참가자별 리포트 저장·조회 이관
 

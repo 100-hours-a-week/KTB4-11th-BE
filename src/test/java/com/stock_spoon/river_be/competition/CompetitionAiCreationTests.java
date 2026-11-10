@@ -49,7 +49,6 @@ class CompetitionAiCreationTests {
         new org.springframework.transaction.support.TransactionTemplate(transactions).executeWithoutResult(s ->
                 new CompetitionStartScheduler(competitions, hours).startWaitingCompetitions());
         assertThat(competitions.findById(competition.getId()).orElseThrow().getState()).isEqualTo(Competition.State.READY);
-        assertThatThrownBy(() -> competition.start(now.toInstant())).isInstanceOf(IllegalStateException.class);
     }
 
     @ParameterizedTest @ValueSource(ints = {0, 1, 5})

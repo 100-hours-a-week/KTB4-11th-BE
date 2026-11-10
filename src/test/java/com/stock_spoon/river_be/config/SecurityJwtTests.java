@@ -230,38 +230,6 @@ class SecurityJwtTests {
     }
 
     @Test
-    void aiSetupCompletionRequiresUserScopedAiCookieAndCsrf() throws Exception {
-        String path = "/api/v1/competitions/9223372036854775807/ai-setup/complete";
-        String body = "{\"event_id\":\"a5af5f21-9bde-4d03-895d-dfe7d8340211\"}";
-        for (String actor : new String[]{"USER", ""}) {
-            mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
-                            .with(csrf()).cookie(new Cookie("access_token", aiToken("1", "access", actor)))
-                            .contentType("application/json").content(body))
-                    .andExpect(status().isForbidden());
-        }
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
-                        .with(csrf()).cookie(new Cookie("access_token", aiToken("ai-server", "access", "AI")))
-                        .contentType("application/json").content(body))
-                .andExpect(status().isForbidden());
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
-                        .with(csrf()).cookie(new Cookie("access_token", aiToken("1", "access", "AI")))
-                        .contentType("application/json").content(body))
-                .andExpect(status().isNotFound());
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
-                        .cookie(new Cookie("access_token", aiToken("1", "access", "AI")))
-                        .contentType("application/json").content(body))
-                .andExpect(status().isForbidden());
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
-                        .with(csrf()).cookie(new Cookie("access_token", aiToken("1", "refresh", "AI")))
-                        .contentType("application/json").content(body))
-                .andExpect(status().isUnauthorized());
-        mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(path)
-                        .with(csrf()).header("Authorization", "Bearer " + aiToken("1", "access", "AI"))
-                        .contentType("application/json").content(body))
-                .andExpect(status().isUnauthorized());
-    }
-
-    @Test
     void aiServerCanSaveACompetitionReportAndInvalidBodiesAreRejected() throws Exception {
         var owner = users.save(new com.stock_spoon.river_be.user.entity.User("리포트 저장 사용자"));
         var competitions = context.getBean(com.stock_spoon.river_be.competition.repository.CompetitionRepository.class);

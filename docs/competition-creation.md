@@ -70,7 +70,7 @@ AI 계좌: 내부 이름 사용 / 자금 10,000,000원
 ```
 
 - JWT의 `sub`에서 사용자 ID를 읽는다. 온보딩 완료 사용자만 생성할 수 있다.
-- `user_vs_ai`는 `ai_participant_count = 1`이며 `agents` 생략/null을 허용한다. `ai_vs_ai`는 AI 2~4명과 같은 개수의 `agents`를 생성 요청에 함께 전달한다. AI 간 대결은 READY로 생성하며, 전체 준비 완료 통지 이후 장중에 시작한다. [시작 계약](competition-ai-start.md)을 따른다.
+- `user_vs_ai`는 `ai_participant_count = 1`이며 `agents` 생략/null을 허용한다. `ai_vs_ai`는 AI 2~4명과 같은 개수의 `agents`를 생성 요청에 함께 전달한다. AI 간 대결은 READY로 생성하며, 전략 전송 Outbox가 SENT이면 장중에 시작한다. [시작 계약](competition-ai-start.md)을 따른다.
 - 시작일은 한국 시간 기준 오늘, 종료일과의 날짜 차이는 최소 3일이다.
 - 대결명은 앞뒤 공백을 제거한 뒤 20자 이하이며, 같은 사용자의 일반·대결 계좌명과 중복될 수 없다.
 - AI 계좌명은 `AI-{대결 ID의 36진수}`이며 충돌 시 접미사를 붙인다.

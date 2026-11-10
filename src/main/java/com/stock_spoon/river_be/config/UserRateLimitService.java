@@ -64,7 +64,7 @@ public final class UserRateLimitService {
                 exceededRequests.increment();
                 if (mode == Mode.BLOCK) blockedRequests.increment();
             }
-            return new Decision(allowed, mode == Mode.OBSERVE, retryAfterSeconds);
+            return new Decision(allowed, mode == Mode.OBSERVE, retryAfterSeconds, count, maxRequests, windowMillis);
         } catch (RuntimeException error) {
             redisErrors.increment();
             throw error;
@@ -90,5 +90,6 @@ public final class UserRateLimitService {
         }
     }
 
-    record Decision(boolean allowed, boolean observeOnly, long retryAfterSeconds) {}
+    record Decision(boolean allowed, boolean observeOnly, long retryAfterSeconds,
+            long requestCount, int maxRequests, long windowMillis) {}
 }

@@ -55,11 +55,17 @@ final class UserRateLimitAuthenticationFilter extends OncePerRequestFilter {
         try {
             decision = rateLimitService.check(userId);
         } catch (RuntimeException unavailable) {
+            RequestLoggingFilter.recordRateLimitObservation(request, "redis_error_fail_open", null, null, null);
             log.error("event=user_rate_limit_unavailable requestId={} failOpen=true causeType={}",
                     RequestLoggingFilter.requestId(request), unavailable.getClass().getSimpleName());
             chain.doFilter(request, response);
             return;
         }
+
+        String outcome = decision.allowed() ? "within_limit"
+                : decision.observeOnly() ? "would_limit" : "blocked";
+        RequestLoggingFilter.recordRateLimitObservation(request, outcome, decision.requestCount(),
+                decision.maxRequests(), decision.windowMillis());
 
         if (decision.allowed()) {
             chain.doFilter(request, response);

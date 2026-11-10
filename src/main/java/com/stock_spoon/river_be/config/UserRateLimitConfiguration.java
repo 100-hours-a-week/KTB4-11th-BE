@@ -12,13 +12,16 @@ import java.time.Duration;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.data.redis.health.DataRedisReactiveHealthIndicator;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.health.contributor.ReactiveHealthContributor;
 import org.springframework.boot.data.redis.autoconfigure.DataRedisProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisClusterConfiguration;
 import org.springframework.data.redis.connection.RedisConfiguration;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.connection.ReactiveRedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
@@ -34,6 +37,17 @@ import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 class UserRateLimitConfiguration {
     private static final org.slf4j.Logger log =
             org.slf4j.LoggerFactory.getLogger(UserRateLimitConfiguration.class);
+
+    /**
+     * Keep Actuator's Redis health check on the primary application connection.
+     * The rate-limit connection uses a least-privilege Valkey ACL that intentionally
+     * does not allow the CLUSTER INFO command used by Spring Boot's default check.
+     */
+    @Bean(name = "redisHealthContributor")
+    ReactiveHealthContributor redisHealthContributor(
+            @Qualifier("redisConnectionFactory") ReactiveRedisConnectionFactory connectionFactory) {
+        return new DataRedisReactiveHealthIndicator(connectionFactory);
+    }
 
     @Bean(name = "rateLimitRedisConnectionFactory")
     LettuceConnectionFactory rateLimitRedisConnectionFactory(

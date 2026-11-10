@@ -28,6 +28,36 @@ class AiQuoteAdapterTests {
         return new AiQuoteAdapter(redis, channels, events, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
+    @Test void liveMessagesIgnoreMissingAndInvalidSourceTimestamps() {
+        var adapter = adapter();
+        adapter.updateSymbols(Set.of("005930"));
+        adapter.onChannelSubscribed(bytes("price:005930"), 1);
+        adapter.onChannelSubscribed(bytes("orderbook:005930"), 2);
+        String price = PRICE.replace("\"timestamp\":\"2026-10-16T10:00:01+09:00\"", "\"unused\":true");
+        String book = """
+                {"code":"005930","asks":[{"price":70100,"qty":10}],
+                 "bids":[{"price":70000,"qty":20}],"timestamp":"invalid"}
+                """;
+        adapter.onMessage(message("price:005930", price), null);
+        adapter.onMessage(message("orderbook:005930", book), null);
+        assertThat(adapter.latestQuote("005930").orElseThrow().receivedAt()).isEqualTo(NOW);
+        assertThat(adapter.latestBookQuote("005930").orElseThrow().receivedAt()).isEqualTo(NOW);
+    }
+
+    @Test void sameDayVolumeDecreaseIsRejectedButNextDayIsAccepted() {
+        var clock = mock(Clock.class);
+        when(clock.instant()).thenReturn(NOW, NOW.plusSeconds(1), NOW.plusSeconds(86400));
+        when(channels.isListening()).thenReturn(true);
+        var adapter = new AiQuoteAdapter(redis, channels, events, clock);
+        adapter.updateSymbols(Set.of("005930"));
+        adapter.onChannelSubscribed(bytes("price:005930"), 1);
+        adapter.onMessage(message("price:005930", PRICE), null);
+        adapter.onMessage(message("price:005930", PRICE.replace("1234", "1233")), null);
+        assertThat(adapter.latestQuote("005930").orElseThrow().price().volume()).isEqualTo(1234);
+        adapter.onMessage(message("price:005930", PRICE.replace("1234", "1233")), null);
+        assertThat(adapter.latestQuote("005930").orElseThrow().price().volume()).isEqualTo(1233);
+    }
+
     @Test void snapshotMapsSignedFieldsWithoutInventingReceiptOrPublishing() {
         var adapter = adapter();
         when(values.get("price:005930")).thenReturn(PRICE);
@@ -42,7 +72,7 @@ class AiQuoteAdapterTests {
         verify(redis, never()).convertAndSend(anyString(), anyString());
     }
 
-    @Test void livePriceUsesReceiptTimeAndDeduplicatesWithinSession() {
+    @Test void livePriceRefreshesReceiptOnRepeatedMessages() {
         var adapter = adapter();
         adapter.updateSymbols(Set.of("005930"));
         adapter.onChannelSubscribed(bytes("price:005930"), 1);
@@ -50,20 +80,19 @@ class AiQuoteAdapterTests {
         clearInvocations(events);
         adapter.onMessage(message("price:005930", PRICE), null);
         adapter.onMessage(message("price:005930", PRICE), null);
-        verify(events, times(1)).publishEvent((Object) argThat(event -> event instanceof QuoteEvent quote
-                && NOW.equals(quote.price().receivedAt()) && NOW.minusSeconds(1).equals(quote.price().exchangeTimestamp())));
+        verify(events, times(2)).publishEvent((Object) argThat(event -> event instanceof QuoteEvent quote
+                && NOW.equals(quote.price().receivedAt()) && quote.price().exchangeTimestamp() == null));
         assertThat(adapter.latestQuote("005930")).isPresent();
         verifyNoInteractions(redis);
     }
 
-    @Test void rejectsWrongCodeOldDayFutureMalformedAndDisconnectedChannel() {
+    @Test void rejectsWrongCodeMalformedAndDisconnectedChannel() {
         var adapter = adapter();
         adapter.updateSymbols(Set.of("005930"));
         adapter.onChannelSubscribed(bytes("price:005930"), 1);
         clearInvocations(events);
         for (String payload : new String[]{PRICE.replace("005930", "000660"),
-                PRICE.replace("2026-10-16", "2026-10-15"),
-                PRICE.replace("10:00:01", "10:01:01"), PRICE.replace("70000", "0"), "{}"}) {
+                PRICE.replace("70000", "0"), "{}"}) {
             adapter.onMessage(message("price:005930", payload), null);
         }
         when(channels.isListening()).thenReturn(false);

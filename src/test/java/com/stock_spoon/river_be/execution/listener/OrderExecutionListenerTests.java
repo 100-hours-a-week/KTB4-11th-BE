@@ -51,13 +51,21 @@ class OrderExecutionListenerTests {
     }
 
     @Test
-    void delayedAiEventCannotExecuteOrderCreatedAfterExchangeTick() {
+    void orderEligibilityUsesReceiptRatherThanSourceTime() {
         var order = order(1);
+        when(order.getSide()).thenReturn(Order.Side.SELL);
+        when(order.getLimitPrice()).thenReturn(69000L);
         when(orders.findPendingForPrice("005930", Order.Status.PENDING, Order.Type.LIMIT))
                 .thenReturn(List.of(order));
         var data = new StockPrice("005930", BigDecimal.valueOf(69000),
                 BigDecimal.ZERO, BigDecimal.ZERO, LocalTime.of(9, 59, 59), now.plusSeconds(1),
                 now.minusSeconds(1), 100L);
+        listener.onQuote(new com.stock_spoon.river_be.market.QuoteEvent(
+                "005930", "price", data.receivedAt(),
+                new com.stock_spoon.river_be.market.QuoteSource("relay", "session"), data, null));
+        verify(execution).executeLimit(eq(1L), eq(1L), eq(69000L), anyMap(), any(Runnable.class));
+        clearInvocations(execution);
+        when(order.getCreatedAt()).thenReturn(now.plusSeconds(2));
         listener.onQuote(new com.stock_spoon.river_be.market.QuoteEvent(
                 "005930", "price", data.receivedAt(),
                 new com.stock_spoon.river_be.market.QuoteSource("relay", "session"), data, null));

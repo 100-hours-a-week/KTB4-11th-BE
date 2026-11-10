@@ -125,7 +125,7 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
 
     @Override
     public void onMessage(Message message, byte[] pattern) {
-        var event = accept(message);
+        var event = accept(message, clock.instant());
         // 체결은 DB 잠금을 기다릴 수 있으므로 구독 상태 잠금 밖에서 호출한다.
         if (event != null) {
             try { events.publishEvent(event); }
@@ -136,33 +136,24 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
         }
     }
 
-    private synchronized QuoteEvent accept(Message message) {
+    private synchronized QuoteEvent accept(Message message, Instant receivedAt) {
         String code = channelCode(message.getChannel());
         if (code == null || !desired.contains(code) || !channels.isListening()) return null;
         var source = sessions.get(code);
         if (source == null) return null;
-        Instant receivedAt = clock.instant();
         try {
             String channel = new String(message.getChannel(), StandardCharsets.UTF_8);
             var node = JSON.readTree(message.getBody());
             if (channel.startsWith("price:")) {
                 var price = price(node, code, receivedAt);
-                requireLive(price.exchangeTimestamp(), receivedAt);
                 var previous = Optional.ofNullable(prices.get(code)).map(QuoteEvent::price).orElse(null);
-                if (previous != null && (price.exchangeTimestamp().isBefore(previous.exchangeTimestamp())
-                        || price.exchangeTimestamp().atZone(SEOUL).toLocalDate().equals(previous.exchangeTimestamp().atZone(SEOUL).toLocalDate())
-                        && price.volume() < previous.volume()
-                        || price.exchangeTimestamp().equals(previous.exchangeTimestamp()) && price.volume().equals(previous.volume()))) return null;
+                if (previous != null && previous.receivedAt().atZone(SEOUL).toLocalDate().equals(receivedAt.atZone(SEOUL).toLocalDate())
+                        && price.volume() < previous.volume()) return null;
                 var event = new QuoteEvent(code, "price", receivedAt, source, price, null);
                 prices.put(code, event);
                 return event;
             }
             var book = book(node, code, receivedAt);
-            requireLive(book.exchangeTimestamp(), receivedAt);
-            var previous = Optional.ofNullable(books.get(code)).map(QuoteEvent::orderBook).orElse(null);
-            if (previous != null && (book.exchangeTimestamp().isBefore(previous.exchangeTimestamp())
-                    || book.exchangeTimestamp().equals(previous.exchangeTimestamp())
-                    && book.asks().equals(previous.asks()) && book.bids().equals(previous.bids()))) return null;
             var event = new QuoteEvent(code, "orderbook", receivedAt, source, null, book);
             books.put(code, event);
             return event;
@@ -238,19 +229,21 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
     }
 
     private static StockPrice price(JsonNode node, String code, Instant receivedAt) {
-        Instant exchange = timestamp(node, code);
+        Instant exchange = receivedAt == null ? timestamp(node, code) : null;
+        if (!node.isObject() || !code.equals(node.path("code").asText())) throw new IllegalArgumentException("종목 불일치");
         BigDecimal value = number(node, "price");
         if (value.longValueExact() <= 0) throw new IllegalArgumentException("현재가 오류");
         long volume = number(node, "volume").longValueExact();
         if (volume < 0) throw new IllegalArgumentException("거래량 오류");
         return new StockPrice(code, value, number(node, "change"), number(node, "rate"),
-                exchange.atZone(SEOUL).toLocalTime(), receivedAt, exchange, volume);
+                (exchange == null ? receivedAt : exchange).atZone(SEOUL).toLocalTime(), receivedAt, exchange, volume);
     }
 
     private static OrderBook book(JsonNode node, String code, Instant receivedAt) {
-        Instant exchange = timestamp(node, code);
+        Instant exchange = receivedAt == null ? timestamp(node, code) : null;
+        if (!node.isObject() || !code.equals(node.path("code").asText())) throw new IllegalArgumentException("종목 불일치");
         return new OrderBook(code, levels(node.path("asks")), levels(node.path("bids")),
-                exchange.atZone(SEOUL).toLocalTime(), receivedAt, exchange);
+                (exchange == null ? receivedAt : exchange).atZone(SEOUL).toLocalTime(), receivedAt, exchange);
     }
 
     private static List<QuoteLevel> levels(JsonNode array) {
@@ -275,13 +268,6 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
     private static Instant timestamp(JsonNode node, String code) {
         if (!node.isObject() || !code.equals(node.path("code").asText())) throw new IllegalArgumentException("종목 불일치");
         return OffsetDateTime.parse(node.path("timestamp").asText()).toInstant();
-    }
-
-    private static void requireLive(Instant exchange, Instant receivedAt) {
-        if (!exchange.atZone(SEOUL).toLocalDate().equals(receivedAt.atZone(SEOUL).toLocalDate())
-                || exchange.isBefore(receivedAt.minusSeconds(5)) || exchange.isAfter(receivedAt.plusSeconds(1))) {
-            throw new IllegalArgumentException("지연되거나 미래인 시세");
-        }
     }
 
     private static String channelCode(byte[] channel) {

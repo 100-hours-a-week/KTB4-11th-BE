@@ -12,6 +12,7 @@ import java.util.Deque;
 import java.util.IdentityHashMap;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import jakarta.servlet.DispatcherType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,6 +32,8 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
     private static final String STARTED_ATTRIBUTE = RequestLoggingFilter.class.getName() + ".startedNanos";
     private static final String RATE_LIMIT_OBSERVATION_ATTRIBUTE =
             RequestLoggingFilter.class.getName() + ".rateLimitObservation";
+    private static final Pattern FLOOD_TEST_RUN_PATTERN =
+            Pattern.compile("[A-Za-z0-9][A-Za-z0-9._:+-]{0,95}");
     static final String EXCEPTION_ATTRIBUTE = RequestLoggingFilter.class.getName() + ".exceptionType";
     static final String EXCEPTION_CAUSE_ATTRIBUTE = RequestLoggingFilter.class.getName() + ".exceptionCauseType";
     private static final String ERROR_DISPATCH_ATTRIBUTE = RequestLoggingFilter.class.getName() + ".errorDispatchSeen";
@@ -44,7 +47,16 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
     static void recordRateLimitObservation(HttpServletRequest request, String decision,
             Long count, Integer limit, Long windowMillis) {
         request.setAttribute(RATE_LIMIT_OBSERVATION_ATTRIBUTE,
-                new RateLimitObservation(decision, count, limit, windowMillis));
+                new RateLimitObservation(decision, count, limit, windowMillis,
+                        "redis_error_fail_open".equals(decision) ? "error" : "evaluated",
+                        "redis_error_fail_open".equals(decision) ? "valkey_unavailable" : "none"));
+    }
+
+    static void recordRateLimitSkipped(HttpServletRequest request, String reason) {
+        if (request.getAttribute(RATE_LIMIT_OBSERVATION_ATTRIBUTE) == null) {
+            request.setAttribute(RATE_LIMIT_OBSERVATION_ATTRIBUTE,
+                    new RateLimitObservation("not_evaluated", null, null, null, "skipped", reason));
+        }
     }
 
     static void recordException(HttpServletRequest request, Throwable error) {
@@ -160,14 +172,49 @@ public class RequestLoggingFilter extends OncePerRequestFilter {
         Object rateLimitLimit = observation == null || observation.limit() == null ? "na" : observation.limit();
         Object rateLimitWindowMillis = observation == null || observation.windowMillis() == null
                 ? "na" : observation.windowMillis();
+        String rateLimitFilterStatus = observation == null ? "not_reached" : observation.filterStatus();
+        String rateLimitSkipReason = observation == null ? "filter_not_reached" : observation.skipReason();
+        String testRunId = validatedHeader(request, "X-Flood-Test-Run", FLOOD_TEST_RUN_PATTERN);
+        String testCohort = validatedCohort(request);
+        String pathGroup = pathGroup(pattern);
         var level = status >= 500 ? log.atError() : status >= 400 ? log.atWarn() : log.atInfo();
-        level.log("event=http_response_audit requestId={} dispatcherType={} method={} route={} status={} exceptionType={} exceptionCauseType={} elapsedMs={} userRateLimitDecision={} userRateLimitCount={} userRateLimitLimit={} userRateLimitWindowMs={}",
-                requestId, dispatcher, request.getMethod(), pattern, status, exceptionType, causeType,
-                (System.nanoTime() - started) / 1_000_000, rateLimitDecision, rateLimitCount,
-                rateLimitLimit, rateLimitWindowMillis);
+        level.log("event=http_response_audit requestId={} dispatcherType={} method={} route={} pathGroup={} status={} exceptionType={} exceptionCauseType={} elapsedMs={} testRunId={} testCohort={} userRateLimitFilterStatus={} userRateLimitDecision={} userRateLimitCount={} userRateLimitLimit={} userRateLimitWindowMs={} userRateLimitSkipReason={}",
+                requestId, dispatcher, request.getMethod(), pattern, pathGroup, status, exceptionType, causeType,
+                (System.nanoTime() - started) / 1_000_000, testRunId, testCohort, rateLimitFilterStatus,
+                rateLimitDecision, rateLimitCount, rateLimitLimit, rateLimitWindowMillis, rateLimitSkipReason);
     }
 
-    private record RateLimitObservation(String decision, Long count, Integer limit, Long windowMillis) {}
+    private static String validatedHeader(HttpServletRequest request, String name, Pattern pattern) {
+        // Client-controlled test labels are analysis metadata only; the limiter never reads them.
+        var values = Collections.list(request.getHeaders(name));
+        if (values.isEmpty()) return "none";
+        if (values.size() != 1 || !pattern.matcher(values.get(0)).matches()) return "invalid";
+        return values.get(0);
+    }
+
+    private static String validatedCohort(HttpServletRequest request) {
+        var values = Collections.list(request.getHeaders("X-Flood-Test-Cohort"));
+        if (values.isEmpty()) return "none";
+        if (values.size() != 1) return "invalid";
+        String value = values.get(0);
+        return "attack".equals(value) || "normal".equals(value) || "setup".equals(value)
+                ? value : "invalid";
+    }
+
+    /** Groups canonical Spring route templates without logging raw paths or resource identifiers. */
+    private static String pathGroup(String route) {
+        if (route == null || "unmapped".equals(route)) return "unmapped";
+        String[] segments = route.split("/");
+        if (segments.length > 3 && "api".equals(segments[1])
+                && segments[2].matches("v[0-9]+")) {
+            return "/" + segments[1] + "/" + segments[2] + "/" + segments[3];
+        }
+        if (segments.length > 2) return "/" + segments[1] + "/" + segments[2];
+        return route;
+    }
+
+    private record RateLimitObservation(String decision, Long count, Integer limit, Long windowMillis,
+            String filterStatus, String skipReason) {}
 
     private static void logSqlExceptionIfPresent(HttpServletRequest request, Throwable error) {
         SQLException fallbackError =

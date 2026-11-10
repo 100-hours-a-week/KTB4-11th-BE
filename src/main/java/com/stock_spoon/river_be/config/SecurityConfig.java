@@ -151,6 +151,9 @@ public class SecurityConfig {
         if (rateLimitService != null) {
             http.addFilterBefore(new UserRateLimitAuthenticationFilter(rateLimitService),
                     JwtUserExistenceAuthenticationFilter.class);
+            log.info("event=user_rate_limit_filter_registration status=enabled");
+        } else {
+            log.warn("event=user_rate_limit_filter_registration status=disabled reason=service_bean_missing");
         }
         var chain = http.build();
         if (!csrfDisabled) {

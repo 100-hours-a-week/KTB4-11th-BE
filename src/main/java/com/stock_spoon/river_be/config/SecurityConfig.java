@@ -159,14 +159,17 @@ public class SecurityConfig {
                                             ? "INVALID_CSRF_TOKEN" : "FORBIDDEN",
                                     "요청 권한 또는 CSRF 확인값을 확인해주세요.");
                         }));
-        http.addFilterAfter(new JwtUserExistenceAuthenticationFilter(jwtUserExistenceVerifier),
-                org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter.class);
         var rateLimitService = userRateLimitService.getIfAvailable();
+        var bearerTokenFilter =
+                org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter.class;
         if (rateLimitService != null) {
-            http.addFilterBefore(new UserRateLimitAuthenticationFilter(rateLimitService),
-                    JwtUserExistenceAuthenticationFilter.class);
+            // The limiter needs the authenticated JWT, but should run before the user-existence DB lookup.
+            http.addFilterAfter(new UserRateLimitAuthenticationFilter(rateLimitService), bearerTokenFilter);
+            http.addFilterAfter(new JwtUserExistenceAuthenticationFilter(jwtUserExistenceVerifier),
+                    UserRateLimitAuthenticationFilter.class);
             log.info("event=user_rate_limit_filter_registration status=enabled");
         } else {
+            http.addFilterAfter(new JwtUserExistenceAuthenticationFilter(jwtUserExistenceVerifier), bearerTokenFilter);
             log.warn("event=user_rate_limit_filter_registration status=disabled reason=service_bean_missing");
         }
         var chain = http.build();

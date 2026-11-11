@@ -437,8 +437,11 @@ class DbWriteReplayHttpProducerTests {
         }
         @Bean WatchlistController watchlists(ControllerMocks mocks) { return new WatchlistController(mocks.watchlists); }
         @Bean CompetitionController competitions(ControllerMocks mocks) {
+            var coordinator = mock(com.stock_spoon.river_be.competition.service.CompetitionCreationCoordinator.class);
+            org.mockito.Mockito.when(coordinator.create(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any()))
+                    .thenAnswer(call -> mocks.competitions.createCompetition(call.getArgument(0), call.getArgument(1)));
             return new CompetitionController(mocks.competitions,
-                    org.mockito.Mockito.mock(com.stock_spoon.river_be.competition.service.CompetitionCancellationService.class));
+                    org.mockito.Mockito.mock(com.stock_spoon.river_be.competition.service.CompetitionCancellationService.class), coordinator);
         }
         @Bean OrderController orders(ControllerMocks mocks) {
             return new OrderController(mocks.orders, mock(OrderMarketValidator.class), mocks.subscriptions,

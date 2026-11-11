@@ -21,12 +21,18 @@ public class CompetitionStartScheduler {
         if (!tradingHours.isOpen(now)) return;
         // 종료일은 연장하지 않는다. 대기 중 종료일을 넘긴 건은 이 시작 처리에서 제외한다.
         for (var competition : competitions.findWaitingToStart(now.toLocalDate())) {
-            // DB 잠금을 기다리는 사이 장이 닫히거나 날짜가 바뀔 수 있다.
-            var startTime = tradingHours.now();
-            if (!tradingHours.isOpen(startTime) || startTime.toLocalDate().isBefore(competition.getStartDate())
-                    || !startTime.toInstant().isBefore(competition.tradingEndsAt())) continue;
-            competition.start(startTime.toInstant());
+            startIfEligible(competition, tradingHours);
         }
         // 조회한 엔티티는 JPA가 관리하므로 변경 내용을 트랜잭션 종료 시 자동 저장한다.
+    }
+
+    static void startIfEligible(com.stock_spoon.river_be.competition.entity.Competition competition,
+                                CompetitionTradingHours hours) {
+        // 호출자는 대결 잠금과 SENT를 확인한다. 시각·상태 검사는 즉시 시작과 복구 경로가 공유한다.
+        var now = hours.now();
+        if (competition.getState() != com.stock_spoon.river_be.competition.entity.Competition.State.READY
+                || !hours.isOpen(now) || now.toLocalDate().isBefore(competition.getStartDate())
+                || !now.toInstant().isBefore(competition.tradingEndsAt())) return;
+        competition.start(now.toInstant());
     }
 }

@@ -37,7 +37,7 @@
 {"message":"success","competition_id":1,"state":"ready"}
 ```
 
-`agent_id`, `participant_id`는 내부에서 발급해 연결하며 생성 응답에 추가하지 않는다. 이전 분리 API 설계의 설정 전용 응답은 제거했다.
+위 ready는 대기 경로 예시다. 장중 즉시 처리 성공 시 같은 응답의 state는 in_progress다. `agent_id`, `participant_id`는 내부에서 발급해 연결하며 생성 응답에 추가하지 않는다. 이전 분리 API 설계의 설정 전용 응답은 제거했다.
 
 | 조건 | user_vs_ai | ai_vs_ai |
 |---|---|---|
@@ -45,7 +45,7 @@
 | agents | 생략 또는 null | 필수, 항목 수와 AI 수 일치 |
 | 계좌 구성 | 사용자 1개 + AI 1개 | 전부 AI 계좌 N개 |
 | 설정 저장 | 별도 전략 없음 | 참가자마다 전략 1개 |
-| 생성 상태 | 기존 장 시간 정책으로 ready/in_progress | 현재 구현 범위에서는 ready 유지 |
+| 생성 상태 | 기존 장 시간 정책으로 ready/in_progress | 장중 즉시 전송·시작 성공 시 in_progress, 장외·실패 시 ready |
 
 user_vs_ai에 null이 아닌 agents를 전달하면 400으로 거절한다. 입력한 전략을 조용히 버리지 않는다.
 
@@ -86,6 +86,8 @@ FE: 대결 조건 입력 → N개 전략 화면 입력값 보관 → 마지막 �
   → 전체 커밋 후 CompetitionCreateResponse → 201
 ```
 
+현재 HTTP 생성은 CompetitionCreationCoordinator를 거쳐 생성 커밋 후 장중 전송·시작을 시도한다. 아래 생성 서비스 설명은 저장 단계이며 최종 응답은 실제 상태로 재구성된다. [즉시 처리 해설](competition-immediate-start.md)을 참고한다.
+
 Controller는 JWT subject를 Long 사용자 ID로 바꾸고 JSON을 변환한 CompetitionCreateRequest와 함께 Service에 전달한다. Service는 HTTP 외부에서 직접 호출해도 DTO를 검증하며, 사용자 잠금을 잡아 동일 소유자의 계좌·대결 이름 경쟁을 직렬화한다. 유형이 user_vs_ai면 기존 사용자/AI 두 계좌 생성 경로를 사용한다.
 
 AI 간 대결이면 Service가 저장한 Competition과 요청의 agents를 내부 생성 서비스에 넘긴다. 내부 메서드는 `Propagation.MANDATORY`이므로 부모 트랜잭션 없이 독립 등록할 수 없다. N개 계좌·참가자·전략을 모두 저장한 뒤 부모가 기존 생성 응답을 구성한다. 테마 검증이나 마지막 저장·커밋 중 실패하면 대결까지 모두 롤백한다. 빈 대결이나 부분 설정을 성공 결과로 남기지 않는다.
@@ -107,7 +109,7 @@ AI 간 대결이면 Service가 저장한 Competition과 요청의 agents를 내�
 | 409 | ONBOARDING_REQUIRED / DUPLICATE_ACCOUNT_NAME | 온보딩 미완료 / 기존 본인 계좌·대결명 중복 |
 | 401/403 | 기존 보안 오류 | 미인증 / CSRF 실패 |
 
-생성 시 AI 간 대결은 장중에도 READY를 유지한다. 전략 전송 Outbox가 SENT이면 장중 스케줄러에서 시작한다. 시작 조건과 배포 순서는 [AI 대결 시작 계약](competition-ai-start.md)을 따른다.
+AI 간 대결은 생성 커밋 후 장중이면 즉시 전송·시작을 시도한다. 성공하면 in_progress, 장외·전송 실패 등에는 ready를 반환하며 스케줄러가 재시도한다. 시작 조건과 배포 순서는 [AI 대결 시작 계약](competition-ai-start.md)을 따른다.
 
 상세의 참가자별 자산·수익률·그래프, 다수 AI 일별 성과·정산·결과·취소는 [운용 확장 계약](competition-ai-operation.md)을 참고한다. 생성 요청과 성공 응답은 그대로다. 결과는 완료 전 기존 409 `COMPETITION_NOT_COMPLETED`를 반환한다. 다수 AI 리포트 계약은 후속 범위다.
 

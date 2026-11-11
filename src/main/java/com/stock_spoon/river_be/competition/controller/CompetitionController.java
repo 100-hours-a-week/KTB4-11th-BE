@@ -43,6 +43,7 @@ public class CompetitionController {
 
     private final CompetitionService competitionService;
     private final CompetitionCancellationService cancellationService;
+    private final com.stock_spoon.river_be.competition.service.CompetitionCreationCoordinator creationCoordinator;
 
     @PostMapping("/{competitionId}/cancel") // 요청 본문 없이 URL의 대결을 취소한다.
     @Operation(summary = "대결 취소")
@@ -92,7 +93,7 @@ public class CompetitionController {
                 CompetitionCreationLog.userId(userId);
                 CompetitionCreationLog.stage("transaction_begin");
                 // Spring의 트랜잭션 프록시가 커밋한 뒤 반환하므로 커밋 실패도 여기서 기록한다.
-                return competitionService.createCompetition(userId, request);
+                return creationCoordinator.create(userId, request);
             } catch (RuntimeException error) {
                 creationLog.failure(error);
                 throw error;

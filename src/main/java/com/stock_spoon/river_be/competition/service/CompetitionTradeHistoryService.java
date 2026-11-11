@@ -31,7 +31,7 @@ public class CompetitionTradeHistoryService {
         if (accounts.findByIdAndUserId(accountId, userId).isEmpty()) {
             throw new CompetitionException(HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND", "계좌를 찾을 수 없습니다.");
         }
-        access.check(userId, accountId, true);
+        access.checkTradeHistory(userId, accountId, true);
         // 외부 입력은 소문자 buy/sell만 허용한다. 생략하면 매수·매도 모두 조회한다.
         if (orderSide != null && !"buy".equals(orderSide) && !"sell".equals(orderSide)) {
             throw new CompetitionException(HttpStatus.BAD_REQUEST, "INVALID_TRADE_HISTORY_ORDER_SIDE",

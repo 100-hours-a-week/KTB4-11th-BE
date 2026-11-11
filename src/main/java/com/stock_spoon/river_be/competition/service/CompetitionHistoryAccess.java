@@ -17,6 +17,15 @@ public class CompetitionHistoryAccess {
     // 일반 주문·리포트 조회에서도 호출하여 다른 URI로 AI 내역을 미리 읽는 것을 막는다.
     @Transactional(readOnly = true)
     public void check(long userId, long accountId, boolean requireCompetition) {
+        check(userId, accountId, requireCompetition, false);
+    }
+
+    @Transactional(readOnly = true)
+    public void checkTradeHistory(long userId, long accountId, boolean requireCompetition) {
+        check(userId, accountId, requireCompetition, true);
+    }
+
+    private void check(long userId, long accountId, boolean requireCompetition, boolean tradeHistory) {
         var participant = participants.findByAccountId(accountId);
         if (participant.isEmpty()) {
             if (requireCompetition) {
@@ -30,7 +39,11 @@ public class CompetitionHistoryAccess {
             log.warn("event=competition_history_rejected stage=ownership_check accountId={} code=COMPETITION_ACCOUNT_NOT_FOUND", accountId);
             throw notFound();
         }
-        if (link.getAccount().isAiManaged() && link.getCompetition().getState() != Competition.State.COMPLETED) {
+        var competition = link.getCompetition();
+        boolean runningAiHistory = tradeHistory && competition.getCompetitionType() == Competition.Type.AI_VS_AI
+                && competition.getState() == Competition.State.IN_PROGRESS;
+        if (link.getAccount().isAiManaged() && competition.getState() != Competition.State.COMPLETED
+                && !runningAiHistory) {
             log.warn("event=competition_history_rejected stage=ai_disclosure_check accountId={} code=COMPETITION_AI_HISTORY_HIDDEN", accountId);
             throw new CompetitionException(HttpStatus.FORBIDDEN, "COMPETITION_AI_HISTORY_HIDDEN",
                     "AI 매매 내역은 대결 완료 후 공개됩니다.");

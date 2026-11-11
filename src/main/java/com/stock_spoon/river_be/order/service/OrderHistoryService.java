@@ -73,7 +73,7 @@ public class OrderHistoryService {
                 log.warn("event=order_history_rejected stage=account_lookup 주문내역 계좌 접근 실패 accountId={} code=ACCOUNT_NOT_FOUND", accountId);
                 throw new OrderException(HttpStatus.NOT_FOUND, "ACCOUNT_NOT_FOUND", "계좌를 찾을 수 없습니다.");
             }
-            competitionAccess.check(userId, accountId, false);
+            competitionAccess.checkTradeHistory(userId, accountId, false);
             long total = pageNumber == null ? 0
                     : orders.countHistory(accountId, selectedStatus, selectedSide, stockCode);
             long offset = pageNumber == null ? 0 : (long) pageNumber * count;

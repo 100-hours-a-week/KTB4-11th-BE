@@ -22,6 +22,7 @@ public class RedisMarketStream implements MarketStream {
     public Optional<OrderBook> latestOrderBook(String code) {
         return latestBookQuote(code).map(QuoteEvent::orderBook).or(() -> quotes.latestOrderBook(code));
     }
+    public Optional<OrderBook> readOrderBookSnapshot(String code) { return quotes.readOrderBookSnapshot(code); }
     public Optional<QuoteEvent> latestQuote(String code) { return quotes.latestQuote(code); }
     public Optional<QuoteEvent> latestBookQuote(String code) { return quotes.latestBookQuote(code); }
     public void assertAvailable(String code) { quotes.assertAvailable(code); }

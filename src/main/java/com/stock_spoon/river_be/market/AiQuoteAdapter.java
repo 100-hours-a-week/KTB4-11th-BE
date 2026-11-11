@@ -228,6 +228,31 @@ public class AiQuoteAdapter implements MessageListener, SubscriptionListener {
         }
     }
 
+    /** 주문 재시도용 직접 GET. Pub/Sub 수신시각이나 연결 세대를 만들지 않는다. */
+    public Optional<OrderBook> readOrderBookSnapshot(String code) {
+        validateCode(code);
+        String value;
+        try { value = redis.opsForValue().get("orderbook:" + code); }
+        catch (RuntimeException error) {
+            log.warn("event=market_book_get_failed stockCode={} reason=READ_FAILED causeType={}", code, error.getClass().getSimpleName());
+            throw new IllegalStateException("Valkey 호가 조회에 실패했습니다.", error);
+        }
+        if (value == null) {
+            log.warn("event=market_book_get_failed stockCode={} reason=NOT_FOUND", code);
+            return Optional.empty();
+        }
+        try {
+            var node = JSON.readTree(value);
+            if (!node.isObject() || !code.equals(node.path("code").asText())) throw new IllegalArgumentException("종목 불일치");
+            var result = new OrderBook(code, levels(node.path("asks")), levels(node.path("bids")), null, null, null, true);
+            log.info("event=market_book_get_succeeded stockCode={}", code);
+            return Optional.of(result);
+        } catch (RuntimeException error) {
+            log.warn("event=market_book_get_failed stockCode={} reason=INVALID_DATA causeType={}", code, error.getClass().getSimpleName());
+            throw new IllegalStateException("Valkey 호가 데이터가 올바르지 않습니다.", error);
+        }
+    }
+
     private static StockPrice price(JsonNode node, String code, Instant receivedAt) {
         Instant exchange = receivedAt == null ? timestamp(node, code) : null;
         if (!node.isObject() || !code.equals(node.path("code").asText())) throw new IllegalArgumentException("종목 불일치");

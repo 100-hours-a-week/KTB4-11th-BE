@@ -187,7 +187,7 @@ public class OrderController {
                 stage.set("execution");
                 Runnable validate = () -> {
                     try {
-                        stream.assertSource(request.stockCode(), quote.source());
+                        subscriptions.assertQuoteSource(request.stockCode(), quote);
                     } catch (RuntimeException error) {
                         log.warn("event=market_order_source_check_failed stage=quote_source_validation accountId={} stockCode={} causeType={}",
                                 accountId, request.stockCode(), error.getClass().getSimpleName());

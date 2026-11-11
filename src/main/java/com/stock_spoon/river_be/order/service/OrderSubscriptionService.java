@@ -55,13 +55,47 @@ public class OrderSubscriptionService {
                         stockCode, error.getClass().getSimpleName());
                 throw unavailableMarketStream();
             }
-            return execute.apply(awaitMarketQuote(stockCode));
+            var quote = awaitMarketQuote(stockCode);
+            try {
+                return execute.apply(quote);
+            } catch (OrderException error) {
+                if (!"MARKET_BOOK_STALE".equals(error.code())) throw error;
+                log.info("event=market_book_get_retry stockCode={} reason=MARKET_BOOK_STALE attempt=1", stockCode);
+                // execute의 트랜잭션이 종료된 후 직접 조회해 한 번만 재시도한다.
+                var snapshot = directSnapshot(stockCode);
+                try {
+                    T result = execute.apply(new QuoteEvent(stockCode, "orderbook", null, null, null, snapshot));
+                    log.info("event=market_book_get_retry_succeeded stockCode={} attempt=1", stockCode);
+                    return result;
+                } catch (RuntimeException retryError) {
+                    log.warn("event=market_book_get_retry_failed stockCode={} stage=execution causeType={}", stockCode, retryError.getClass().getSimpleName());
+                    throw retryError;
+                }
+            }
         } finally {
             synchronized (this) {
                 marketRequests.computeIfPresent(stockCode, (code, count) -> count == 1 ? null : count - 1);
                 refresh();
             }
         }
+    }
+
+    private com.stock_spoon.river_be.market.OrderBook directSnapshot(String stockCode) {
+        try {
+            var book = stream.readOrderBookSnapshot(stockCode).orElseThrow(OrderSubscriptionService::unavailableMarketStream);
+            if (!book.directSnapshot() || !stockCode.equals(book.stockCode())) throw unavailableMarketStream();
+            return book;
+        } catch (RuntimeException error) {
+            log.warn("event=market_book_get_retry_failed stockCode={} causeType={}", stockCode, error.getClass().getSimpleName());
+            throw unavailableMarketStream();
+        }
+    }
+
+    public void assertQuoteSource(String stockCode, QuoteEvent quote) {
+        if (quote != null && quote.orderBook() != null && quote.orderBook().directSnapshot()
+                && stockCode.equals(quote.stockCode()) && stockCode.equals(quote.orderBook().stockCode())
+                && quote.source() == null && quote.receivedAt() == null) return;
+        stream.assertSource(stockCode, quote.source());
     }
 
     private QuoteEvent awaitMarketQuote(String stockCode) {

@@ -22,6 +22,58 @@ class OrderSubscriptionServiceTests {
                 new com.stock_spoon.river_be.market.QuoteSource("subscriber", "session"), null, book);
     }
 
+    @Test void expiredBookUsesDirectGetPriceExactlyOnce() {
+        var old = quote();
+        var stale = new com.stock_spoon.river_be.market.OrderBook("005930", java.util.List.of(), java.util.List.of(),
+                old.orderBook().quoteTime(), java.time.Instant.now().minusSeconds(6));
+        when(stream.latestBookQuote("005930")).thenReturn(java.util.Optional.of(
+                new com.stock_spoon.river_be.market.QuoteEvent("005930", "orderbook", stale.receivedAt(), old.source(), null, stale)));
+        var fresh = new com.stock_spoon.river_be.market.OrderBook("005930",
+                java.util.List.of(new com.stock_spoon.river_be.market.QuoteLevel(java.math.BigDecimal.valueOf(70100), 2)),
+                java.util.List.of(), null, null, null, true);
+        when(stream.readOrderBookSnapshot("005930")).thenReturn(java.util.Optional.of(fresh));
+        long amount = service.withQuoteSnapshot("005930", q -> new com.stock_spoon.river_be.execution.service.MarketOrderPricingService()
+                .estimate("005930", Order.Side.BUY, 2, q.orderBook(), java.time.Instant.now()).amount());
+        assertThat(amount).isEqualTo(140200);
+        verify(stream).readOrderBookSnapshot("005930");
+    }
+
+    @Test void freshQuoteNeverReadsSnapshot() {
+        when(stream.latestBookQuote("005930")).thenReturn(java.util.Optional.of(quote()));
+        assertThat(service.<String>withQuoteSnapshot("005930", q -> "ok")).isEqualTo("ok");
+        verify(stream, never()).readOrderBookSnapshot(anyString());
+    }
+
+    @Test void expiryDuringExecutionRetriesOnceAndOtherErrorsDoNotRetry() {
+        when(stream.latestBookQuote("005930")).thenReturn(java.util.Optional.of(quote()));
+        var book = new com.stock_spoon.river_be.market.OrderBook("005930", java.util.List.of(), java.util.List.of(), null, null, null, true);
+        when(stream.readOrderBookSnapshot("005930")).thenReturn(java.util.Optional.of(book));
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        assertThat(service.<String>withQuoteSnapshot("005930", q -> {
+            if (calls.incrementAndGet() == 1) throw new OrderException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, "MARKET_BOOK_STALE", "stale");
+            service.assertQuoteSource("005930", q);
+            return "retried";
+        })).isEqualTo("retried");
+        assertThat(calls).hasValue(2);
+        verify(stream).readOrderBookSnapshot("005930");
+        clearInvocations(stream);
+        assertThatThrownBy(() -> service.withQuoteSnapshot("005930", q -> { throw new OrderException("잔액 부족"); }))
+                .hasMessage("잔액 부족");
+        verify(stream, never()).readOrderBookSnapshot(anyString());
+    }
+
+    @Test void missingOrFailedGetEndsWithoutExecutingOrLooping() {
+        when(stream.latestBookQuote("005930")).thenReturn(java.util.Optional.of(quote()));
+        when(stream.readOrderBookSnapshot("005930")).thenReturn(java.util.Optional.empty());
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        assertThatThrownBy(() -> service.withQuoteSnapshot("005930", q -> {
+            calls.incrementAndGet();
+            throw new OrderException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, "MARKET_BOOK_STALE", "stale");
+        })).isInstanceOfSatisfying(OrderException.class, e -> assertThat(e.code()).isEqualTo("MARKET_STREAM_UNAVAILABLE"));
+        assertThat(calls).hasValue(1);
+        verify(stream).readOrderBookSnapshot("005930");
+    }
+
     @Test
     void marketQuoteSubscribesNewSymbolAndPreservesPendingDemandAfterSuccess() {
         when(orders.findStockCodesByStatus(Order.Status.PENDING)).thenReturn(Set.of("000660"));

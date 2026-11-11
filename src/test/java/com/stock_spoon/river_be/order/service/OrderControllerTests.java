@@ -537,7 +537,7 @@ class OrderControllerTests {
                 new com.stock_spoon.river_be.market.QuoteEvent("005930", "orderbook", stale.receivedAt(), quote.source(), null, stale)))
                 .when(stream).latestBookQuote("005930");
         marketRequest(1, "null").andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.code").value("MARKET_DATA_UNAVAILABLE"));
+                .andExpect(jsonPath("$.code").value("MARKET_STREAM_UNAVAILABLE"));
         quote = validMarketQuote();
         org.mockito.Mockito.doThrow(new IllegalStateException("session changed"))
                 .when(stream).assertSource("005930", quote.source());

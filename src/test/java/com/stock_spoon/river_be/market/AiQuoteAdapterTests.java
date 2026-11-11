@@ -172,6 +172,28 @@ class AiQuoteAdapterTests {
         verify(events, times(2)).publishEvent(any(Object.class));
     }
 
+    @Test void directGetIgnoresTimestampButValidatesDataAndDoesNotInventReceipt() {
+        var adapter = adapter();
+        String book = """
+                {"code":"005930","asks":[{"price":70100,"qty":10}],"bids":[{"price":70000,"qty":20}],"timestamp":"invalid"}
+                """;
+        for (String payload : new String[]{book, book.replace(",\"timestamp\":\"invalid\"", "")}) {
+            when(values.get("orderbook:005930")).thenReturn(payload);
+            var actual = adapter.readOrderBookSnapshot("005930").orElseThrow();
+            assertThat(actual.directSnapshot()).isTrue();
+            assertThat(actual.receivedAt()).isNull();
+            assertThat(actual.exchangeTimestamp()).isNull();
+            assertThat(actual.asks().getFirst().price()).isEqualByComparingTo("70100");
+        }
+        when(values.get("orderbook:005930")).thenReturn(book.replace("70100", "-1"));
+        assertThatThrownBy(() -> adapter.readOrderBookSnapshot("005930")).isInstanceOf(IllegalStateException.class);
+        when(values.get("orderbook:005930")).thenReturn((String) null);
+        assertThat(adapter.readOrderBookSnapshot("005930")).isEmpty();
+        when(values.get("orderbook:005930")).thenThrow(new IllegalStateException("connection failed"));
+        assertThatThrownBy(() -> adapter.readOrderBookSnapshot("005930")).isInstanceOf(IllegalStateException.class);
+        verifyNoInteractions(events);
+    }
+
     private static byte[] bytes(String value) { return value.getBytes(StandardCharsets.UTF_8); }
     private static Message message(String channel, String body) {
         return new org.springframework.data.redis.connection.DefaultMessage(bytes(channel), bytes(body));

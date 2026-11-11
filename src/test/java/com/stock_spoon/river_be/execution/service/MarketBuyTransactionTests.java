@@ -324,7 +324,7 @@ class MarketBuyTransactionTests {
                 service.executeMarket(account.getUser().getId(), account.getId(), request,
                         book(NOW, LocalTime.of(10, 0)), java.util.Map.of(), () -> instant.set(NOW.plusSeconds(6)))))
                 .isInstanceOfSatisfying(OrderException.class,
-                        error -> assertThat(error.code()).isEqualTo("MARKET_DATA_UNAVAILABLE"));
+                        error -> assertThat(error.code()).isEqualTo("MARKET_BOOK_STALE"));
         unchanged(account);
     }
 
@@ -479,6 +479,39 @@ class MarketBuyTransactionTests {
         assertThat(accounts.findById(account.getId()).orElseThrow().getCashBalance()).isEqualTo(Long.MAX_VALUE);
         assertThat(holdings.findByAccountIdAndStockCode(account.getId(), "005930").orElseThrow().getQuantity()).isEqualTo(10);
         assertThat(orders.findAllByAccountIdAndStatus(account.getId(), Order.Status.EXECUTED)).isEmpty();
+    }
+    @Test
+    void expiredAttemptRollsBackBeforeDirectSnapshotRetryAndExecutesOnce() {
+        var account = account();
+        var stream = org.mockito.Mockito.mock(com.stock_spoon.river_be.market.MarketStream.class);
+        var receipt = Instant.now();
+        var source = new com.stock_spoon.river_be.market.QuoteSource("test", "session");
+        var live = new OrderBook("005930", List.of(new QuoteLevel(BigDecimal.valueOf(70000), 10)), List.of(), LocalTime.NOON, receipt);
+        var snapshot = new OrderBook("005930", List.of(new QuoteLevel(BigDecimal.valueOf(70100), 10)), List.of(), null, null, null, true);
+        org.mockito.Mockito.when(stream.latestBookQuote("005930")).thenReturn(java.util.Optional.of(
+                new com.stock_spoon.river_be.market.QuoteEvent("005930", "orderbook", receipt, source, null, live)));
+        org.mockito.Mockito.when(stream.readOrderBookSnapshot("005930")).thenReturn(java.util.Optional.of(snapshot));
+        var subscriptions = new com.stock_spoon.river_be.order.service.OrderSubscriptionService(orders, stream);
+        var attempts = new AtomicInteger();
+        long before = executions.count();
+        Order result = subscriptions.withMarketQuote("005930", q -> {
+            if (attempts.incrementAndGet() == 1) {
+                return new TransactionTemplate(transactions).execute(status -> {
+                    accounts.findLockedById(account.getId()).orElseThrow().changeCash(-123);
+                    entityManager.flush();
+                    MarketOrderPricingService.validateBook("005930", q.orderBook(), receipt.plusSeconds(6));
+                    throw new AssertionError("must expire");
+                });
+            }
+            assertThat(accounts.findById(account.getId()).orElseThrow().getCashBalance()).isEqualTo(1000000);
+            return execution.executeMarketBuy(account.getUser().getId(), account.getId(), "005930", 2, "근거", q.orderBook());
+        });
+        assertThat(attempts).hasValue(2);
+        assertThat(result.getStatus()).isEqualTo(Order.Status.EXECUTED);
+        assertThat(accounts.findById(account.getId()).orElseThrow().getCashBalance()).isEqualTo(859800);
+        assertThat(executions.count()).isEqualTo(before + 1);
+        assertThat(holdings.findByAccountIdAndStockCode(account.getId(), "005930").orElseThrow().getQuantity()).isEqualTo(2);
+        org.mockito.Mockito.verify(stream).readOrderBookSnapshot("005930");
     }
 
 }

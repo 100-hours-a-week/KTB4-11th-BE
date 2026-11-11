@@ -17,6 +17,8 @@ public interface MarketStream {
                 book.receivedAt(), null, null, book));
     }
 
+    default Optional<OrderBook> readOrderBookSnapshot(String symbol) { return Optional.empty(); }
+
     default void assertAvailable(String symbol) {}
     default void assertSource(String symbol, QuoteSource source) { assertAvailable(symbol); }
 }

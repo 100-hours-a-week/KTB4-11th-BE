@@ -58,13 +58,18 @@ public class MarketOrderPricingService {
     }
 
     public static void validateBook(String code, OrderBook book, Instant now) {
-        if (book == null || !code.equals(book.stockCode()) || book.receivedAt() == null
-                || book.receivedAt().isAfter(now)
-                || book.receivedAt().isBefore(now.minusSeconds(5))) {
-            log.warn("event=market_order_pricing_failed stage=book_validation stockCode={} code=BOOK_IDENTITY_OR_RECEIVED_TIME_INVALID", code);
-            throw unavailable();
+        if (book == null || !code.equals(book.stockCode())) throw unavailable();
+        if (book.directSnapshot()) {
+            if (book.receivedAt() != null || book.exchangeTimestamp() != null) throw unavailable();
+            return;
+        }
+        if (book.receivedAt() == null || book.receivedAt().isAfter(now)) throw unavailable();
+        if (book.receivedAt().isBefore(now.minusSeconds(5))) {
+            log.warn("event=market_order_pricing_failed stage=book_validation stockCode={} code=MARKET_BOOK_STALE", code);
+            throw new OrderException(HttpStatus.SERVICE_UNAVAILABLE, "MARKET_BOOK_STALE", "수신 호가가 만료되었습니다.");
         }
     }
+
     private static OrderException unavailable() {
         return new OrderException(HttpStatus.SERVICE_UNAVAILABLE, "MARKET_DATA_UNAVAILABLE", "사용 가능한 최신 호가를 확인할 수 없습니다.");
     }

@@ -42,7 +42,7 @@ public class OrderRequestService {
         if(transactions.find(m)!=null) return Map.of("request_id",eventId,"status","accepted");
         OrderReservationStore.Reservation reservation;
         if(m.market()) reservation=subscriptions.withQuoteSnapshot(request.stockCode(),q->{
-            stream.assertSource(request.stockCode(),q.source()); return transactions.admit(m,q);
+            subscriptions.assertQuoteSource(request.stockCode(),q); return transactions.admit(m,q);
         });
         else reservation=transactions.admit(m,null);
         if(reservation!=null) publish(reservation);
@@ -85,7 +85,7 @@ public class OrderRequestService {
                     var valuation=m.source()==Order.Source.AI && m.side()==Order.Side.BUY
                             ?prices.fetch(m.accountId(),m.request().stockCode()):Map.<String,java.math.BigDecimal>of();
                     done=subscriptions.withQuoteSnapshot(m.request().stockCode(),q->transactions.process(m,q,valuation,
-                            ()->stream.assertSource(m.request().stockCode(),q.source())));
+                            ()->subscriptions.assertQuoteSource(m.request().stockCode(),q)));
                 } else done=transactions.process(m,null,Map.of(),()->{});
             }
         } catch(OrderException e) {
